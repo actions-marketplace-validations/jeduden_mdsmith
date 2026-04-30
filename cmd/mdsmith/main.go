@@ -36,6 +36,7 @@ import (
 	_ "github.com/jeduden/mdsmith/internal/rules/fencedcodelanguage"
 	_ "github.com/jeduden/mdsmith/internal/rules/fencedcodestyle"
 	_ "github.com/jeduden/mdsmith/internal/rules/firstlineheading"
+	_ "github.com/jeduden/mdsmith/internal/rules/githooksync"
 	_ "github.com/jeduden/mdsmith/internal/rules/headingincrement"
 	_ "github.com/jeduden/mdsmith/internal/rules/headingstyle"
 	_ "github.com/jeduden/mdsmith/internal/rules/include"
@@ -74,16 +75,17 @@ func main() {
 const usageText = `Usage: mdsmith <command> [flags] [files...]
 
 Commands:
-  check          Lint Markdown files (default when given file arguments)
-  fix            Auto-fix lint issues in place
-  query          Select files by CUE expression on front matter
-  help           Show help for rules and topics
-  metrics        Show and rank shared Markdown metrics
-  merge-driver   Git merge driver for regenerable sections
-  archetypes     Discover, show, and locate archetype schemas
-  kinds          Inspect declared kinds and resolve effective config per file
-  init           Generate a default .mdsmith.yml config file
-  version        Print version and exit
+  check             Lint Markdown files (default when given file arguments)
+  fix               Auto-fix lint issues in place
+  query             Select files by CUE expression on front matter
+  help              Show help for rules and topics
+  metrics           Show and rank shared Markdown metrics
+  merge-driver      Git merge driver for regenerable sections
+  pre-merge-commit  Install/manage pre-merge-commit hook
+  archetypes        Discover, show, and locate archetype schemas
+  kinds             Inspect declared kinds and resolve effective config per file
+  init              Generate a default .mdsmith.yml config file
+  version           Print version and exit
 
 Global flags:
   -h, --help      Show this help
@@ -129,6 +131,8 @@ func run() int {
 		return runMetrics(os.Args[2:])
 	case "merge-driver":
 		return runMergeDriver(os.Args[2:])
+	case "pre-merge-commit":
+		return runPreMergeCommit(os.Args[2:])
 	case "archetypes":
 		return runArchetypes(os.Args[2:])
 	case "kinds":

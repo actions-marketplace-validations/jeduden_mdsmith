@@ -10,6 +10,7 @@ import (
 
 	"github.com/jeduden/mdsmith/internal/archetype/gensection"
 	fixpkg "github.com/jeduden/mdsmith/internal/fix"
+	"github.com/jeduden/mdsmith/internal/githooks"
 	"github.com/jeduden/mdsmith/internal/lint"
 	vlog "github.com/jeduden/mdsmith/internal/log"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -27,7 +28,10 @@ Subcommands:
   install [files...]
         Register the merge driver in git config and ensure
         .gitattributes assigns it to the listed files.
-        Default files: PLAN.md README.md
+
+        When no files are specified, automatically discovers
+        files with generated content (catalog, include, toc),
+        falling back to PLAN.md and README.md if none are found.
 
 Git config (set by install):
   merge.mdsmith.driver = '/absolute/path/to/mdsmith' merge-driver run %O %A %B %P
@@ -352,9 +356,40 @@ func hasConflictMarkers(content []byte) bool {
 	return false
 }
 
-// defaultMergeDriverFiles are the files assigned to the merge
-// driver when install is run without explicit file arguments.
-var defaultMergeDriverFiles = []string{"PLAN.md", "README.md"}
+// resolveManagedFiles returns the canonical (repo-relative,
+// forward-slash) list of files to manage for an install command.
+// Both branches — explicit args and auto-discovery — go through
+// githooks.NormalizeManagedPaths so the on-disk artefacts and the
+// drift checker agree on what counts as the canonical form. The
+// second return is the process exit code: 0 on success, 2 on a
+// user-facing error (already printed to stderr).
+func resolveManagedFiles(repoRoot string, args []string) ([]string, int) {
+	if len(args) > 0 {
+		normalized, err := githooks.NormalizeManagedPaths(repoRoot, args)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+			return nil, 2
+		}
+		return normalized, 0
+	}
+	cfg, _, err := loadConfig("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: loading config: %v\n", err)
+		return nil, 2
+	}
+	maxBytes, err := resolveMaxInputBytes(cfg, "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return nil, 2
+	}
+	discovered := discoverFilesWithGeneratedContent(repoRoot, maxBytes)
+	normalized, err := githooks.NormalizeManagedPaths(repoRoot, discovered)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return nil, 2
+	}
+	return normalized, 0
+}
 
 // runMergeDriverInstall registers the mdsmith merge driver in
 // the local git config and ensures .gitattributes assigns it.
@@ -378,10 +413,9 @@ func runMergeDriverInstall(args []string) int {
 		return 2
 	}
 
-	// Determine file list: use args if given, else defaults.
-	files := defaultMergeDriverFiles
-	if len(args) > 0 {
-		files = args
+	files, rc := resolveManagedFiles(repoRoot, args)
+	if rc != 0 {
+		return rc
 	}
 
 	attrPath := filepath.Join(repoRoot, ".gitattributes")
@@ -402,29 +436,25 @@ func runMergeDriverInstall(args []string) int {
 	fmt.Fprintf(os.Stderr, "  git config: merge.mdsmith.driver\n")
 	fmt.Fprintf(os.Stderr, "  .gitattributes: %s\n", attrPath)
 	fmt.Fprintf(os.Stderr, "  pre-merge-commit hook: %s\n", hookPath)
+	fmt.Fprintf(os.Stderr,
+		"\nTo also enable drift detection, add this to your .mdsmith.yml:\n\n%s\n",
+		githooks.EnableRuleSnippet("git-hook-sync"))
 	return 0
 }
 
 // preMergeCommitHookMarker identifies the hook as managed by
 // mdsmith so re-running install can safely replace it without
-// stomping on a user-authored hook of the same name.
-const preMergeCommitHookMarker = "# mdsmith merge-driver pre-merge-commit hook"
+// stomping on a user-authored hook of the same name. The canonical
+// constant lives in internal/githooks; this alias keeps existing
+// references in this package and its tests stable.
+const preMergeCommitHookMarker = githooks.PreMergeCommitMarker
 
 // resolveHooksDir returns the directory where git hooks should be
-// installed. It respects core.hooksPath if configured so that
-// installations work correctly in repos that redirect hooks to a
-// custom path (e.g. via git config or a repo management tool).
-// Falls back to .git/hooks when git cannot be queried.
+// installed for the repo at repoRoot. The implementation lives in
+// internal/githooks so the CLI and the git-hook-sync rule resolve
+// the same path.
 func resolveHooksDir(repoRoot string) string {
-	cmd := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-path", "hooks")
-	if out, err := cmd.Output(); err == nil {
-		p := strings.TrimSpace(string(out))
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(repoRoot, p)
-		}
-		return filepath.Clean(p)
-	}
-	return filepath.Join(repoRoot, ".git", "hooks")
+	return githooks.ResolveHooksDir(repoRoot)
 }
 
 // ensurePreMergeCommitHook writes the pre-merge-commit hook so
@@ -480,8 +510,9 @@ func ensurePreMergeCommitHook(repoRoot string, files []string) error {
 		preMergeCommitHookMarker + "\n" +
 		"# Re-runs mdsmith fix once git has resolved every per-file\n" +
 		"# merge, so generated sections reflect the final merged\n" +
-		"# state of every source file. Re-install with:\n" +
+		"# state of every source file. Re-install with either:\n" +
 		"#   mdsmith merge-driver install\n" +
+		"#   mdsmith pre-merge-commit install\n" +
 		"set -e\n" +
 		fixCmds.String()
 

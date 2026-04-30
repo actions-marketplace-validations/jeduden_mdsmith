@@ -299,6 +299,103 @@ func TestRunMergeDriverInstall_HelpFlag_ExitsZero(t *testing.T) {
 	})
 }
 
+func TestRunMergeDriverInstall_NotInRepo(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"),
+		[]byte("not a real gitdir"), 0o644))
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, runMergeDriverInstall(nil))
+	})
+	assert.Contains(t, got, "not in a git repository")
+}
+
+func TestRunMergeDriverInstall_LoadConfigError(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"),
+		[]byte("not: [valid: yaml\n"), 0o644))
+
+	orig := executableFunc
+	t.Cleanup(func() { executableFunc = orig })
+	executableFunc = func() (string, error) { return "/usr/local/bin/mdsmith", nil }
+
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, runMergeDriverInstall(nil))
+	})
+	assert.Contains(t, got, "loading config")
+}
+
+func TestRunMergeDriverInstall_BadMaxInputSize(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"),
+		[]byte("max-input-size: nonsense\n"), 0o644))
+
+	orig := executableFunc
+	t.Cleanup(func() { executableFunc = orig })
+	executableFunc = func() (string, error) { return "/usr/local/bin/mdsmith", nil }
+
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, runMergeDriverInstall(nil))
+	})
+	assert.Contains(t, got, "invalid max-input-size")
+}
+
+func TestRunMergeDriverInstall_RejectsWhitespacePath(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+
+	orig := executableFunc
+	t.Cleanup(func() { executableFunc = orig })
+	executableFunc = func() (string, error) { return "/usr/local/bin/mdsmith", nil }
+
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, runMergeDriverInstall([]string{"bad name.md"}))
+	})
+	assert.Contains(t, got, "whitespace")
+}
+
+func TestRunMergeDriverInstall_NoArgsUsesDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+
+	// Generate a markdown file with a directive so discovery returns
+	// it instead of the PLAN.md/README.md fallback.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "guide.md"),
+		[]byte("# Guide\n\n<?catalog?>\n<?/catalog?>\n"), 0o644))
+
+	orig := executableFunc
+	t.Cleanup(func() { executableFunc = orig })
+	executableFunc = func() (string, error) { return "/usr/local/bin/mdsmith", nil }
+
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	got := captureStderr(func() {
+		assert.Equal(t, 0, runMergeDriverInstall(nil))
+	})
+	assert.Contains(t, got, "merge driver 'mdsmith' installed")
+	// Make sure the snippet print landed too.
+	assert.Contains(t, got, "git-hook-sync: true")
+}
+
 // --- resolveInstalledBinary ---
 
 func TestResolveInstalledBinary_NonTemporaryExe(t *testing.T) {
@@ -704,7 +801,7 @@ func TestResolveHooksDir_DefaultGitRepo(t *testing.T) {
 	// Derive expected path from git itself so the test is resilient
 	// against a global core.hooksPath set in the developer's git config.
 	dir := t.TempDir()
-	require.NoError(t, exec.Command("git", "init", dir).Run())
+	initTestRepo(t, dir)
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--git-path", "hooks").Output()
 	require.NoError(t, err)
 	expected := strings.TrimSpace(string(out))
@@ -717,7 +814,7 @@ func TestResolveHooksDir_DefaultGitRepo(t *testing.T) {
 
 func TestResolveHooksDir_CustomRelativeHooksPath(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, exec.Command("git", "init", dir).Run())
+	initTestRepo(t, dir)
 	require.NoError(t, exec.Command("git", "-C", dir, "config",
 		"core.hooksPath", "custom-hooks").Run())
 	got := resolveHooksDir(dir)
@@ -726,7 +823,7 @@ func TestResolveHooksDir_CustomRelativeHooksPath(t *testing.T) {
 
 func TestResolveHooksDir_CustomAbsoluteHooksPath(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, exec.Command("git", "init", dir).Run())
+	initTestRepo(t, dir)
 	absPath := filepath.Join(dir, "abs-hooks")
 	require.NoError(t, exec.Command("git", "-C", dir, "config",
 		"core.hooksPath", absPath).Run())

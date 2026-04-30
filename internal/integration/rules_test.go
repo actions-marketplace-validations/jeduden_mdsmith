@@ -28,6 +28,7 @@ import (
 	_ "github.com/jeduden/mdsmith/internal/rules/fencedcodelanguage"
 	_ "github.com/jeduden/mdsmith/internal/rules/fencedcodestyle"
 	_ "github.com/jeduden/mdsmith/internal/rules/firstlineheading"
+	_ "github.com/jeduden/mdsmith/internal/rules/githooksync"
 	_ "github.com/jeduden/mdsmith/internal/rules/headingincrement"
 	_ "github.com/jeduden/mdsmith/internal/rules/headingstyle"
 	_ "github.com/jeduden/mdsmith/internal/rules/include"
@@ -262,11 +263,25 @@ func runGoodFolderFile(
 	settings, _, content := parseFixtureFrontMatter(t, raw, false)
 	applySettingsToRule(t, r, settings)
 
-	f, err := lint.NewFile(filepath.Base(filePath), content)
+	f, err := lint.NewFile(fixtureFilePath(t, r, filePath), content)
 	require.NoError(t, err, "parsing %s: %v", filepath.Base(filePath), err)
 	f.FS = os.DirFS(filepath.Dir(filePath))
 	diags := checkAllRules(f, r)
 	reportUnexpectedDiags(t, filepath.Base(filePath), diags)
+}
+
+// fixtureFilePath returns the value to use as f.Path when running a
+// fixture. For rules whose Check inspects git state (currently
+// MDS048), it returns a path inside a fresh non-repo tempdir so the
+// fixture cannot fail based on the contributor's local git config or
+// installed hooks. For all other rules it returns the basename so
+// existing tests are unaffected.
+func fixtureFilePath(t *testing.T, r rule.Rule, filePath string) string {
+	t.Helper()
+	if r != nil && r.ID() == "MDS048" {
+		return filepath.Join(t.TempDir(), filepath.Base(filePath))
+	}
+	return filepath.Base(filePath)
 }
 
 // runBadFolderFile checks a single bad fixture file from a folder.
@@ -279,7 +294,7 @@ func runBadFolderFile(
 	settings, expected, content := parseFixtureFrontMatter(t, raw, true)
 	applySettingsToRule(t, r, settings)
 
-	f, err := lint.NewFile(filepath.Base(filePath), content)
+	f, err := lint.NewFile(fixtureFilePath(t, r, filePath), content)
 	require.NoError(t, err, "parsing %s: %v", filepath.Base(filePath), err)
 	f.FS = os.DirFS(filepath.Dir(filePath))
 	diags := filterByRule(r.Check(f), ruleID)
@@ -309,7 +324,8 @@ func runFixFolderFile(
 	settings, _, badContent := parseFixtureFrontMatter(t, badRaw, false)
 	applySettingsToRule(t, r, settings)
 
-	f, err := lint.NewFile(filepath.Base(fixedPath), badContent)
+	fPath := fixtureFilePath(t, r, fixedPath)
+	f, err := lint.NewFile(fPath, badContent)
 	require.NoError(t, err, "parsing %s: %v", filepath.Base(fixedPath), err)
 	f.FS = os.DirFS(filepath.Dir(fixedPath))
 
@@ -328,9 +344,7 @@ func runFixFolderFile(
 	}
 
 	// Verify that the fixed output produces no diagnostics.
-	fixedFile, err := lint.NewFile(
-		filepath.Base(fixedPath), want,
-	)
+	fixedFile, err := lint.NewFile(fPath, want)
 	require.NoError(t, err, "parsing fixed output: %v", err)
 	fixedFile.FS = os.DirFS(filepath.Dir(fixedPath))
 	diags := checkAllRules(fixedFile, r)
