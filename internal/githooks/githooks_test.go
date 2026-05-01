@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,6 +104,45 @@ func TestExtractGitattributesFiles(t *testing.T) {
 		"loneword\n"
 	got := ExtractGitattributesFiles(content)
 	assert.Equal(t, []string{"PLAN.md", "docs/foo.md"}, got)
+}
+
+func TestDiscoverFiles_RespectsConfigIgnorePatterns(t *testing.T) {
+	// Discovery must consult the project's .mdsmith.yml ignore list
+	// so the merge-driver assignments and pre-merge-commit hook only
+	// reference paths mdsmith would actually process. Without the
+	// filter, .gitattributes ends up listing fixture/example files
+	// that mdsmith fix skips, so a real merge conflict in those
+	// files would invoke the merge driver but fix nothing.
+	dir := t.TempDir()
+	files := map[string]string{
+		".mdsmith.yml": "ignore:\n" +
+			"  - \"fixtures/**\"\n" +
+			"  - \"vendor/inner/skip.md\"\n",
+		"README.md":            "# Test\n\n<?catalog?>\n<?/catalog?>\n",
+		"docs/guide.md":        "# Guide\n\n<?toc?>\n<?/toc?>\n",
+		"fixtures/bad.md":      "# Bad fixture\n\n<?catalog?>\n<?/catalog?>\n",
+		"fixtures/sub/x.md":    "# Sub\n\n<?include file=\"y.md\"?><?/include?>\n",
+		"vendor/inner/skip.md": "# Skip\n\n<?toc?>\n<?/toc?>\n",
+		"vendor/inner/keep.md": "# Kept\n\n<?catalog?>\n<?/catalog?>\n",
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	}
+
+	got := DiscoverFiles(dir, 1024*1024)
+
+	assert.Contains(t, got, "README.md", "non-ignored top-level file is discovered")
+	assert.Contains(t, got, "docs/guide.md", "non-ignored nested file is discovered")
+	assert.Contains(t, got, "vendor/inner/keep.md",
+		"siblings of an ignored exact path are still discovered")
+	assert.NotContains(t, got, "fixtures/bad.md",
+		"file matched by `fixtures/**` must be filtered out")
+	assert.NotContains(t, got, "fixtures/sub/x.md",
+		"file matched by `fixtures/**` must be filtered out (deep)")
+	assert.NotContains(t, got, "vendor/inner/skip.md",
+		"exact-path ignore must filter that file")
 }
 
 func TestDiscoverFiles_FindsDirectives(t *testing.T) {
@@ -416,4 +456,691 @@ func TestFirstQuotedAfter(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestWriteGitattributes_CreatesNewFileWithManagedBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+	globs := Globs{Include: []string{"a.md", "b.md"}}
+
+	err := WriteGitattributes(path, globs)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "# BEGIN mdsmith merge-driver\n" +
+		"a.md merge=mdsmith\n" +
+		"b.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, string(content))
+}
+
+func TestWriteGitattributes_PreservesExistingNonMdsmithEntries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	initial := "*.txt text eol=lf\n" +
+		"*.jpg binary\n"
+	err := os.WriteFile(path, []byte(initial), 0644)
+	require.NoError(t, err)
+
+	globs := Globs{Include: []string{"test.md"}}
+	err = WriteGitattributes(path, globs)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "*.txt text eol=lf\n" +
+		"*.jpg binary\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"test.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, string(content))
+}
+
+func TestWriteGitattributes_ReplacesExistingManagedBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	initial := "*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"old.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n" +
+		"*.jpg binary\n"
+	err := os.WriteFile(path, []byte(initial), 0644)
+	require.NoError(t, err)
+
+	globs := Globs{Include: []string{"new.md", "other.md"}}
+	err = WriteGitattributes(path, globs)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"new.md merge=mdsmith\n" +
+		"other.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n" +
+		"*.jpg binary\n"
+	assert.Equal(t, expected, string(content))
+}
+
+func TestWriteGitattributes_StripsStaleMdsmithEntriesOutsideBlock(t *testing.T) {
+	// Older append-only installs (or hand-edited files) may have left
+	// merge=mdsmith lines outside the managed block. Those must be
+	// removed so ExtractGitattributesFiles does not see stale or
+	// duplicated entries.
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	initial := "*.txt text eol=lf\n" +
+		"stale.md merge=mdsmith\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"old.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n" +
+		"trailing-stale.md merge=mdsmith\n" +
+		"*.jpg binary\n"
+	err := os.WriteFile(path, []byte(initial), 0644)
+	require.NoError(t, err)
+
+	err = WriteGitattributes(path, Globs{Include: []string{"new.md"}})
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"new.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n" +
+		"*.jpg binary\n"
+	assert.Equal(t, expected, string(content))
+}
+
+func TestWriteGitattributes_StripsStaleMdsmithEntriesWithTrailingAttributes(t *testing.T) {
+	// Stale entries can carry extra attributes after merge=mdsmith
+	// (e.g., `path merge=mdsmith eol=lf`). ExtractGitattributesFiles
+	// treats those as managed, so the strip logic must too.
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	initial := "*.txt text eol=lf\n" +
+		"stale.md merge=mdsmith eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"old.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	err := os.WriteFile(path, []byte(initial), 0644)
+	require.NoError(t, err)
+
+	err = WriteGitattributes(path, Globs{Include: []string{"new.md"}})
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"new.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, string(content))
+}
+
+func TestWriteGitattributes_PreservesCommentsThatMentionMdsmith(t *testing.T) {
+	// Comment lines must be preserved even if they textually contain
+	// `merge=mdsmith` (e.g., a documentation comment). The strip logic
+	// matches ExtractGitattributesFiles, which ignores comment lines.
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	initial := "# Custom: README.md merge=mdsmith\n" +
+		"*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"old.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	err := os.WriteFile(path, []byte(initial), 0644)
+	require.NoError(t, err)
+
+	err = WriteGitattributes(path, Globs{Include: []string{"new.md"}})
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "# Custom: README.md merge=mdsmith\n" +
+		"*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"new.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, string(content))
+}
+
+func TestWriteGitattributes_StripsStaleMdsmithEntriesWhenNoBlockExists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	initial := "*.txt text eol=lf\n" +
+		"stale1.md merge=mdsmith\n" +
+		"stale2.md merge=mdsmith\n"
+	err := os.WriteFile(path, []byte(initial), 0644)
+	require.NoError(t, err)
+
+	err = WriteGitattributes(path, Globs{Include: []string{"new.md"}})
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"new.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, string(content))
+}
+
+func TestWriteGitattributes_HandlesEmptyFileList(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	err := WriteGitattributes(path, Globs{})
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "# BEGIN mdsmith merge-driver\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, string(content))
+}
+
+func TestWriteGitattributes_AppendsBlockWhenNoNewlineAtEOF(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	initial := "*.txt text eol=lf"
+	err := os.WriteFile(path, []byte(initial), 0644)
+	require.NoError(t, err)
+
+	err = WriteGitattributes(path, Globs{Include: []string{"test.md"}})
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"test.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, string(content))
+}
+
+func TestWriteGitattributes_HandlesEndMarkerWithoutTrailingNewline(t *testing.T) {
+	// When the END marker is the last line without a final newline,
+	// the rewriter must still locate the block end (len(content)
+	// fallback) instead of dropping content.
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	initial := "*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"old.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver"
+	err := os.WriteFile(path, []byte(initial), 0644)
+	require.NoError(t, err)
+
+	err = WriteGitattributes(path, Globs{Include: []string{"new.md"}})
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"new.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, string(content))
+}
+
+func TestWriteGitattributes_ReplacesTruncatedBlockMissingEndMarker(t *testing.T) {
+	// A partial edit or aborted merge can leave a BEGIN marker without
+	// the matching END marker. The writer must treat the orphan BEGIN
+	// (and everything after it) as the managed block to replace, not
+	// append a second managed block that leaves the stray BEGIN line
+	// behind.
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	initial := "*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"old.md merge=mdsmith\n" +
+		"# (END marker truncated by a partial edit)\n"
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0644))
+
+	require.NoError(t, WriteGitattributes(path, Globs{Include: []string{"new.md"}}))
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"new.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, string(content),
+		"truncated block (BEGIN with no END) must be replaced wholesale, not duplicated")
+}
+
+func TestWriteGitattributes_DoesNotMatchMarkerInsideOtherComment(t *testing.T) {
+	// The BEGIN/END strings must be matched as standalone trimmed
+	// lines, not substrings. If a comment elsewhere mentions the
+	// marker text (e.g. install instructions), the writer must still
+	// treat the file as having no managed block and append a fresh
+	// one rather than replacing content around the bogus match.
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+
+	initial := "# Run `# BEGIN mdsmith merge-driver` to install\n" +
+		"*.txt text eol=lf\n"
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0644))
+
+	require.NoError(t, WriteGitattributes(path, Globs{Include: []string{"new.md"}}))
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	expected := "# Run `# BEGIN mdsmith merge-driver` to install\n" +
+		"*.txt text eol=lf\n" +
+		"# BEGIN mdsmith merge-driver\n" +
+		"new.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, string(content),
+		"comment that contains the marker text must not be mistaken for the block start")
+}
+
+func TestStageGitattributes_AddsFileToIndex(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, exec.Command("git", "init", dir).Run())
+
+	attrPath := filepath.Join(dir, ".gitattributes")
+	require.NoError(t, os.WriteFile(attrPath, []byte("*.md merge=mdsmith\n"), 0644))
+
+	require.NoError(t, StageGitattributes(dir))
+
+	staged, err := exec.Command(
+		"git", "-C", dir, "ls-files", "--stage", "--", ".gitattributes",
+	).Output()
+	require.NoError(t, err)
+	assert.Contains(t, string(staged), ".gitattributes",
+		"StageGitattributes must add .gitattributes to the index")
+}
+
+func TestStageGitattributes_ReturnsErrorOutsideRepo(t *testing.T) {
+	dir := t.TempDir()
+	// dir is not a git repo; `git -C dir add` exits non-zero.
+	err := StageGitattributes(dir)
+	assert.Error(t, err)
+}
+
+func TestDefaultIncludes(t *testing.T) {
+	got := DefaultIncludes()
+	assert.Equal(t, []string{"*.md", "*.markdown"}, got)
+	// Each call must return a fresh slice so callers can mutate it
+	// without affecting later callers.
+	got[0] = "mutated"
+	assert.Equal(t, []string{"*.md", "*.markdown"}, DefaultIncludes())
+}
+
+func TestGlobsFromConfig_NilConfig(t *testing.T) {
+	got, skipped := GlobsFromConfig(nil)
+	assert.Equal(t, DefaultIncludes(), got.Include)
+	assert.Empty(t, got.Exclude)
+	assert.Empty(t, skipped)
+}
+
+func TestGlobsFromConfig_TranslatesIgnore(t *testing.T) {
+	cfg := &config.Config{Ignore: []string{"demo/**", "vendor/**"}}
+	got, skipped := GlobsFromConfig(cfg)
+	assert.Equal(t, DefaultIncludes(), got.Include)
+	assert.Equal(t, []string{"demo/**", "vendor/**"}, got.Exclude)
+	assert.Empty(t, skipped, "representable patterns must not be reported as skipped")
+}
+
+func TestGlobsFromConfig_IsolatesIgnoreSlice(t *testing.T) {
+	// Mutating the returned Exclude slice must not corrupt the
+	// config the caller passed in.
+	cfg := &config.Config{Ignore: []string{"demo/**"}}
+	got, _ := GlobsFromConfig(cfg)
+	got.Exclude[0] = "mutated"
+	assert.Equal(t, []string{"demo/**"}, cfg.Ignore)
+}
+
+func TestLoadGlobs_MissingConfig(t *testing.T) {
+	dir := t.TempDir()
+	got := LoadGlobs(dir)
+	assert.Equal(t, DefaultIncludes(), got.Include)
+	assert.Empty(t, got.Exclude)
+}
+
+func TestLoadGlobs_ReadsIgnorePatterns(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"),
+		[]byte("ignore:\n  - \"demo/**\"\n  - \"vendor/**\"\n"), 0644))
+	got := LoadGlobs(dir)
+	assert.Equal(t, DefaultIncludes(), got.Include)
+	assert.Equal(t, []string{"demo/**", "vendor/**"}, got.Exclude)
+}
+
+func TestLoadGlobs_UnparseableConfigFallsBackToDefaults(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"),
+		[]byte("not: [valid: yaml\n"), 0644))
+	got := LoadGlobs(dir)
+	assert.Equal(t, DefaultIncludes(), got.Include)
+	assert.Empty(t, got.Exclude,
+		"unparseable config must fall back to no exclusions, not error")
+}
+
+func TestRenderManagedBlock_IncludeAndExclude(t *testing.T) {
+	got := RenderManagedBlock(Globs{
+		Include: []string{"*.md", "*.markdown"},
+		Exclude: []string{"demo/**", "vendor/*.md"},
+	})
+	expected := "# BEGIN mdsmith merge-driver\n" +
+		"*.md merge=mdsmith\n" +
+		"*.markdown merge=mdsmith\n" +
+		"demo/** -merge\n" +
+		"vendor/*.md -merge\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, got)
+}
+
+func TestRenderManagedBlock_EmptyGlobs(t *testing.T) {
+	got := RenderManagedBlock(Globs{})
+	expected := "# BEGIN mdsmith merge-driver\n" +
+		"# END mdsmith merge-driver\n"
+	assert.Equal(t, expected, got)
+}
+
+func TestExtractGlobs_NoManagedBlock(t *testing.T) {
+	got, ok := ExtractGlobs("*.txt text\n")
+	assert.False(t, ok)
+	assert.Empty(t, got.Include)
+	assert.Empty(t, got.Exclude)
+}
+
+func TestExtractGlobs_RoundTripsRender(t *testing.T) {
+	original := Globs{
+		Include: []string{"*.md", "*.markdown"},
+		Exclude: []string{"demo/**", "vendor/*.md"},
+	}
+	rendered := RenderManagedBlock(original)
+	got, ok := ExtractGlobs(rendered)
+	require.True(t, ok)
+	assert.Equal(t, original.Include, got.Include)
+	assert.Equal(t, original.Exclude, got.Exclude)
+}
+
+func TestExtractGlobs_IgnoresCommentsAndBlankLinesInBlock(t *testing.T) {
+	content := "# BEGIN mdsmith merge-driver\n" +
+		"\n" +
+		"# inline comment inside the block\n" +
+		"*.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	got, ok := ExtractGlobs(content)
+	require.True(t, ok)
+	assert.Equal(t, []string{"*.md"}, got.Include)
+	assert.Empty(t, got.Exclude)
+}
+
+func TestExtractGlobs_IgnoresUnknownAttributes(t *testing.T) {
+	// A line inside the managed block that is not a merge=mdsmith
+	// or -merge assignment must be ignored, not counted as a glob.
+	content := "# BEGIN mdsmith merge-driver\n" +
+		"*.md merge=mdsmith\n" +
+		"*.txt text\n" +
+		"# END mdsmith merge-driver\n"
+	got, ok := ExtractGlobs(content)
+	require.True(t, ok)
+	assert.Equal(t, []string{"*.md"}, got.Include)
+	assert.Empty(t, got.Exclude)
+}
+
+func TestExtractGlobs_BlockWithoutTrailingNewline(t *testing.T) {
+	// strings.Split on a trailing newline produces an empty last
+	// element; make sure ExtractGlobs handles content that does NOT
+	// end with a newline.
+	content := "# BEGIN mdsmith merge-driver\n" +
+		"*.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver"
+	got, ok := ExtractGlobs(content)
+	require.True(t, ok)
+	assert.Equal(t, []string{"*.md"}, got.Include)
+}
+
+func TestGlobsEqual(t *testing.T) {
+	a := Globs{Include: []string{"*.md"}, Exclude: []string{"demo/**"}}
+	b := Globs{Include: []string{"*.md"}, Exclude: []string{"demo/**"}}
+	assert.True(t, GlobsEqual(a, b))
+
+	// Different include length.
+	assert.False(t, GlobsEqual(a, Globs{Include: []string{"*.md", "*.markdown"}, Exclude: a.Exclude}))
+	// Different exclude length.
+	assert.False(t, GlobsEqual(a, Globs{Include: a.Include}))
+	// Same length, different include order (last-match-wins makes
+	// this a real behaviour change).
+	assert.False(t, GlobsEqual(
+		Globs{Include: []string{"a", "b"}},
+		Globs{Include: []string{"b", "a"}},
+	))
+	// Same length, different exclude content.
+	assert.False(t, GlobsEqual(
+		Globs{Include: []string{"*.md"}, Exclude: []string{"demo/**"}},
+		Globs{Include: []string{"*.md"}, Exclude: []string{"vendor/**"}},
+	))
+}
+
+func TestBuildHookScript_EmbedsBinaryAndUsesGlobs(t *testing.T) {
+	got := BuildHookScript("/usr/local/bin/mdsmith")
+	assert.Contains(t, got, "#!/bin/sh")
+	assert.Contains(t, got, PreMergeCommitMarker)
+	assert.Contains(t, got, "cd \"$(git rev-parse --show-toplevel)\"")
+	assert.Contains(t, got, "if ! '/usr/local/bin/mdsmith' fix .; then")
+	assert.Contains(t, got, `if [ "$status" -ne 1 ]; then`,
+		"hook must propagate exit codes other than 1 (unfixed diagnostics)")
+	assert.Contains(t, got, "git diff --name-only -- '*.md' '*.markdown' |")
+}
+
+func TestBuildHookScript_QuotesBinaryWithEmbeddedQuote(t *testing.T) {
+	got := BuildHookScript("/path/it's/mdsmith")
+	assert.Contains(t, got, `if ! '/path/it'\''s/mdsmith' fix .; then`,
+		"single quote in path must be encoded as `'\\''` so the shell sees the literal path")
+}
+
+func TestShellQuote_RoundTrip(t *testing.T) {
+	assert.Equal(t, "'plain'", shellQuote("plain"))
+	assert.Equal(t, `'a'\''b'`, shellQuote("a'b"))
+	assert.Equal(t, "'with space'", shellQuote("with space"))
+}
+
+func TestHookMatchesCanonical_AcceptsCanonicalScript(t *testing.T) {
+	hook := BuildHookScript("/usr/local/bin/mdsmith")
+	assert.True(t, HookMatchesCanonical(hook))
+}
+
+func TestHookMatchesCanonical_RejectsMissingChdir(t *testing.T) {
+	// Drop the `cd "$(git rev-parse ...)"` line.
+	hook := "#!/bin/sh\n" + PreMergeCommitMarker + "\n" +
+		"set -e\n" +
+		"if ! '/usr/local/bin/mdsmith' fix .; then\n" +
+		"  status=$?\n" +
+		"  if [ \"$status\" -ne 1 ]; then exit \"$status\"; fi\n" +
+		"fi\n" +
+		"git diff --name-only -- '*.md' '*.markdown' |\n"
+	assert.False(t, HookMatchesCanonical(hook))
+}
+
+func TestHookMatchesCanonical_RejectsLegacyFixCommand(t *testing.T) {
+	// Old per-file `fix --` style instead of glob-based `fix .`.
+	hook := "#!/bin/sh\n" + PreMergeCommitMarker + "\n" +
+		"set -e\n" +
+		"cd \"$(git rev-parse --show-toplevel)\"\n" +
+		"'/usr/local/bin/mdsmith' fix -- 'PLAN.md'\n" +
+		"git diff --name-only -- '*.md' '*.markdown' |\n"
+	assert.False(t, HookMatchesCanonical(hook))
+}
+
+func TestHookMatchesCanonical_RejectsLegacyOrTrueGuard(t *testing.T) {
+	// Old `fix . || true` form swallowed every non-zero exit. The new
+	// canonical template uses an `if ! ... fix .; then` block so
+	// genuine errors propagate. The drift check must reject the
+	// permissive legacy form.
+	hook := "#!/bin/sh\n" + PreMergeCommitMarker + "\n" +
+		"set -e\n" +
+		"cd \"$(git rev-parse --show-toplevel)\"\n" +
+		"'/usr/local/bin/mdsmith' fix . || true\n" +
+		"git diff --name-only -- '*.md' '*.markdown' |\n"
+	assert.False(t, HookMatchesCanonical(hook))
+}
+
+func TestHookMatchesCanonical_RejectsMissingStagingLine(t *testing.T) {
+	hook := "#!/bin/sh\n" + PreMergeCommitMarker + "\n" +
+		"set -e\n" +
+		"cd \"$(git rev-parse --show-toplevel)\"\n" +
+		"if ! '/usr/local/bin/mdsmith' fix .; then\n" +
+		"  status=$?\n" +
+		"  if [ \"$status\" -ne 1 ]; then exit \"$status\"; fi\n" +
+		"fi\n"
+	assert.False(t, HookMatchesCanonical(hook))
+}
+
+func TestIsRepresentableGitattributesPattern(t *testing.T) {
+	cases := []struct {
+		pattern string
+		want    bool
+	}{
+		{"", false},
+		{"*.md", true},
+		{"docs/**", true},
+		{"!docs/*.md", false},
+		{"with space.md", false},
+		{"with\ttab.md", false},
+		{"with\nnewline.md", false},
+		{"with\rcr.md", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.pattern, func(t *testing.T) {
+			assert.Equal(t, tc.want, isRepresentableGitattributesPattern(tc.pattern))
+		})
+	}
+}
+
+func TestGlobsFromConfig_DropsUnrepresentablePatterns(t *testing.T) {
+	cfg := &config.Config{Ignore: []string{
+		"demo/**",
+		"!docs/*.md", // negation: skipped
+		"with space", // whitespace: skipped
+		"vendor/**",
+	}}
+	got, skipped := GlobsFromConfig(cfg)
+	assert.Equal(t, []string{"demo/**", "vendor/**"}, got.Exclude,
+		"only representable patterns survive the validation filter")
+	assert.Equal(t, []string{"!docs/*.md", "with space"}, skipped,
+		"dropped patterns are returned in input order so callers can warn")
+}
+
+func TestHookMatchesCanonical_RejectsMissingStagingPipeline(t *testing.T) {
+	hook := "#!/bin/sh\n" + PreMergeCommitMarker + "\n" +
+		"set -e\n" +
+		"cd \"$(git rev-parse --show-toplevel)\"\n" +
+		"if ! '/usr/local/bin/mdsmith' fix .; then\n" +
+		"  status=$?\n" +
+		"  if [ \"$status\" -ne 1 ]; then exit \"$status\"; fi\n" +
+		"fi\n" +
+		// Missing the `git diff --name-only ... |` pipeline header.
+		"while IFS= read -r f; do git add -- \"$f\"; done\n"
+	assert.False(t, HookMatchesCanonical(hook))
+}
+
+func TestHookMatchesCanonical_RejectsMissingReadLoop(t *testing.T) {
+	hook := "#!/bin/sh\n" + PreMergeCommitMarker + "\n" +
+		"set -e\n" +
+		"cd \"$(git rev-parse --show-toplevel)\"\n" +
+		"if ! '/usr/local/bin/mdsmith' fix .; then\n" +
+		"  status=$?\n" +
+		"  if [ \"$status\" -ne 1 ]; then exit \"$status\"; fi\n" +
+		"fi\n" +
+		"git diff --name-only -- '*.md' '*.markdown' | xargs git add --\n"
+	assert.False(t, HookMatchesCanonical(hook),
+		"a non-canonical staging pipeline (e.g. xargs without the read loop) must be flagged")
+}
+
+func TestHookMatchesCanonical_RejectsMissingExitGuard(t *testing.T) {
+	// fix .; then is present but the `[ "$status" -ne 1 ]` guard
+	// is missing, meaning genuine errors would be swallowed.
+	hook := "#!/bin/sh\n" + PreMergeCommitMarker + "\n" +
+		"set -e\n" +
+		"cd \"$(git rev-parse --show-toplevel)\"\n" +
+		"if ! '/usr/local/bin/mdsmith' fix .; then\n" +
+		"  true\n" +
+		"fi\n" +
+		"git diff --name-only -- '*.md' '*.markdown' | while IFS= read -r f; do\n" +
+		"  git add -- \"$f\"\ndone\n"
+	assert.False(t, HookMatchesCanonical(hook))
+}
+
+func TestExtractGlobs_SkipsSingleFieldLines(t *testing.T) {
+	// A managed-block line with only a pattern (no attribute) is
+	// not a valid merge=mdsmith or -merge assignment; ExtractGlobs
+	// must skip it instead of treating the lone token as a glob.
+	content := "# BEGIN mdsmith merge-driver\n" +
+		"orphan-token\n" +
+		"*.md merge=mdsmith\n" +
+		"# END mdsmith merge-driver\n"
+	got, ok := ExtractGlobs(content)
+	require.True(t, ok)
+	assert.Equal(t, []string{"*.md"}, got.Include)
+	assert.Empty(t, got.Exclude)
+}
+
+func TestWriteGitattributes_PropagatesNonENOENTReadError(t *testing.T) {
+	// .gitattributes is a directory, so os.ReadFile returns a
+	// non-IsNotExist error. WriteGitattributes must surface that
+	// rather than silently overwriting the directory.
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+	require.NoError(t, os.Mkdir(path, 0o755))
+
+	err := WriteGitattributes(path, Globs{Include: []string{"*.md"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading")
+}
+
+func TestHookMatchesCanonical_RejectsCanonicalLinesInsideComments(t *testing.T) {
+	// A drifted hook that mentions the canonical commands inside
+	// shell comments must not be treated as canonical. Only
+	// non-comment lines satisfy the required-fragment checks.
+	hook := "#!/bin/sh\n" + PreMergeCommitMarker + "\n" +
+		"# example: cd \"$(git rev-parse --show-toplevel)\"\n" +
+		"# example: fix .; then\n" +
+		"# example: if [ \"$status\" -ne 1 ]; then\n" +
+		"# example: git diff --name-only -- '*.md' '*.markdown' |\n" +
+		"# example: while IFS= read -r f; do\n" +
+		"echo placeholder\n"
+	assert.False(t, HookMatchesCanonical(hook),
+		"required commands sitting in comments must not satisfy the drift check")
+}
+
+func TestHookHasNonCommentLineContaining_IgnoresBlankAndComments(t *testing.T) {
+	got := hookHasNonCommentLineContaining(
+		"#!/bin/sh\n# example: needle\n\n  needle in real line\n",
+		"needle",
+	)
+	assert.True(t, got)
+
+	got = hookHasNonCommentLineContaining(
+		"#!/bin/sh\n# example: needle\n\n",
+		"needle",
+	)
+	assert.False(t, got, "comment-only matches must not satisfy the search")
 }
