@@ -99,7 +99,7 @@ func TestLogRules_DisabledLogger(t *testing.T) {
 	}
 
 	// Should not panic with nil logger.
-	runner.logRules(effective)
+	runner.logRules(runner.Rules, effective)
 }
 
 func TestLogRules_EnabledLoggerLogsRules(t *testing.T) {
@@ -120,7 +120,7 @@ func TestLogRules_EnabledLoggerLogsRules(t *testing.T) {
 		"silent-rule": {Enabled: true},
 	}
 
-	runner.logRules(effective)
+	runner.logRules(runner.Rules, effective)
 	output := buf.String()
 	assert.Contains(t, output, "MDS999")
 	assert.Contains(t, output, "mock-rule")
@@ -144,7 +144,7 @@ func TestLogRules_SkipsDisabledRules(t *testing.T) {
 		"mock-rule": {Enabled: false},
 	}
 
-	runner.logRules(effective)
+	runner.logRules(runner.Rules, effective)
 	assert.NotContains(t, buf.String(), "MDS999")
 }
 
@@ -162,7 +162,7 @@ func TestLogRules_SkipsRulesNotInEffective(t *testing.T) {
 
 	effective := map[string]config.RuleCfg{}
 
-	runner.logRules(effective)
+	runner.logRules(runner.Rules, effective)
 	assert.Empty(t, buf.String())
 }
 

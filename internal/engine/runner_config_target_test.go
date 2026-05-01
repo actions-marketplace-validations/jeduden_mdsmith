@@ -50,11 +50,10 @@ type applySettingsError struct{ msg string }
 
 func (e *applySettingsError) Error() string { return e.msg }
 
-// configTargetRuleClone satisfies rule.CloneRule requirements — it needs
-// to implement the Cloneable interface. The engine uses rule.CloneRule which
-// requires *Rule to implement encoding.BinaryMarshaler/Unmarshaler or just
-// copies fields via the clone package. To keep tests simple, we use a
-// configurable rule from the existing fakes.
+// The helpers above exercise config-target behavior in the runner:
+// markdown-only rule selection when a config path is present, execution of
+// config-file rules against the config target, and error propagation when a
+// configurable config-target rule fails to apply settings.
 
 // --- runConfigTargetRules tests ---
 

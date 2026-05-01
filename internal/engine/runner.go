@@ -100,9 +100,10 @@ func (r *Runner) Run(paths []string) *Result {
 
 		effective := r.effectiveWithCategories(path, fmKinds)
 
-		r.logRules(effective)
+		mdRules := r.markdownRules()
+		r.logRules(mdRules, effective)
 
-		diags, errs := CheckRules(f, r.markdownRules(), effective)
+		diags, errs := CheckRules(f, mdRules, effective)
 		if r.Explain {
 			explain.Attach(diags, r.Config, path, fmKinds)
 		}
@@ -153,9 +154,10 @@ func (r *Runner) RunSource(path string, source []byte) *Result {
 
 	effective := r.effectiveWithCategories(path, fmKinds)
 
-	r.logRules(effective)
+	mdRules := r.markdownRules()
+	r.logRules(mdRules, effective)
 
-	diags, errs := CheckRules(f, r.markdownRules(), effective)
+	diags, errs := CheckRules(f, mdRules, effective)
 	if r.Explain {
 		explain.Attach(diags, r.Config, path, fmKinds)
 	}
@@ -233,13 +235,13 @@ func (r *Runner) log() *vlog.Logger {
 	return &vlog.Logger{}
 }
 
-// logRules logs each enabled rule in the effective config.
-func (r *Runner) logRules(effective map[string]config.RuleCfg) {
+// logRules logs each enabled rule in the effective config from the provided slice.
+func (r *Runner) logRules(rules []rule.Rule, effective map[string]config.RuleCfg) {
 	l := r.log()
 	if !l.Enabled {
 		return
 	}
-	for _, rl := range r.Rules {
+	for _, rl := range rules {
 		cfg, ok := effective[rl.Name()]
 		if !ok || !cfg.Enabled {
 			continue
