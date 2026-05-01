@@ -49,7 +49,7 @@ type Result struct {
 }
 
 // Run lints the files at the given paths and returns a Result containing
-// all diagnostics (sorted by file, line, column) and any errors encountered.
+// all diagnostics (sorted by file, line, column, message) and any errors encountered.
 func (r *Runner) Run(paths []string) *Result {
 	res := &Result{}
 

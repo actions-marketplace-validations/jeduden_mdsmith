@@ -29,6 +29,20 @@ func TestValidateBuildConfig_EmptyCommand_Skipped(t *testing.T) {
 	assert.NoError(t, ValidateBuildConfig(cfg))
 }
 
+func TestValidateBuildConfig_EmptyCommand_ReservedParam_Rejected(t *testing.T) {
+	// Reserved names in params must be rejected even when command is empty.
+	cfg := &Config{
+		Build: BuildConfig{
+			Recipes: map[string]RecipeCfg{
+				"x": {Command: "", Params: ParamCfg{Required: []string{"alt"}}},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved name")
+}
+
 func TestValidateBuildConfig_ValidCommand(t *testing.T) {
 	cfg := &Config{
 		Build: BuildConfig{

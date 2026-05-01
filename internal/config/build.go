@@ -39,8 +39,8 @@ var reservedParams = map[string]bool{"alt": true}
 // because commands are whitespace-tokenised and such a token would be split.
 var placeholderRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// ValidateBuildConfig returns an error if any recipe command references
-// an unknown param or uses a reserved param name.
+// ValidateBuildConfig returns an error if any recipe declares a reserved param
+// name or if its command references an unknown or reserved placeholder.
 // Recipe names are validated in sorted order for deterministic errors.
 func ValidateBuildConfig(cfg *Config) error {
 	if cfg == nil {
@@ -52,49 +52,69 @@ func ValidateBuildConfig(cfg *Config) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		recipe := cfg.Build.Recipes[name]
-		if recipe.Command == "" {
-			continue
+		if err := validateRecipe(name, cfg.Build.Recipes[name]); err != nil {
+			return err
 		}
-		allowed := make(map[string]bool)
-		for _, p := range recipe.Params.Required {
-			if reservedParams[p] {
+	}
+	return nil
+}
+
+func validateRecipe(name string, recipe RecipeCfg) error {
+	if err := validateDeclaredParams(name, recipe.Params); err != nil {
+		return err
+	}
+	if recipe.Command == "" {
+		return nil
+	}
+	allowed := make(map[string]bool)
+	for _, p := range recipe.Params.Required {
+		allowed[p] = true
+	}
+	for _, p := range recipe.Params.Optional {
+		allowed[p] = true
+	}
+	return validateCommandPlaceholders(name, recipe.Command, allowed)
+}
+
+func validateDeclaredParams(recipeName string, params ParamCfg) error {
+	for _, p := range params.Required {
+		if reservedParams[p] {
+			return fmt.Errorf(
+				"build.recipes.%s: params.required contains reserved name %q; "+
+					"reserved names are only available in body-template",
+				recipeName, p,
+			)
+		}
+	}
+	for _, p := range params.Optional {
+		if reservedParams[p] {
+			return fmt.Errorf(
+				"build.recipes.%s: params.optional contains reserved name %q; "+
+					"reserved names are only available in body-template",
+				recipeName, p,
+			)
+		}
+	}
+	return nil
+}
+
+func validateCommandPlaceholders(recipeName, command string, allowed map[string]bool) error {
+	for _, tok := range strings.Fields(command) {
+		for _, m := range placeholderRe.FindAllStringSubmatch(tok, -1) {
+			param := m[1]
+			if reservedParams[param] {
 				return fmt.Errorf(
-					"build.recipes.%s: params.required contains reserved name %q; "+
-						"reserved names are only available in body-template",
-					name, p,
+					"build.recipes.%s: command uses reserved placeholder {%s}; "+
+						"reserved placeholders are only available in body-template",
+					recipeName, param,
 				)
 			}
-			allowed[p] = true
-		}
-		for _, p := range recipe.Params.Optional {
-			if reservedParams[p] {
+			if !allowed[param] {
 				return fmt.Errorf(
-					"build.recipes.%s: params.optional contains reserved name %q; "+
-						"reserved names are only available in body-template",
-					name, p,
+					"build.recipes.%s: command references undeclared placeholder {%s}; "+
+						"declare it in params.required or params.optional",
+					recipeName, param,
 				)
-			}
-			allowed[p] = true
-		}
-		tokens := strings.Fields(recipe.Command)
-		for _, tok := range tokens {
-			for _, m := range placeholderRe.FindAllStringSubmatch(tok, -1) {
-				param := m[1]
-				if reservedParams[param] {
-					return fmt.Errorf(
-						"build.recipes.%s: command uses reserved placeholder {%s}; "+
-							"reserved placeholders are only available in body-template",
-						name, param,
-					)
-				}
-				if !allowed[param] {
-					return fmt.Errorf(
-						"build.recipes.%s: command references undeclared placeholder {%s}; "+
-							"declare it in params.required or params.optional",
-						name, param,
-					)
-				}
 			}
 		}
 	}

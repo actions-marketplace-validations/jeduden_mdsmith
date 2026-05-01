@@ -44,7 +44,7 @@ build:
       body-template: "![{alt}]({output})"
       params:
         required: [input]
-        optional: [theme]
+        optional: [output]
     api-spec:
       command: "redocly bundle {input} -o {output}"
       body-template: "[API spec]({output})"
