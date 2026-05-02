@@ -247,10 +247,10 @@ then.
       violation in VS Code shows the squiggle
       inline within 500 ms of save (manual smoke
       test documented in the new guide).
-- [ ] CI runs `go test -run=^$ -bench=.
-      ./internal/lsp/...` and the benchmark reports
+- [ ] CI runs the latency benchmark and reports
       p95 latency under the 150 ms / 500 ms budgets
-      on the 1k / 5k-line fixtures.
+      on the 1k / 5k-line fixtures. Invocation:
+      `go test -run=^$ -bench=. ./internal/lsp/...`
 - [ ] Quick-fix code actions appear for fixable
       rules and apply only the corresponding range;
       the file's other diagnostics are unaffected.
