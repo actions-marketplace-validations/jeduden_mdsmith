@@ -219,6 +219,32 @@ func TestIsBlankLineOutOfBounds(t *testing.T) {
 	assert.True(t, isBlankLine(lines, 5))
 }
 
+func TestIsBlankLineBlockquoteMarker(t *testing.T) {
+	lines := [][]byte{[]byte("> \n"), []byte(">\n"), []byte(">> \n")}
+	assert.True(t, isBlankLine(lines, 0), "> <space> is blank")
+	assert.True(t, isBlankLine(lines, 1), "> is blank")
+	assert.True(t, isBlankLine(lines, 2), ">> <space> is blank")
+}
+
+func TestCheckBlockquoteNoFalsePositive(t *testing.T) {
+	// A thematic break inside a blockquote with blank blockquote lines around
+	// it should not fire. The ">" line counts as blank.
+	src := []byte("> A longer sentence.\n>\n> ---\n>\n> More.\n")
+	diags := newRule().Check(newFile(t, "f.md", src))
+	assert.Empty(t, diags)
+}
+
+func TestFixBlockquoteInsertsPrefix(t *testing.T) {
+	// Fix must insert ">" blank lines (not bare "") to preserve blockquote context.
+	// Note: "> ---" right after "> Text" is a setext heading, not a thematic break.
+	// Use a blank blockquote line before "---" so goldmark sees it as ThematicBreak.
+	src := []byte("> A longer sentence.\n>\n> ---\n> More text.\n")
+	f := newFile(t, "f.md", src)
+	out := string(newRule().Fix(f))
+	// A bare ">" should be inserted after "---" to keep the break inside the blockquote.
+	assert.Contains(t, out, "> ---\n>\n> More text.")
+}
+
 func TestApplySettingsNonStringStyle(t *testing.T) {
 	r := newRule()
 	assert.Error(t, r.ApplySettings(map[string]any{"style": 42}))
@@ -239,4 +265,3 @@ func TestApplySettingsLengthNotInt(t *testing.T) {
 	r := newRule()
 	assert.Error(t, r.ApplySettings(map[string]any{"length": "three"}))
 }
-

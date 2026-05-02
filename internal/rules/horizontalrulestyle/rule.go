@@ -153,6 +153,8 @@ func (r *Rule) checkBlankLines(f *lint.File, line int) []lint.Diagnostic {
 
 // Fix implements rule.FixableRule.
 func (r *Rule) Fix(f *lint.File) []byte {
+	// before/after map line numbers to the blank-line string to insert
+	// (includes any container prefix such as "> " for blockquotes).
 	insertBefore, insertAfter, replacements := r.collectChanges(f)
 
 	if len(insertBefore) == 0 && len(insertAfter) == 0 && len(replacements) == 0 {
@@ -162,11 +164,11 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	var result []string
 	for i, line := range f.Lines {
 		lineNum := i + 1
-		if insertBefore[lineNum] {
+		if blank, ok := insertBefore[lineNum]; ok {
 			// Avoid double blank: if we just inserted after the previous line,
 			// that already provides the blank line above.
-			if !insertAfter[lineNum-1] {
-				result = append(result, "")
+			if _, prev := insertAfter[lineNum-1]; !prev {
+				result = append(result, blank)
 			}
 		}
 		if repl, ok := replacements[lineNum]; ok {
@@ -174,17 +176,17 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		} else {
 			result = append(result, string(line))
 		}
-		if insertAfter[lineNum] {
-			result = append(result, "")
+		if blank, ok := insertAfter[lineNum]; ok {
+			result = append(result, blank)
 		}
 	}
 
 	return []byte(strings.Join(result, "\n"))
 }
 
-func (r *Rule) collectChanges(f *lint.File) (before, after map[int]bool, replacements map[int]string) {
-	before = make(map[int]bool)
-	after = make(map[int]bool)
+func (r *Rule) collectChanges(f *lint.File) (before, after map[int]string, replacements map[int]string) {
+	before = make(map[int]string)
+	after = make(map[int]string)
 	replacements = make(map[int]string)
 
 	canonical := strings.Repeat(string(delimChar(r.Style)), r.Length)
@@ -211,11 +213,14 @@ func (r *Rule) collectChanges(f *lint.File) (before, after map[int]bool, replace
 		}
 
 		if r.RequireBlankLines {
+			// blankLine is the blank line to insert — include the container
+			// prefix (e.g. "> ") so the blank line stays inside the blockquote.
+			blankLine := strings.TrimRight(prefix, " \t")
 			if line > 1 && !isBlankLine(f.Lines, line-2) {
-				before[line] = true
+				before[line] = blankLine
 			}
 			if !isBlankLine(f.Lines, line) {
-				after[line] = true
+				after[line] = blankLine
 			}
 		}
 
@@ -291,7 +296,10 @@ func isBlankLine(lines [][]byte, idx int) bool {
 	if idx < 0 || idx >= len(lines) {
 		return true
 	}
-	return len(bytes.TrimSpace(lines[idx])) == 0
+	// A line containing only blockquote markers (">") and whitespace is
+	// considered blank — e.g. "> " is an empty blockquote continuation.
+	stripped := bytes.TrimLeft(lines[idx], "> \t")
+	return len(bytes.TrimSpace(stripped)) == 0
 }
 
 // ApplySettings implements rule.Configurable.
