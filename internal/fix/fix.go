@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/jeduden/mdsmith/internal/archetype/gensection"
 	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/engine"
 	"github.com/jeduden/mdsmith/internal/explain"
@@ -32,6 +33,38 @@ type Fixer struct {
 	// remaining diagnostic so output formatters can render an
 	// explanation trailer.
 	Explain bool
+
+	// gitignoreCache caches GitignoreMatchers by directory so the
+	// matcher tree is walked once per directory across a fix run,
+	// matching the engine.Runner cache contract that catalog and
+	// other gitignore-aware rules expect.
+	gitignoreCache map[string]*lint.GitignoreMatcher
+}
+
+// cachedGitignore returns a GitignoreMatcher for the given directory,
+// creating and caching it on first use so the matcher tree is walked
+// once per (Fixer, dir). Mirrors engine.Runner so the fix path's
+// lint.File values give catalog (and any other rule that calls
+// f.GetGitignore()) the same matcher the check path would.
+//
+// The cache key is filepath.Clean(dir). Clean is total (no error
+// path) and idempotent, and it collapses equivalent forms like
+// "./sub" and "sub" / "sub/" so callers passing the same logical
+// directory in slightly different syntactic forms share one cache
+// entry. lint.NewGitignoreMatcher canonicalizes its argument
+// internally (filepath.Abs) before walking, so the matcher itself is
+// correctly rooted even when the cleaned key is still relative.
+func (f *Fixer) cachedGitignore(dir string) *lint.GitignoreMatcher {
+	if f.gitignoreCache == nil {
+		f.gitignoreCache = make(map[string]*lint.GitignoreMatcher)
+	}
+	key := filepath.Clean(dir)
+	if m, ok := f.gitignoreCache[key]; ok {
+		return m
+	}
+	m := lint.NewGitignoreMatcher(key)
+	f.gitignoreCache[key] = m
+	return m
 }
 
 // Result holds the outcome of a fix run.
@@ -118,10 +151,11 @@ func (f *Fixer) fixFile(path string) ([]lint.Diagnostic, []lint.Diagnostic, stri
 	f.logRules(effective)
 
 	fixable, settingsErrs := f.fixableRules(effective)
+	lf.GeneratedRanges = gensection.FindAllGeneratedRanges(lf)
 	beforeDiags, checkErrs := engine.CheckRules(lf, f.Rules, effective)
 	errs = append(errs, append(settingsErrs, checkErrs...)...)
 
-	current := f.applyFixPasses(path, lf.Source, fixable, dirFS, &errs)
+	current := f.applyFixPasses(path, lf.Source, fixable, lf, dirFS, &errs)
 
 	var modified string
 	if !bytes.Equal(lf.Source, current) {
@@ -133,16 +167,7 @@ func (f *Fixer) fixFile(path string) ([]lint.Diagnostic, []lint.Diagnostic, stri
 		modified = path
 	}
 
-	finalFile, err := lint.NewFile(path, current)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("parsing %q after fix: %w", path, err))
-		return beforeDiags, beforeDiags, modified, errs
-	}
-	finalFile.FS = dirFS
-	finalFile.RootFS = lf.RootFS
-	finalFile.RootDir = lf.RootDir
-	finalFile.FrontMatter = lf.FrontMatter
-	finalFile.LineOffset = lf.LineOffset
+	finalFile := buildPostFixFile(path, current, lf, dirFS)
 
 	diags, checkErrs := engine.CheckRules(finalFile, f.Rules, effective)
 	errs = append(errs, checkErrs...)
@@ -152,9 +177,41 @@ func (f *Fixer) fixFile(path string) ([]lint.Diagnostic, []lint.Diagnostic, stri
 	return beforeDiags, diags, modified, errs
 }
 
+// hydrateLintFile copies onto a freshly-parsed *lint.File the parse-
+// time and resolution context that the engine.Runner sets per-file
+// (see runner.go ~line 90-108): FS, RootFS/RootDir, FrontMatter,
+// LineOffset, StripFrontMatter, MaxInputBytes, GitignoreFunc, and
+// GeneratedRanges (recomputed for the parsed bytes). Used by both
+// the post-fix CheckRules call and the parsedFile inside each
+// applyFixPasses iteration so rules see the same File regardless of
+// which Fixer phase invokes them. Without this, fixable rules like
+// catalog (consults GetGitignore for glob filtering) and include
+// (consults MaxInputBytes for secondary reads) silently produce
+// different post-fix bytes than `mdsmith check` would have validated.
+func hydrateLintFile(parsed *lint.File, lf *lint.File, dirFS fs.FS) {
+	parsed.FS = dirFS
+	parsed.RootFS = lf.RootFS
+	parsed.RootDir = lf.RootDir
+	parsed.FrontMatter = lf.FrontMatter
+	parsed.LineOffset = lf.LineOffset
+	parsed.StripFrontMatter = lf.StripFrontMatter
+	parsed.MaxInputBytes = lf.MaxInputBytes
+	parsed.GitignoreFunc = lf.GitignoreFunc
+	parsed.GeneratedRanges = gensection.FindAllGeneratedRanges(parsed)
+}
+
+// buildPostFixFile parses post-fix bytes and hydrates them with the
+// per-file context from lf so the post-fix CheckRules call sees the
+// same lint.File the runner would.
+func buildPostFixFile(path string, source []byte, lf *lint.File, dirFS fs.FS) *lint.File {
+	finalFile, _ := lint.NewFile(path, source) // NewFile never errors with current implementation
+	hydrateLintFile(finalFile, lf, dirFS)
+	return finalFile
+}
+
 // applyFixPasses repeatedly applies fixable rules until the content stabilizes.
 func (f *Fixer) applyFixPasses(
-	path string, source []byte, fixable []rule.FixableRule, dirFS fs.FS, errs *[]error,
+	path string, source []byte, fixable []rule.FixableRule, lf *lint.File, dirFS fs.FS, errs *[]error,
 ) []byte {
 	const maxPasses = 10
 	current := source
@@ -167,10 +224,7 @@ func (f *Fixer) applyFixPasses(
 				*errs = append(*errs, fmt.Errorf("parsing %q: %w", path, err))
 				break
 			}
-			parsedFile.FS = dirFS
-			if f.RootDir != "" {
-				parsedFile.SetRootDir(f.RootDir)
-			}
+			hydrateLintFile(parsedFile, lf, dirFS)
 
 			diags := fr.Check(parsedFile)
 			if len(diags) == 0 {
@@ -220,10 +274,17 @@ func (f *Fixer) prepareFile(path string, source []byte) (*lint.File, fs.FS, []st
 		return nil, nil, nil, fmt.Errorf("parsing %q: %w", path, err)
 	}
 	lf.MaxInputBytes = f.MaxInputBytes
-	dirFS := os.DirFS(filepath.Dir(path))
+	dir := filepath.Dir(path)
+	dirFS := os.DirFS(dir)
 	lf.FS = dirFS
+	gitignoreDir := dir
 	if f.RootDir != "" {
 		lf.SetRootDir(f.RootDir)
+		gitignoreDir = f.RootDir
+	}
+	gd := gitignoreDir // capture for closure
+	lf.GitignoreFunc = func() *lint.GitignoreMatcher {
+		return f.cachedGitignore(gd)
 	}
 	kinds, err := lint.ParseFrontMatterKinds(lf.FrontMatter)
 	if err != nil {
