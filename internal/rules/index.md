@@ -62,5 +62,6 @@ row: "| [{id}]({filename}) | `{name}` | {status} | {description} |"
 | [MDS042](MDS042-emphasis-style/README.md)                     | `emphasis-style`                     | ready     | Enforces a single delimiter character for bold and italic emphasis, and optionally forbids cross-delimiter nesting. |
 | [MDS043](MDS043-no-reference-style/README.md)                 | `no-reference-style`                 | ready     | Reference-style links and footnotes require global definition resolution; flag them in favor of inline links.       |
 | [MDS046](MDS046-ordered-list-numbering/README.md)             | `ordered-list-numbering`             | ready     | Ordered list items must be numbered in the configured style.                                                        |
+| [MDS047](MDS047-ambiguous-emphasis/README.md)                 | `ambiguous-emphasis`                 | ready     | Forbid emphasis sequences whose meaning a human cannot predict at a glance.                                         |
 | [MDS048](MDS048-git-hook-sync/README.md)                      | `git-hook-sync`                      | ready     | Git artifacts must match the canonical glob-based template derived from .mdsmith.yml.                               |
 <?/catalog?>
