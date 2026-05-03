@@ -77,11 +77,12 @@ jobs:
         run: |
           # Google Chrome is pre-installed on GitHub runners and
           # go-rod (used by VHS) finds it via launcher.LookPath().
-          # Installing chromium via apt on Ubuntu 24.04 triggers a
-          # slow snap install (~500 MB of dependencies), so we skip
-          # it and only install ffmpeg.
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          # ffmpeg is also pre-installed on ubuntu-latest; only
+          # install if missing to avoid the slow apt-get update.
+          command -v ffmpeg &>/dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          }
           if [ -f ~/vhs-bin/ttyd ]; then
             sudo install ~/vhs-bin/ttyd /usr/local/bin/ttyd
           else
@@ -94,15 +95,17 @@ jobs:
           if [ -f ~/vhs-bin/vhs ]; then
             sudo install ~/vhs-bin/vhs /usr/local/bin/vhs
           else
-            go install github.com/charmbracelet/vhs@v0.10.0
+            curl -fsSL -o /tmp/vhs.tar.gz \
+              "https://github.com/charmbracelet/vhs/releases/download/v0.10.0/vhs_Linux_x86_64.tar.gz"
+            tar -xzf /tmp/vhs.tar.gz -C /tmp vhs
+            sudo install /tmp/vhs /usr/local/bin/vhs
           fi
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Populate VHS cache
         if: steps.vhs-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/vhs-bin
           cp /usr/local/bin/ttyd ~/vhs-bin/
-          cp "$(go env GOPATH)/bin/vhs" ~/vhs-bin/ 2>/dev/null || cp /usr/local/bin/vhs ~/vhs-bin/ 2>/dev/null || true
+          cp /usr/local/bin/vhs ~/vhs-bin/
       - name: Record demo
         run: vhs demo.tape
       - name: Validate GIF
