@@ -56,7 +56,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	defs := collectReferenceDefs(f.Source)
 	codeLines := lint.CollectCodeBlockLines(f)
 	codeSpans := collectCodeSpanRanges(f)
-	piLines := collectPIBlockLines(f)
+	piLines := lint.CollectPIBlockLines(f)
 
 	excluded := func(line int) bool {
 		return codeLines[line] || piLines[line]
@@ -88,31 +88,6 @@ func collectReferenceDefs(source []byte) map[string]bool {
 // goldmark's util.ToLinkReference folds case and collapses whitespace.
 func normalizeLabel(raw []byte) string {
 	return string(util.ToLinkReference(raw))
-}
-
-// collectPIBlockLines walks the AST and returns a set of 1-based line
-// numbers that fall inside processing-instruction blocks.
-func collectPIBlockLines(f *lint.File) map[int]bool {
-	lines := make(map[int]bool)
-	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
-		pi, ok := n.(*lint.ProcessingInstruction)
-		if !ok {
-			return ast.WalkContinue, nil
-		}
-		segs := pi.Lines()
-		for i := 0; i < segs.Len(); i++ {
-			lines[f.LineOfOffset(segs.At(i).Start)] = true
-		}
-		// Also mark the closure line.
-		if pi.HasClosure() {
-			lines[f.LineOfOffset(pi.ClosureLine.Start)] = true
-		}
-		return ast.WalkContinue, nil
-	})
-	return lines
 }
 
 // byteRange is a half-open [start, end) byte range.
