@@ -3,7 +3,7 @@ id: 125
 title: No space inside link text rule
 status: "✅"
 summary: >-
-  New rule MDS049 that flags Markdown links and
+  New rule MDS050 that flags Markdown links and
   images whose visible text has leading or trailing
   whitespace inside the brackets. Closes the gap with
   markdownlint MD039.
@@ -45,7 +45,7 @@ independent of URL policy.
 
 Reference-style links are out of scope here —
 [plan 107](107_no-reference-style.md) forbids them
-entirely. Until that rule is enabled, MDS049 also
+entirely. Until that rule is enabled, MDS050 also
 applies to reference-link text (`[ text ][ref]`)
 because the text portion is still visible.
 
@@ -109,9 +109,9 @@ image alt text has trailing whitespace
 4. Implement `Fix()` that trims whitespace inside
    the brackets.
 5. Implement `rule.Defaultable` returning `false`.
-6. Register as MDS049 in category `link`.
+6. Register as MDS050 in category `link`.
 7. Add fixture tests in
-   `internal/rules/MDS049-no-space-in-link-text/`
+   `internal/rules/MDS050-no-space-in-link-text/`
    covering: clean link, leading space, trailing
    space, both, image alt with leading space,
    reference link with whitespace text, and a link

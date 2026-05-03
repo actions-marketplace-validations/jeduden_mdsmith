@@ -112,13 +112,12 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		if !isASCIIWhitespace(raw[0]) && !isASCIIWhitespace(raw[len(raw)-1]) {
 			return ast.WalkContinue, nil
 		}
-		trimmed := bytes.TrimFunc(raw, func(r rune) bool {
-			return isASCIIWhitespace(byte(r))
-		})
+		// Use bytes.Trim with an explicit ASCII cutset to avoid the rune-to-byte
+		// truncation hazard of bytes.TrimFunc with non-ASCII content.
+		trimmed := bytes.Trim(raw, " \t\n\r")
 		if len(trimmed) == 0 {
 			return ast.WalkContinue, nil
 		}
-		// Find the byte offsets of the raw content within f.Source.
 		first, last, _ := spanBounds(cs)
 		start, end := recoverContentBounds(first, last, f.Source)
 		cuts = append(cuts, cut{start: start, end: end, repl: trimmed})
@@ -135,9 +134,6 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	var out bytes.Buffer
 	prev := 0
 	for _, c := range cuts {
-		if c.start < prev {
-			continue
-		}
 		out.Write(f.Source[prev:c.start])
 		out.Write(c.repl)
 		prev = c.end

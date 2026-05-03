@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/lint"
+	"github.com/yuin/goldmark/ast"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,6 +45,15 @@ func TestCheck_LeadingSpace(t *testing.T) {
 	assert.Equal(t, msgLeading, diags[0].Message)
 }
 
+func TestCheck_LeadingSpaceLongContent(t *testing.T) {
+	// n >= 3, leading space, no trailing — exercises isBalancedSingleSpace
+	// when raw[0]==' ' but raw[n-1]!=' '.
+	f := newFile(t, "Use ` abc` here.\n")
+	diags := (&Rule{}).Check(f)
+	require.Len(t, diags, 1)
+	assert.Equal(t, msgLeading, diags[0].Message)
+}
+
 func TestCheck_TrailingSpace(t *testing.T) {
 	f := newFile(t, "Use `x ` here.\n")
 	diags := (&Rule{}).Check(f)
@@ -64,6 +74,21 @@ func TestCheck_LeadingTab(t *testing.T) {
 	diags := (&Rule{}).Check(f)
 	require.Len(t, diags, 1)
 	assert.Equal(t, msgLeading, diags[0].Message)
+}
+
+func TestCheck_LeadingNewline(t *testing.T) {
+	// Newlines inside code spans are valid CommonMark; flag the boundary ws.
+	f := newFile(t, "Use `\nx` here.\n")
+	diags := (&Rule{}).Check(f)
+	require.Len(t, diags, 1)
+	assert.Equal(t, msgLeading, diags[0].Message)
+}
+
+func TestCheck_TrailingNewline(t *testing.T) {
+	f := newFile(t, "Use `x\n` here.\n")
+	diags := (&Rule{}).Check(f)
+	require.Len(t, diags, 1)
+	assert.Equal(t, msgTrailing, diags[0].Message)
 }
 
 func TestCheck_EmptyAfterTrim_BothDiagnostics(t *testing.T) {
@@ -87,6 +112,12 @@ func TestFix_LeadingSpace(t *testing.T) {
 	f := newFile(t, "Use ` x` here.\n")
 	got := string((&Rule{}).Fix(f))
 	assert.Equal(t, "Use `x` here.\n", got)
+}
+
+func TestFix_LeadingSpaceLongContent(t *testing.T) {
+	f := newFile(t, "Use ` abc` here.\n")
+	got := string((&Rule{}).Fix(f))
+	assert.Equal(t, "Use `abc` here.\n", got)
 }
 
 func TestFix_TrailingSpace(t *testing.T) {
@@ -134,4 +165,31 @@ func TestFix_DoubleBracketLeadingSpace(t *testing.T) {
 	f := newFile(t, "Use ``  x `` here.\n")
 	got := string((&Rule{}).Fix(f))
 	assert.Equal(t, "Use ``x`` here.\n", got)
+}
+
+func TestFix_LeadingNewline(t *testing.T) {
+	f := newFile(t, "Use `\nx` here.\n")
+	got := string((&Rule{}).Fix(f))
+	assert.Equal(t, "Use `x` here.\n", got)
+}
+
+func TestFix_TrailingNewline(t *testing.T) {
+	f := newFile(t, "Use `x\n` here.\n")
+	got := string((&Rule{}).Fix(f))
+	assert.Equal(t, "Use `x` here.\n", got)
+}
+
+// TestSpanBounds_NoTextChildren exercises the defensive ok=false path
+// in spanBounds when a CodeSpan has no *ast.Text children.
+func TestSpanBounds_NoTextChildren(t *testing.T) {
+	cs := ast.NewCodeSpan()
+	_, _, ok := spanBounds(cs)
+	assert.False(t, ok)
+}
+
+// TestRawContent_NoChildren exercises the !ok2 early-return in rawContent.
+func TestRawContent_NoChildren(t *testing.T) {
+	cs := ast.NewCodeSpan()
+	_, _, ok := rawContent(cs, []byte("source"))
+	assert.False(t, ok)
 }
