@@ -92,10 +92,14 @@ type Override struct {
 	Categories map[string]bool    `yaml:"categories"`
 }
 
-// Patterns returns the effective set of glob patterns for the override,
-// combining the canonical Glob field with the deprecated Files alias.
+// Patterns returns the effective set of glob patterns for the override.
+// When Glob is set it takes precedence; Files is used only when Glob is
+// absent (backward compatibility with the deprecated files: key).
 func (o Override) Patterns() []string {
-	return append(o.Glob, o.Files...)
+	if len(o.Glob) > 0 {
+		return o.Glob
+	}
+	return o.Files
 }
 
 // KindBody is a named bundle of rule settings. It has the same shape as
@@ -117,10 +121,14 @@ type KindAssignmentEntry struct {
 	Kinds []string `yaml:"kinds"`
 }
 
-// Patterns returns the effective set of glob patterns for the entry,
-// combining the canonical Glob field with the deprecated Files alias.
+// Patterns returns the effective set of glob patterns for the entry.
+// When Glob is set it takes precedence; Files is used only when Glob is
+// absent (backward compatibility with the deprecated files: key).
 func (e KindAssignmentEntry) Patterns() []string {
-	return append(e.Glob, e.Files...)
+	if len(e.Glob) > 0 {
+		return e.Glob
+	}
+	return e.Files
 }
 
 // RuleCfg is a YAML union: can be bool (enable/disable) or map[string]any (settings).
