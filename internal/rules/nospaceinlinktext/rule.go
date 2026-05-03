@@ -54,20 +54,9 @@ func (r *Rule) DefaultSettings() map[string]any {
 	}
 }
 
-// bracketSpan returns the byte range of the opening `[` and its matching `]`
-// for a link or image node. Returns (-1, -1) if the span cannot be determined.
-//
-// It walks all descendant Text nodes to find the earliest source position, then
-// scans backward for `[` (handling emphasis, code, and other inline markers that
-// may precede the first text). The forward scan uses depth tracking and skips
-// backslash-escaped brackets to find the correct closing `]`.
-func bracketSpan(n ast.Node, source []byte) (open, close int) {
-	// Find the earliest byte position among all descendant Text nodes, but
-	// skip Image subtrees. Walking all descendants (not just direct children)
-	// handles cases where the first inline node is emphasis or a code span.
-	// Skipping Image subtrees prevents a link wrapping an image (e.g.
-	// [![alt](img)](url)) from picking up text inside the image's alt span
-	// and scanning to the wrong `[`.
+// minTextStart returns the minimum Segment.Start among all *ast.Text descendant
+// nodes of n, skipping Image subtrees. Returns -1 if none are found.
+func minTextStart(n ast.Node) int {
 	minStart := -1
 	_ = ast.Walk(n, func(child ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -88,47 +77,88 @@ func bracketSpan(n ast.Node, source []byte) (open, close int) {
 		}
 		return ast.WalkContinue, nil
 	})
+	return minStart
+}
 
-	if minStart == -1 {
-		return -1, -1
+// imageOpener reports whether source[i] == '[' is an image opener, i.e. it is
+// immediately preceded by an unescaped '!'. On entry source[i] must be '['.
+func imageOpener(source []byte, i int) bool {
+	if i == 0 || source[i-1] != '!' {
+		return false
 	}
+	bs := 0
+	for j := i - 2; j >= 0 && source[j] == '\\'; j-- {
+		bs++
+	}
+	return bs%2 == 0
+}
 
-	// Scan backward from the first content byte to find the opening `[`.
-	// Any inline formatting bytes (*, _, `, etc.) between `[` and the first
-	// text are passed over. A `[` preceded by an odd number of backslashes is
-	// an escaped bracket (\[) and is skipped so we land on the real opener.
-	openBracket := -1
-	for i := minStart - 1; i >= 0; i-- {
+// findOpenBracket scans backward from from-1 to find the opening '[' for n.
+// For links it skips image openers (![); for images it requires one.
+// Returns -1 if not found.
+func findOpenBracket(source []byte, img bool, from int) int {
+	for i := from - 1; i >= 0; i-- {
 		if source[i] != '[' {
 			continue
 		}
-		// Count backslashes immediately before this `[`.
-		backslashes := 0
+		bs := 0
 		for j := i - 1; j >= 0 && source[j] == '\\'; j-- {
-			backslashes++
+			bs++
 		}
-		if backslashes%2 == 1 {
-			// Odd count → this `[` is escaped; skip.
-			continue
+		if bs%2 == 1 {
+			continue // escaped [
 		}
-		openBracket = i
-		break
+		if img != imageOpener(source, i) {
+			continue // wrong opener type
+		}
+		return i
 	}
-	if openBracket == -1 {
-		return -1, -1
-	}
+	return -1
+}
 
-	// Scan forward from openBracket+1 to find the matching `]`, tracking
-	// bracket depth. Backslash-escaped brackets are skipped so that `\]`
-	// inside link text does not terminate the scan prematurely.
-	depth := 1
-	i := openBracket + 1
-	for i < len(source) && depth > 0 {
-		if source[i] == '\\' && i+1 < len(source) {
-			i += 2
+// skipCodeSpan advances past the backtick-delimited code span starting at i.
+// Returns the index after the closing backtick sequence, or len(source) if no
+// matching closer is found. On entry source[i] must be '`'.
+func skipCodeSpan(source []byte, i int) int {
+	n := 0
+	for i+n < len(source) && source[i+n] == '`' {
+		n++
+	}
+	i += n
+	for i < len(source) {
+		if source[i] != '`' {
+			i++
 			continue
 		}
+		j := i
+		for j < len(source) && source[j] == '`' {
+			j++
+		}
+		if j-i == n {
+			return j
+		}
+		i = j
+	}
+	return i
+}
+
+// findCloseBracket scans forward from open+1 to find the matching ']'.
+// Backslash-escaped bytes and code-span contents are skipped so structural
+// brackets inside code spans or after '\' do not affect depth counting.
+// Returns -1 if the bracket is unmatched.
+func findCloseBracket(source []byte, open int) int {
+	depth := 1
+	i := open + 1
+	for i < len(source) && depth > 0 {
 		switch source[i] {
+		case '`':
+			i = skipCodeSpan(source, i)
+			continue
+		case '\\':
+			if i+1 < len(source) {
+				i += 2
+				continue
+			}
 		case '[':
 			depth++
 		case ']':
@@ -137,10 +167,27 @@ func bracketSpan(n ast.Node, source []byte) (open, close int) {
 		i++
 	}
 	if depth != 0 {
+		return -1
+	}
+	return i - 1
+}
+
+// bracketSpan returns the byte range of the opening '[' and its matching ']'
+// for a link or image node. Returns (-1, -1) if the span cannot be determined.
+func bracketSpan(n ast.Node, source []byte) (open, close int) {
+	minStart := minTextStart(n)
+	if minStart == -1 {
 		return -1, -1
 	}
-	// i now points one past the `]`.
-	closeBracket := i - 1
+	img := isImage(n)
+	openBracket := findOpenBracket(source, img, minStart)
+	if openBracket == -1 {
+		return -1, -1
+	}
+	closeBracket := findCloseBracket(source, openBracket)
+	if closeBracket == -1 {
+		return -1, -1
+	}
 	return openBracket, closeBracket
 }
 

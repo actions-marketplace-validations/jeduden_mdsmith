@@ -243,3 +243,38 @@ func TestLinkWithTextAndNestedImageClean(t *testing.T) {
 	assert.Contains(t, msgs, "link text has leading whitespace")
 	assert.Contains(t, msgs, "link text has trailing whitespace")
 }
+
+func TestLinkWithImageThenTrailingSpace(t *testing.T) {
+	// [ ![img](img.png) tail ](url) — backward scan must skip the image's `[`
+	// and land on the outer link's `[`. Both boundary spaces must be detected.
+	diags := check(t, "# T\n\n[ ![img](img.png) tail ](url)\n", true)
+	msgs := make([]string, len(diags))
+	for i, d := range diags {
+		msgs[i] = d.Message
+	}
+	assert.Contains(t, msgs, "link text has leading whitespace")
+	assert.Contains(t, msgs, "link text has trailing whitespace")
+}
+
+func TestCodeSpanWithCloseBracketNotFlaggedAsClose(t *testing.T) {
+	// [ text `]` ](url) — `]` inside code span must not terminate the forward scan.
+	// The trailing space before the real `]` must still be detected.
+	diags := check(t, "# T\n\n[ text `]` ](url)\n", true)
+	msgs := make([]string, len(diags))
+	for i, d := range diags {
+		msgs[i] = d.Message
+	}
+	assert.Contains(t, msgs, "link text has leading whitespace")
+	assert.Contains(t, msgs, "link text has trailing whitespace")
+}
+
+func TestCodeSpanWithOpenBracketNotFlaggedAsNested(t *testing.T) {
+	// [ `[` text ](url) — `[` inside code span must not increment depth.
+	// The leading space before the code span must be detected.
+	diags := check(t, "# T\n\n[ `[` text](url)\n", true)
+	msgs := make([]string, len(diags))
+	for i, d := range diags {
+		msgs[i] = d.Message
+	}
+	assert.Contains(t, msgs, "link text has leading whitespace")
+}
