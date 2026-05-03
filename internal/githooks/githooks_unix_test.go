@@ -11,6 +11,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWriteGitattributesFile_RejectsSymlink(t *testing.T) {
+	// Call writeGitattributesFile directly to exercise its own Lstat guard
+	// (defense-in-depth against TOCTOU between WriteGitattributes' initial
+	// check and the actual write).
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.gitattributes")
+	link := filepath.Join(dir, ".gitattributes")
+	require.NoError(t, os.WriteFile(target, []byte("existing\n"), 0o644))
+	require.NoError(t, os.Symlink(target, link))
+
+	err := writeGitattributesFile(link, "new content\n")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a regular file")
+}
+
 func TestWriteGitattributes_RejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real.gitattributes")

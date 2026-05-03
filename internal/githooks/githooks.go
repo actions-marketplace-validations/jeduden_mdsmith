@@ -782,11 +782,16 @@ func WriteGitattributes(path string, globs Globs) error {
 }
 
 // writeGitattributesFile writes content to path, preserving an existing
-// file's permissions. The caller must ensure path is a regular file.
+// file's permissions. Re-validates that path is still a regular file to
+// narrow the TOCTOU window between WriteGitattributes' initial check and
+// the actual write.
 func writeGitattributesFile(path, content string) error {
 	mode := os.FileMode(0o644)
 	existed := false
 	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("writing %s: not a regular file", path)
+		}
 		mode = info.Mode() &^ os.ModeType
 		existed = true
 	}

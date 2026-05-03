@@ -72,17 +72,25 @@ func runMergeDriver(args []string) int {
 	}
 }
 
-// mergeFileMode returns the named file's mode with file-type bits masked off
-// (info.Mode() &^ os.ModeType), or defaultMode if the file cannot be stat'd.
-// os.Stat follows symlinks, so ModeSymlink is never set in the result; the
-// mask simply strips ModeDir and other type bits while preserving rwx and
-// setuid/setgid/sticky — wider than Mode().Perm() which returns only the
-// low 9 bits.
+// mergeFileMode returns the named file's permission bits (mode &^ ModeType),
+// or defaultMode if the file cannot be stat'd. Uses Lstat so symlinks are
+// not followed; callers that need a regular-file guarantee should also call
+// guardRegularFile.
 func mergeFileMode(name string, defaultMode os.FileMode) os.FileMode {
-	if info, err := os.Stat(name); err == nil {
+	if info, err := os.Lstat(name); err == nil {
 		return info.Mode() &^ os.ModeType
 	}
 	return defaultMode
+}
+
+// guardRegularFile returns an error if path exists and is not a regular file
+// (e.g. a symlink or directory), preventing writes from following links
+// outside the worktree.
+func guardRegularFile(path string) error {
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("%s: not a regular file", path)
+	}
+	return nil
 }
 
 // osWriteFile is a variable so tests can substitute a failing implementation
@@ -119,6 +127,10 @@ func mergeAndClean(base, ours, theirs string, maxBytes int64) ([]byte, int) {
 	// os.WriteFile only applies perm on creation; chmod enforces it
 	// on existing files too (e.g. if git truncated rather than recreated).
 	oursMode := mergeFileMode(ours, 0o644)
+	if err := guardRegularFile(ours); err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return nil, 2
+	}
 	cleaned := stripSectionConflicts(content)
 	if err := osWriteFile(ours, cleaned, oursMode); err != nil {
 		fmt.Fprintf(os.Stderr, "mdsmith: writing cleaned merge: %v\n", err)
@@ -197,6 +209,14 @@ func fixAtRealPath(cleaned []byte, ours, pathname string, maxBytes int64) ([]byt
 	pathnameMode := mergeFileMode(pathname, 0o644)
 	oursMode := mergeFileMode(ours, 0o644)
 
+	if err := guardRegularFile(pathname); err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return nil, 2
+	}
+	if err := guardRegularFile(ours); err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return nil, 2
+	}
 	backup, backupErr := lint.ReadFileLimited(pathname, maxBytes)
 	if backupErr != nil && !os.IsNotExist(backupErr) {
 		fmt.Fprintf(os.Stderr, "mdsmith: reading %s for backup: %v\n", pathname, backupErr)
