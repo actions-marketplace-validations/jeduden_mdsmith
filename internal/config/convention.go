@@ -97,10 +97,11 @@ func copyConventionPreset(p map[string]RuleCfg) map[string]RuleCfg {
 // clean type error. Inspecting the raw node tag is the only way to
 // catch the type mismatch before that coercion happens.
 func validateConventionScalar(data []byte) error {
+	// yaml.Unmarshal into yaml.Node does not expand aliases, so this
+	// is safe without an alias-rejection pre-check. Errors are swallowed
+	// because Load's subsequent UnmarshalSafe call will surface them.
 	var node yaml.Node
 	if err := yaml.Unmarshal(data, &node); err != nil {
-		// A YAML parse error is reported by Load's yaml.Unmarshal
-		// call already; do not double-report.
 		return nil
 	}
 	if node.Kind != yaml.DocumentNode || len(node.Content) == 0 {
