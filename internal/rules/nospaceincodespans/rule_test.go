@@ -187,6 +187,36 @@ func TestSpanBounds_NoTextChildren(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// TestSpanBounds_NonTextChild covers the !ok2 continue branch in spanBounds
+// when a child node is present but is not *ast.Text.
+func TestSpanBounds_NonTextChild(t *testing.T) {
+	cs := ast.NewCodeSpan()
+	cs.AppendChild(cs, ast.NewCodeSpan()) // non-Text child
+	_, _, ok := spanBounds(cs)
+	assert.False(t, ok)
+}
+
+// TestFix_LeadingSpaceBeforeBacktick covers the bytes.Equal guard in Fix: when
+// the trimmed+protective-space result equals the raw content, Fix leaves the
+// source unchanged (emitting the diagnostic but not auto-fixing).
+// Input: “ `abc“ — the content " `abc" has a leading space but trimming gives
+// "`abc" whose protective prepend " `abc" equals the original raw, so no cut.
+func TestFix_LeadingSpaceBeforeBacktick(t *testing.T) {
+	src := "Use `` `abc`` here.\n"
+	f := newFile(t, src)
+	got := string((&Rule{}).Fix(f))
+	assert.Equal(t, src, got)
+}
+
+// TestCheck_LeadingSpaceBeforeBacktick verifies Check still emits a diagnostic
+// for the same span that Fix cannot safely auto-fix.
+func TestCheck_LeadingSpaceBeforeBacktick(t *testing.T) {
+	f := newFile(t, "Use `` `abc`` here.\n")
+	diags := (&Rule{}).Check(f)
+	require.Len(t, diags, 1)
+	assert.Equal(t, msgLeading, diags[0].Message)
+}
+
 // TestFix_ContentBacktick_ProtectiveSpace verifies that trimming a span whose
 // content starts or ends with a backtick adds a protective space to prevent
 // the content backtick from merging into the delimiter run.
