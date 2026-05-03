@@ -205,6 +205,25 @@ func TestFix_UnusedNoBlankAfter_PreservesParagraphSeparator(t *testing.T) {
 	assert.Equal(t, "First para.\n\nSecond para.\n", got)
 }
 
+func TestCheck_SameLabelInPIAndOutside_NoDuplicate(t *testing.T) {
+	// A definition-shaped line inside a PI block shares a label with a real
+	// definition outside. The PI occurrence must NOT be counted as a second
+	// definition, so no duplicate diagnostic should be emitted.
+	src := "See [foo].\n\n<?ignore\n[foo]: https://inside-pi.com\n?>\n\n[foo]: https://real.com\n"
+	f := newFile(t, src)
+	r := &Rule{}
+	assert.Empty(t, r.Check(f))
+}
+
+func TestFix_SameLabelInPIAndOutside_PIUnchanged(t *testing.T) {
+	// Fix must not remove the definition-shaped line inside the PI block.
+	src := "See [foo].\n\n<?ignore\n[foo]: https://inside-pi.com\n?>\n\n[foo]: https://real.com\n"
+	f := newFile(t, src)
+	r := &Rule{}
+	got := string(r.Fix(f))
+	assert.Equal(t, src, got)
+}
+
 func TestCheck_DefinitionInsidePIBlock_NoDiagnostic(t *testing.T) {
 	// A definition-shaped line inside a PI block must not be collected
 	// and must not produce a diagnostic.

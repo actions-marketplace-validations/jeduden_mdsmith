@@ -105,8 +105,11 @@ See [foo].
 ## Auto-fix
 
 Removes the offending definition line. When the line is preceded by a blank
-line, the blank line is consumed so removal does not leave a double-blank
-behind. Ignored labels are never removed.
+line AND also followed by a blank line (or is the last line in the file),
+the preceding blank line is also removed so removal does not leave a
+double-blank behind. When only the preceding blank line is present (no
+following blank), it is preserved so adjacent paragraphs remain separated.
+Ignored labels are never removed.
 
 ## Meta-Information
 

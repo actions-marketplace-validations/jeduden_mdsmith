@@ -207,10 +207,11 @@ var refDefRE = regexp.MustCompile(`(?m)^[ ]{0,3}\[([^\]\n]+)\]:[ \t]*\S+.*$`)
 
 // collectDefinitions returns all link reference definitions in the file,
 // including duplicates, in document order. Lines inside code blocks or PI
-// blocks are excluded: code blocks via lint.CollectCodeBlockLines; PI block
-// content is excluded because goldmark's PI parser consumes those lines before
-// the reference-definition parser sees them, so their labels never appear in
-// ctx.References() and are filtered by the wanted-label check.
+// blocks are excluded via lint.CollectCodeBlockLines and lint.CollectPIBlockLines.
+// The PI-block filter is load-bearing: when a label is defined both inside a
+// PI block and outside, the wanted-label check passes for both matches, so an
+// explicit line-range exclusion is required to avoid treating the PI-block
+// occurrence as a duplicate definition.
 func collectDefinitions(f *lint.File) []referenceDefinition {
 	source := f.Source
 	ctx := parser.NewContext()
@@ -227,6 +228,7 @@ func collectDefinitions(f *lint.File) []referenceDefinition {
 	}
 
 	codeLines := lint.CollectCodeBlockLines(f)
+	piLines := lint.CollectPIBlockLines(f)
 	var out []referenceDefinition
 	for _, m := range refDefRE.FindAllSubmatchIndex(source, -1) {
 		raw := source[m[2]:m[3]]
@@ -235,7 +237,7 @@ func collectDefinitions(f *lint.File) []referenceDefinition {
 		}
 		bracketAbs := m[2] - 1
 		matchLine := f.LineOfOffset(bracketAbs)
-		if codeLines[matchLine] {
+		if codeLines[matchLine] || piLines[matchLine] {
 			continue
 		}
 		end := m[1]
