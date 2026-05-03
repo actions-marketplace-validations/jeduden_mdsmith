@@ -62,11 +62,9 @@ rules:
 For each configured name, the rule scans prose text for
 ASCII-case-insensitive matches that start at a word boundary.
 Only ASCII letters (`A`–`Z`) are folded; non-ASCII characters
-in a configured name are matched byte-for-byte. The byte
-immediately before the match in the full source must be a
-non-ASCII-letter, non-ASCII-digit, non-underscore character (i.e.
-not in `[A-Za-z0-9_]`), or the match must begin at the start of
-the file. Only the **left** boundary is enforced — there is no
+in a configured name are matched byte-for-byte. A match must be
+preceded by a non-word character (not in `[A-Za-z0-9_]`) or
+occur at the start of the file. Only the **left** boundary is enforced — there is no
 right-boundary check. For example, `Javascripts` (wrong case)
 matches `JavaScript` at the left boundary; the rule reports and
 fixes the `Javascripts` prefix to `JavaScript`, leaving the

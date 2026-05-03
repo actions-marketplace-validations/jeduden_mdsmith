@@ -51,7 +51,7 @@ func TestCheck_AllCaps_Diagnostic(t *testing.T) {
 	assert.Equal(t, `proper name "JAVASCRIPT" should be "JavaScript"`, diags[0].Message)
 }
 
-func TestCheck_Fix_ReplacesWrongCasing(t *testing.T) {
+func TestFix_ReplacesWrongCasing(t *testing.T) {
 	f := newFile(t, "Use javascript and github.\n")
 	r := &Rule{Names: []string{"JavaScript", "GitHub"}}
 	fixed := r.Fix(f)
