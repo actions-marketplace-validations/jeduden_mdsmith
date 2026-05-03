@@ -221,7 +221,7 @@ func buildDemoteReplacement(heading *ast.Heading, source []byte) (rep, bool) {
 		line := source[lineStart:end]
 		// Skip up to 3 CommonMark-allowed leading spaces, then the '#' run.
 		i := 0
-		for i < len(line) && line[i] == ' ' {
+		for i < 3 && i < len(line) && line[i] == ' ' {
 			i++
 		}
 		for i < len(line) && line[i] == '#' {

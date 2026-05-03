@@ -4,5 +4,6 @@ settings:
 ---
 # Title
 
-Body text. The front-matter-title setting is disabled so the title
-field in front matter is ignored even if present.
+Body text. Setting `front-matter-title: ""` disables the front-matter
+conflict check entirely — even when front matter carries a title field
+the rule will not emit the "conflicts with front-matter title" diagnostic.
