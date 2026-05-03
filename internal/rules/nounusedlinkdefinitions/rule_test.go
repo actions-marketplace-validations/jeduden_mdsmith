@@ -330,6 +330,27 @@ func TestFix_MultipleUnused_AllRemoved(t *testing.T) {
 	assert.Equal(t, "# Heading\n", got)
 }
 
+func TestCheck_DefinitionInGeneratedRange_NoDiagnostic(t *testing.T) {
+	// A definition-shaped line inside a generated section must not produce a
+	// diagnostic even when the label is never used elsewhere.
+	src := "# Heading\n\nSome text.\n\n[orphan]: https://example.com\n"
+	f := newFile(t, src)
+	// Mark line 5 ([orphan]: ...) as generated.
+	f.GeneratedRanges = []lint.LineRange{{From: 5, To: 5}}
+	r := &Rule{}
+	assert.Empty(t, r.Check(f))
+}
+
+func TestFix_DefinitionInGeneratedRange_Unchanged(t *testing.T) {
+	// Fix must not remove a definition inside a generated section.
+	src := "# Heading\n\nSome text.\n\n[orphan]: https://example.com\n"
+	f := newFile(t, src)
+	f.GeneratedRanges = []lint.LineRange{{From: 5, To: 5}}
+	r := &Rule{}
+	got := string(r.Fix(f))
+	assert.Equal(t, src, got)
+}
+
 func TestApplyCuts_OverlappingCuts_Skipped(t *testing.T) {
 	// An overlapping cut is silently skipped (second cut starts before first ends).
 	src := []byte("hello world")

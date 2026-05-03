@@ -206,12 +206,13 @@ type referenceDefinition struct {
 var refDefRE = regexp.MustCompile(`(?m)^[ ]{0,3}\[([^\]\n]+)\]:[ \t]*\S+.*$`)
 
 // collectDefinitions returns all link reference definitions in the file,
-// including duplicates, in document order. Lines inside code blocks or PI
-// blocks are excluded via lint.CollectCodeBlockLines and lint.CollectPIBlockLines.
-// The PI-block filter is load-bearing: when a label is defined both inside a
-// PI block and outside, the wanted-label check passes for both matches, so an
-// explicit line-range exclusion is required to avoid treating the PI-block
-// occurrence as a duplicate definition.
+// including duplicates, in document order. Lines inside code blocks, PI blocks,
+// or generated sections (f.GeneratedRanges) are excluded so that Fix() never
+// deletes content that belongs to those regions. The PI-block filter is
+// load-bearing: when a label is defined both inside a PI block and outside, the
+// wanted-label check passes for both matches, so an explicit line-range
+// exclusion is required to avoid treating the PI-block occurrence as a
+// duplicate definition.
 func collectDefinitions(f *lint.File) []referenceDefinition {
 	source := f.Source
 	ctx := parser.NewContext()
@@ -238,6 +239,9 @@ func collectDefinitions(f *lint.File) []referenceDefinition {
 		bracketAbs := m[2] - 1
 		matchLine := f.LineOfOffset(bracketAbs)
 		if codeLines[matchLine] || piLines[matchLine] {
+			continue
+		}
+		if lineInGeneratedRanges(matchLine, f.GeneratedRanges) {
 			continue
 		}
 		end := m[1]
@@ -304,6 +308,15 @@ func applyCuts(source []byte, cuts []fixCut) []byte {
 	}
 	out.Write(source[prev:])
 	return out.Bytes()
+}
+
+func lineInGeneratedRanges(line int, ranges []lint.LineRange) bool {
+	for _, r := range ranges {
+		if r.Contains(line) {
+			return true
+		}
+	}
+	return false
 }
 
 func toStringSlice(v any) ([]string, bool) {
