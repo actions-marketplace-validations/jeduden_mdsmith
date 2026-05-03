@@ -60,7 +60,9 @@ rules:
 ## Detection
 
 For each configured name, the rule scans prose text for
-case-insensitive matches that start at a word boundary. The byte
+ASCII-case-insensitive matches that start at a word boundary.
+Only ASCII letters (`A`–`Z`) are folded; non-ASCII characters
+in a configured name are matched byte-for-byte. The byte
 immediately before the match in the full source must be a
 non-ASCII-letter, non-ASCII-digit, non-underscore character (i.e.
 not in `[A-Za-z0-9_]`), or the match must begin at the start of
