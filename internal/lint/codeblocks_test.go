@@ -7,6 +7,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCollectPIBlockLines_MultiLine(t *testing.T) {
+	// Lines:
+	// 1: # Heading
+	// 2: (blank)
+	// 3: <?ignore
+	// 4: content line
+	// 5: ?>
+	// 6: (blank)
+	// 7: Some text.
+	src := []byte("# Heading\n\n<?ignore\ncontent line\n?>\n\nSome text.\n")
+	f, err := NewFile("test.md", src)
+	require.NoError(t, err)
+	lines := CollectPIBlockLines(f)
+	for _, ln := range []int{3, 4, 5} {
+		assert.True(t, lines[ln], "expected line %d to be in PI block lines", ln)
+	}
+	for _, ln := range []int{1, 2, 6, 7} {
+		assert.False(t, lines[ln], "expected line %d to NOT be in PI block lines", ln)
+	}
+}
+
+func TestCollectPIBlockLines_NoPI(t *testing.T) {
+	src := []byte("# Title\n\nJust a paragraph.\n")
+	f, err := NewFile("test.md", src)
+	require.NoError(t, err)
+	lines := CollectPIBlockLines(f)
+	assert.Empty(t, lines)
+}
+
 func TestCollectCodeBlockLines_FencedCodeBlock(t *testing.T) {
 	// Lines:
 	// 1: # Heading

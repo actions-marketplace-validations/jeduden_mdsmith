@@ -1,7 +1,7 @@
 ---
 id: 129
 title: Flag unused or duplicate link reference definitions
-status: "🔲"
+status: "✅"
 summary: >-
   New rule MDS053 that flags `[label]: url` link
   reference definitions that are never used by any
@@ -133,25 +133,25 @@ first defined on line 42
 
 ## Tasks
 
-1. Scaffold `internal/rules/nounusedlinkdefinitions/`
+1. [x] Scaffold `internal/rules/nounusedlinkdefinitions/`
    with `rule.go`, `rule_test.go`, and the `init()`
    `rule.Register` call.
-2. Implement `Check()` that walks the AST for usages
+2. [x] Implement `Check()` that walks the AST for usages
    and the parser context (or AST) for definitions,
    then diffs the two sets.
-3. Implement duplicate detection by tracking the first
+3. [x] Implement duplicate detection by tracking the first
    line each normalized label appears on and emitting
    on every subsequent occurrence.
-4. Implement `rule.Configurable` for
+4. [x] Implement `rule.Configurable` for
    `ignored-labels`.
-5. Implement `rule.ListMerger` returning
+5. [x] Implement `rule.ListMerger` returning
    `rule.MergeReplace` for `ignored-labels` and
    document the choice next to `ApplySettings`.
-6. Implement `Fix()` that removes the offending
+6. [x] Implement `Fix()` that removes the offending
    definition lines and trims orphan blank lines.
-7. Implement `rule.Defaultable` returning `true`.
-8. Register as MDS053 in category `link`.
-9. Add fixture tests in
+7. [x] Implement `rule.Defaultable` returning `true`.
+8. [x] Register as MDS053 in category `link`.
+9. [x] Add fixture tests in
    `internal/rules/MDS053-no-unused-link-definitions/`
    covering: defined and used (clean), defined and
    unused (flagged + auto-removed), duplicate
@@ -161,39 +161,39 @@ first defined on line 42
    unused definition with surrounding blank lines
    (auto-fix collapses correctly), definition inside a
    PI block (not collected, not flagged).
-10. Add rule README following the MDS027 template
+10. [x] Add rule README following the MDS027 template
     with "See also" to plan 107, plan 128, MDS027.
-11. Audit `docs/background/markdown-linters.md` and
+11. [x] Audit `docs/background/markdown-linters.md` and
     other docs for orphaned reference definitions
     once the rule is enabled; remove or reconnect
     them in the same PR.
 
 ## Acceptance Criteria
 
-- [ ] A definition referenced by at least one link or
+- [x] A definition referenced by at least one link or
       image emits no diagnostic.
-- [ ] A definition with no consumer emits one
+- [x] A definition with no consumer emits one
       diagnostic at the definition line; auto-fix
       removes the line.
-- [ ] Two definitions for `[foo]` emit one diagnostic
+- [x] Two definitions for `[foo]` emit one diagnostic
       on the second; auto-fix removes the second and
       keeps the first.
-- [ ] CommonMark normalization is applied: `[Foo
+- [x] CommonMark normalization is applied: `[Foo
       Bar]: url` is considered used by `[x][foo bar]`.
-- [ ] A label listed in `ignored-labels` is never
+- [x] A label listed in `ignored-labels` is never
       flagged as unused.
-- [ ] Auto-fix preserves blank-line policy: removing
+- [x] Auto-fix preserves blank-line policy: removing
       a definition between two blank lines collapses
       to a single blank line.
-- [ ] Definitions inside `<?...?>` PI blocks are not
+- [x] Definitions inside `<?...?>` PI blocks are not
       collected and therefore not flagged.
-- [ ] Repository docs pass with the rule enabled
+- [x] Repository docs pass with the rule enabled
       (orphans removed in this plan's PR).
-- [ ] Rule is enabled by default in the standard
+- [x] Rule is enabled by default in the standard
       convention.
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no issues
-- [ ] `mdsmith check .` passes on the repo.
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no issues
+- [x] `mdsmith check .` passes on the repo.
 
 ## See also
 

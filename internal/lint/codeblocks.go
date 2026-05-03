@@ -2,6 +2,31 @@ package lint
 
 import "github.com/yuin/goldmark/ast"
 
+// CollectPIBlockLines walks the AST and returns a set of 1-based line numbers
+// that belong to processing-instruction blocks, including the opening <?...
+// line and the closing ?> line.
+func CollectPIBlockLines(f *File) map[int]bool {
+	lines := map[int]bool{}
+	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		pi, ok := n.(*ProcessingInstruction)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		segs := pi.Lines()
+		for i := 0; i < segs.Len(); i++ {
+			lines[f.LineOfOffset(segs.At(i).Start)] = true
+		}
+		if pi.HasClosure() {
+			lines[f.LineOfOffset(pi.ClosureLine.Start)] = true
+		}
+		return ast.WalkContinue, nil
+	})
+	return lines
+}
+
 // CollectCodeBlockLines walks the AST and returns a set of 1-based line
 // numbers that belong to fenced code blocks (including fence lines) or
 // indented code blocks.

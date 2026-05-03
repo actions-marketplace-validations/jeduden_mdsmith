@@ -47,8 +47,6 @@ compilation". The "during" hook is the
 This plan adds "before" and "after".
 
 [post]: https://bgslabs.org/blog/why-are-we-using-markdown
-[plan-100]: 100_build-config-and-mds040.md
-[plan-102]: 102_build-subcommand.md
 
 ## Design
 
