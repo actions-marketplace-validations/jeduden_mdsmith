@@ -307,3 +307,29 @@ func TestCodeSpan_NoBacktickExtension_NotFlagged(t *testing.T) {
 	src := "Use `[broken][ref]` here.\n"
 	assert.Empty(t, check(t, src))
 }
+
+// --- Backslash escape ---
+
+func TestFullRef_EscapedBracket_NotFlagged(t *testing.T) {
+	// \[text][label] — the '[' is a CommonMark backslash escape, not a link.
+	src := `\[text][label]` + "\n"
+	assert.Empty(t, check(t, src))
+}
+
+func TestCollapsedRef_EscapedBracket_NotFlagged(t *testing.T) {
+	src := `\[broken][]` + "\n"
+	assert.Empty(t, check(t, src))
+}
+
+func TestShortcutRef_EscapedBracket_NotFlagged(t *testing.T) {
+	src := `\[plan128]` + "\n"
+	assert.Empty(t, check(t, src))
+}
+
+func TestFullRef_DoubleBackslashBracket_Flagged(t *testing.T) {
+	// \\[text][label] — the first '\' escapes the second, so '[' is NOT escaped.
+	src := `\\[text][broken]` + "\n"
+	diags := check(t, src)
+	require.Len(t, diags, 1)
+	assert.Contains(t, diags[0].Message, `"broken"`)
+}

@@ -176,6 +176,17 @@ func inCodeSpan(spans []byteRange, offset int) bool {
 	return false
 }
 
+// isEscapedBracket reports whether the '[' at source[pos] is preceded by an
+// odd number of backslashes, making it a CommonMark backslash escape rather
+// than the start of a link or image.
+func isEscapedBracket(source []byte, pos int) bool {
+	n := 0
+	for pos-1-n >= 0 && source[pos-1-n] == '\\' {
+		n++
+	}
+	return n%2 == 1
+}
+
 // fullRefRE matches [text][label] — full reference link/image.
 // Group 1: text, Group 2: label (non-empty).
 // Does not match [^...] (footnotes) via the label check below.
@@ -196,7 +207,7 @@ func (r *Rule) scanFullRefs(
 	for _, m := range fullRefRE.FindAllSubmatchIndex(source, -1) {
 		start := m[0]
 		line := f.LineOfOffset(start)
-		if excluded(line) || inCodeSpan(spans, start) {
+		if excluded(line) || inCodeSpan(spans, start) || isEscapedBracket(source, start) {
 			continue
 		}
 		// The label comes from group 2 (the second bracket pair).
@@ -233,7 +244,7 @@ func (r *Rule) scanCollapsedRefs(
 	for _, m := range collapsedRefRE.FindAllSubmatchIndex(source, -1) {
 		start := m[0]
 		line := f.LineOfOffset(start)
-		if excluded(line) || inCodeSpan(spans, start) {
+		if excluded(line) || inCodeSpan(spans, start) || isEscapedBracket(source, start) {
 			continue
 		}
 		text := source[m[2]:m[3]]
@@ -282,7 +293,7 @@ func (r *Rule) scanShortcutRefs(
 		end := m[1]
 		line := f.LineOfOffset(start)
 
-		if excluded(line) || inCodeSpan(spans, start) {
+		if excluded(line) || inCodeSpan(spans, start) || isEscapedBracket(source, start) {
 			continue
 		}
 		// Skip if followed by '[' (full/collapsed ref) or '(' (inline link).
