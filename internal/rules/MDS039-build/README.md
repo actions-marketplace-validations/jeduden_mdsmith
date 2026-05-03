@@ -3,13 +3,13 @@ id: MDS039
 name: build
 status: ready
 description: >-
-  Validate <?build?> directive parameters and keep the section body
-  in sync with the recipe's rendered body_template.
+  Validate `<?build?>` directive parameters and keep the section body
+  in sync with the recipe's rendered `body-template`.
 ---
 # MDS039: build
 
-Validate <?build?> directive parameters and keep the section body
-in sync with the recipe's rendered body_template.
+Validate `<?build?>` directive parameters and keep the section body
+in sync with the recipe's rendered `body-template`.
 
 ## What it detects
 

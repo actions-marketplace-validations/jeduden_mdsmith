@@ -8,7 +8,7 @@ summary: >-
 
 The `<?build?>` directive declares a build artifact — a file
 produced by a recipe configured in `build.recipes`. `mdsmith fix`
-renders the section body from the recipe's `body_template` and
+renders the section body from the recipe's `body-template` and
 keeps it up to date. No external tool runs at lint time.
 
 ## Syntax

@@ -342,6 +342,8 @@ func TestHasDotDotSegment(t *testing.T) {
 		{"./out.png", false},
 		{"..", true},
 		{"a/b/..c.png", false},
+		{`a\..\b.png`, true},
+		{`a\b\c.png`, false},
 	}
 	for _, c := range cases {
 		assert.Equal(t, c.want, hasDotDotSegment(c.path), "path=%q", c.path)
