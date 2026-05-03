@@ -195,7 +195,8 @@ func (r *Rule) scanFullRefs(
 	var diags []lint.Diagnostic
 	for _, m := range fullRefRE.FindAllSubmatchIndex(source, -1) {
 		start := m[0]
-		if excluded(f.LineOfOffset(start)) || inCodeSpan(spans, start) {
+		line := f.LineOfOffset(start)
+		if excluded(line) || inCodeSpan(spans, start) {
 			continue
 		}
 		// The label comes from group 2 (the second bracket pair).
@@ -209,7 +210,6 @@ func (r *Rule) scanFullRefs(
 			continue
 		}
 		if !defs[normalized] {
-			line := f.LineOfOffset(start)
 			col := f.ColumnOfOffset(start)
 			// Adjust start for image prefix '!'
 			if start > 0 && source[start-1] == '!' {
@@ -232,7 +232,8 @@ func (r *Rule) scanCollapsedRefs(
 	var diags []lint.Diagnostic
 	for _, m := range collapsedRefRE.FindAllSubmatchIndex(source, -1) {
 		start := m[0]
-		if excluded(f.LineOfOffset(start)) || inCodeSpan(spans, start) {
+		line := f.LineOfOffset(start)
+		if excluded(line) || inCodeSpan(spans, start) {
 			continue
 		}
 		text := source[m[2]:m[3]]
@@ -245,7 +246,6 @@ func (r *Rule) scanCollapsedRefs(
 			continue
 		}
 		if !defs[normalized] {
-			line := f.LineOfOffset(start)
 			col := f.ColumnOfOffset(start)
 			if start > 0 && source[start-1] == '!' {
 				col = f.ColumnOfOffset(start - 1)
@@ -280,8 +280,9 @@ func (r *Rule) scanShortcutRefs(
 	for _, m := range shortcutRE.FindAllSubmatchIndex(source, -1) {
 		start := m[0]
 		end := m[1]
+		line := f.LineOfOffset(start)
 
-		if excluded(f.LineOfOffset(start)) || inCodeSpan(spans, start) {
+		if excluded(line) || inCodeSpan(spans, start) {
 			continue
 		}
 		// Skip if followed by '[' (full/collapsed ref) or '(' (inline link).
@@ -293,7 +294,7 @@ func (r *Rule) scanShortcutRefs(
 			}
 		}
 		// Skip if this is a reference definition line.
-		if defLines[f.LineOfOffset(start)] {
+		if defLines[line] {
 			continue
 		}
 		label := source[m[2]:m[3]]
@@ -309,7 +310,6 @@ func (r *Rule) scanShortcutRefs(
 			continue
 		}
 		if !defs[normalized] {
-			line := f.LineOfOffset(start)
 			col := f.ColumnOfOffset(start)
 			if isImage {
 				col = f.ColumnOfOffset(start - 1)
