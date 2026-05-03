@@ -238,3 +238,53 @@ func TestApplySettings_Empty(t *testing.T) {
 	require.NoError(t, r.ApplySettings(map[string]any{}))
 	assert.Empty(t, r.ignoredLabels)
 }
+
+func TestApplySettings_UnknownKey_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{"no-such-setting": true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown setting")
+}
+
+func TestApplySettings_WrongType_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{"ignored-labels": "not-a-list"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ignored-labels")
+}
+
+func TestApplySettings_NonStringItem_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{"ignored-labels": []any{"ok", 42}})
+	require.Error(t, err)
+}
+
+// TestCheck_CodeBlockLabel_OnlyExternalDefinitionCounted tests the codeLines
+// filter: when the same label appears inside a fenced code block AND outside
+// as a real definition, only the real definition is collected. Without the
+// codeLines filter the code-block occurrence would be counted as a second
+// definition (and the real one would be flagged as a duplicate).
+func TestCheck_CodeBlockLabel_OnlyExternalDefinitionCounted(t *testing.T) {
+	src := "See [foo].\n\n```\n[foo]: https://inside-code.com\n```\n\n[foo]: https://real.com\n"
+	f := newFile(t, src)
+	r := &Rule{}
+	// Only one real definition exists and it is used — no diagnostics.
+	assert.Empty(t, r.Check(f))
+}
+
+func TestFix_MultipleUnused_AllRemoved(t *testing.T) {
+	// Two unused definitions: verifies applyCuts handles non-overlapping cuts.
+	src := "# Heading\n\n[a]: https://a.com\n[b]: https://b.com\n"
+	f := newFile(t, src)
+	r := &Rule{}
+	got := string(r.Fix(f))
+	assert.Equal(t, "# Heading\n", got)
+}
+
+func TestApplyCuts_OverlappingCuts_Skipped(t *testing.T) {
+	// An overlapping cut is silently skipped (second cut starts before first ends).
+	src := []byte("hello world")
+	cuts := []fixCut{{start: 0, end: 8}, {start: 4, end: 8}}
+	got := applyCuts(src, cuts)
+	assert.Equal(t, "rld", string(got))
+}

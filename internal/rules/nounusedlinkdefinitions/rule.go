@@ -43,18 +43,21 @@ func (r *Rule) EnabledByDefault() bool { return true }
 // ApplySettings implements rule.Configurable.
 func (r *Rule) ApplySettings(settings map[string]any) error {
 	r.ignoredLabels = map[string]bool{}
-	if v, ok := settings["ignored-labels"]; ok {
-		switch t := v.(type) {
-		case []any:
-			for _, item := range t {
-				if s, ok := item.(string); ok {
-					r.ignoredLabels[normalizeLabel(s)] = true
-				}
+	for k, v := range settings {
+		switch k {
+		case "ignored-labels":
+			list, ok := toStringSlice(v)
+			if !ok {
+				return fmt.Errorf(
+					"no-unused-link-definitions: ignored-labels must be a list of strings, got %T",
+					v,
+				)
 			}
-		case []string:
-			for _, s := range t {
+			for _, s := range list {
 				r.ignoredLabels[normalizeLabel(s)] = true
 			}
+		default:
+			return fmt.Errorf("no-unused-link-definitions: unknown setting %q", k)
 		}
 	}
 	return nil
@@ -69,10 +72,15 @@ func (r *Rule) DefaultSettings() map[string]any {
 
 // SettingMergeMode implements rule.ListMerger.
 // ignored-labels uses replace mode: a later config layer's list replaces the
-// earlier layer's list wholesale (not appended). Document this choice here so
-// it stays visible next to ApplySettings.
-func (r *Rule) SettingMergeMode(_ string) rule.MergeMode {
-	return rule.MergeReplace
+// earlier layer's list wholesale (not appended). Unknown keys fall through to
+// the default MergeReplace per the rule.ListMerger contract.
+func (r *Rule) SettingMergeMode(key string) rule.MergeMode {
+	switch key {
+	case "ignored-labels":
+		return rule.MergeReplace
+	default:
+		return rule.MergeReplace
+	}
 }
 
 const (
@@ -278,4 +286,25 @@ func applyCuts(source []byte, cuts []fixCut) []byte {
 	}
 	out.Write(source[prev:])
 	return out.Bytes()
+}
+
+func toStringSlice(v any) ([]string, bool) {
+	switch list := v.(type) {
+	case []string:
+		out := make([]string, len(list))
+		copy(out, list)
+		return out, true
+	case []any:
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
 }
