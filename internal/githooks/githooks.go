@@ -798,26 +798,36 @@ func writeGitattributesFile(path, content string) error {
 	return nil
 }
 
-// createTempFn, syncTempFn, closeTempFn, and chmodFn are variables so tests
-// can inject failures into atomicWriteGitattributes without OS-level tricks.
+// createTempFn, syncTempFn, closeTempFn, chmodFn, and fstatFn are variables
+// so tests can inject failures into atomicWriteGitattributes without OS tricks.
 var createTempFn = os.CreateTemp
 var syncTempFn = (*os.File).Sync
 var closeTempFn = (*os.File).Close
 var chmodFn = os.Chmod
+var fstatFn = (*os.File).Stat
 
 // atomicWriteGitattributes writes data to a temp file in the same directory
 // as path, sets its permissions, then renames it over path. The rename
 // replaces the directory entry atomically, so it cannot follow a symlink
 // that might have been introduced between an earlier lstat check and the write.
 func atomicWriteGitattributes(path string, data []byte, mode os.FileMode) error {
-	// Verify an existing target is writable. os.Rename can replace read-only
-	// files when the directory is writable, so we check explicitly.
-	if _, err := lstatFile(path); err == nil {
+	// Verify an existing target is writable and has not been swapped to a
+	// symlink. os.Rename can replace read-only files when the directory is
+	// writable, so we check writability explicitly. We then compare lstat and
+	// fstat to detect a TOCTOU swap between the lstat and the open.
+	if lstatInfo, err := lstatFile(path); err == nil {
 		f, err := os.OpenFile(path, os.O_WRONLY, 0)
 		if err != nil {
 			return err
 		}
+		fdInfo, statErr := fstatFn(f)
 		_ = f.Close()
+		if statErr != nil {
+			return statErr
+		}
+		if !os.SameFile(lstatInfo, fdInfo) {
+			return fmt.Errorf("%s: file changed since lstat", path)
+		}
 	} else if !os.IsNotExist(err) {
 		return err
 	}

@@ -1224,6 +1224,44 @@ func TestAtomicWriteGitattributes_LstatNonENOENTError_ReturnsError(t *testing.T)
 	assert.Contains(t, err.Error(), "mock lstat failure")
 }
 
+func TestAtomicWriteGitattributes_FstatFails_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+	require.NoError(t, os.WriteFile(path, []byte("existing"), 0o644))
+
+	orig := fstatFn
+	t.Cleanup(func() { fstatFn = orig })
+	fstatFn = func(*os.File) (os.FileInfo, error) {
+		return nil, fmt.Errorf("mock fstat failure")
+	}
+
+	err := atomicWriteGitattributes(path, []byte("content"), 0o644)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mock fstat failure")
+}
+
+func TestAtomicWriteGitattributes_LstatFdMismatch_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitattributes")
+	other := filepath.Join(dir, "other")
+	require.NoError(t, os.WriteFile(path, []byte("existing"), 0o644))
+	require.NoError(t, os.WriteFile(other, []byte("other"), 0o644))
+
+	otherInfo, err := os.Lstat(other)
+	require.NoError(t, err)
+
+	// Inject lstatFile to return info for 'other' (different inode than path).
+	orig := lstatFile
+	t.Cleanup(func() { lstatFile = orig })
+	lstatFile = func(string) (os.FileInfo, error) {
+		return otherInfo, nil
+	}
+
+	err = atomicWriteGitattributes(path, []byte("content"), 0o644)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "changed since lstat")
+}
+
 func TestWriteGitattributes_LstatNonENOENTError_ReturnsError(t *testing.T) {
 	orig := lstatFile
 	t.Cleanup(func() { lstatFile = orig })
