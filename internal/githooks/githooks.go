@@ -766,17 +766,24 @@ func WriteGitattributes(path string, globs Globs) error {
 		}
 	}
 
-	// Preserve the existing file's permissions; fall back to 0o644 for new files.
-	// os.WriteFile only applies perm on creation; os.Chmod enforces it on
-	// existing files too (truncation does not change the file's mode).
-	// Chmod is skipped for new files to respect the caller's umask.
+	return writeGitattributesFile(path, newContent.String())
+}
+
+// writeGitattributesFile writes content to path, preserving an existing regular
+// file's permissions. Symlinks are rejected to prevent writes outside the repo.
+func writeGitattributesFile(path, content string) error {
+	// Use Lstat so symlinks are detected rather than followed; writing through
+	// a symlink could modify a file outside the repository.
 	mode := os.FileMode(0o644)
 	existed := false
-	if info, err := os.Stat(path); err == nil {
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("writing %s: refusing to write through symlink", path)
+		}
 		mode = info.Mode() &^ os.ModeType
 		existed = true
 	}
-	if err := writeFile(path, []byte(newContent.String()), mode); err != nil {
+	if err := writeFile(path, []byte(content), mode); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	if existed {

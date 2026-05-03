@@ -11,6 +11,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWriteGitattributes_RejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.gitattributes")
+	link := filepath.Join(dir, ".gitattributes")
+
+	require.NoError(t, os.WriteFile(target, []byte("existing\n"), 0o644))
+	require.NoError(t, os.Symlink(target, link))
+
+	err := WriteGitattributes(link, Globs{Include: []string{"a.md"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+}
+
 func TestWriteGitattributes_ReturnsErrorForUnreadableExistingFile(t *testing.T) {
 	// Mode 0000 only blocks reads for non-root users; root bypasses
 	// file permission bits, so this assertion can't hold under uid 0.
