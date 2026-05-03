@@ -138,6 +138,18 @@ func TestValidateHard_AbsoluteOutput(t *testing.T) {
 	assert.Contains(t, diags[0].Message, "relative path")
 }
 
+func TestValidateHard_BackslashAbsoluteOutput(t *testing.T) {
+	r := ruleWithRender()
+	// Windows-style absolute paths are rejected even on non-Windows hosts.
+	for _, p := range []string{`\tmp\out.png`, `\\server\share\out.png`} {
+		diags := r.validateHard("test.md", 1, map[string]string{
+			"recipe": "render", "source": "a.svg", "output": p,
+		})
+		require.Len(t, diags, 1, "path=%q", p)
+		assert.Contains(t, diags[0].Message, "relative path", "path=%q", p)
+	}
+}
+
 func TestValidateHard_EmptyRequiredParamValue(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.validateHard("test.md", 1, map[string]string{

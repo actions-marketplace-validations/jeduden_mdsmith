@@ -172,7 +172,7 @@ func (r *Rule) validateHard(
 		)}
 	}
 
-	if filepath.IsAbs(output) || filepath.VolumeName(output) != "" {
+	if filepath.IsAbs(output) || filepath.VolumeName(output) != "" || strings.HasPrefix(output, `\`) {
 		return []lint.Diagnostic{gensection.MakeDiag(
 			r.RuleID(), r.RuleName(), filePath, line,
 			fmt.Sprintf(`build directive "output" must be a relative path: %q`, output),
