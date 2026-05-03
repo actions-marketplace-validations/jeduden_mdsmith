@@ -50,6 +50,7 @@ import (
 	_ "github.com/jeduden/mdsmith/internal/rules/maxfilelength"
 	_ "github.com/jeduden/mdsmith/internal/rules/maxsectionlength"
 	_ "github.com/jeduden/mdsmith/internal/rules/nobareurls"
+	_ "github.com/jeduden/mdsmith/internal/rules/nospaceincodespans"
 	_ "github.com/jeduden/mdsmith/internal/rules/noduplicateheadings"
 	_ "github.com/jeduden/mdsmith/internal/rules/noemphasisasheading"
 	_ "github.com/jeduden/mdsmith/internal/rules/noemptyalttext"

@@ -1,9 +1,9 @@
 ---
 id: 124
 title: No space inside code spans rule
-status: "🔲"
+status: "🔳"
 summary: >-
-  New rule MDS048 that flags inline code spans with
+  New rule MDS052 that flags inline code spans with
   leading or trailing whitespace inside the backticks
   (`` ` x ` `` instead of `` `x` ``). Closes the gap
   with markdownlint MD038.
@@ -88,22 +88,22 @@ code span has trailing whitespace
 
 ## Tasks
 
-1. Scaffold `internal/rules/nospaceincodespans/` with
+1. [x] Scaffold `internal/rules/nospaceincodespans/` with
    `rule.go`, `rule_test.go`, and the `init()`
    `rule.Register` call.
-2. Implement `Check()` walking `*ast.CodeSpan` and
+2. [x] Implement `Check()` walking `*ast.CodeSpan` and
    reading the raw source bytes between delimiters.
-3. Implement `Fix()` that trims whitespace inside the
+3. [x] Implement `Fix()` that trims whitespace inside the
    delimiters while preserving backtick count.
-4. Implement `rule.Defaultable` returning `false`.
-5. Register as MDS048 in category `whitespace`.
-6. Add fixture tests in
-   `internal/rules/MDS048-no-space-in-code-spans/`
+4. [x] Implement `rule.Defaultable` returning `false`.
+5. [x] Register as MDS052 in category `whitespace` (MDS048 was taken by
+   `git-hook-sync`; MDS049–MDS051 taken by rules merged to main first).
+6. [x] Add fixture tests in
+   `internal/rules/MDS052-no-space-in-code-spans/`
    covering: balanced single space (legal), leading
    space, trailing space, both-side double space,
-   tab, newline-inside (rare), and the empty-after-
-   trim edge case.
-7. Add rule README following the MDS012 template.
+   tab, and the empty-after-trim edge case.
+7. [x] Add rule README following the MDS012 template.
 
 ## Acceptance Criteria
 
