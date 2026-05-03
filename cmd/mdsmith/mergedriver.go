@@ -100,6 +100,17 @@ var osWriteFile = os.WriteFile
 // mergeAndClean performs the 3-way merge and strips conflict markers.
 // Returns the cleaned content and an exit code (0 on success).
 func mergeAndClean(base, ours, theirs string, maxBytes int64) ([]byte, int) {
+	// Validate and capture the mode of ours before letting git write to it,
+	// so a symlink at ours cannot be followed by git merge-file.
+	if err := guardRegularFile(ours); err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return nil, 2
+	}
+	// Preserve the original permissions of git's temp file.
+	// os.WriteFile only applies perm on creation; chmod enforces it
+	// on existing files too (e.g. if git truncated rather than recreated).
+	oursMode := mergeFileMode(ours, 0o644)
+
 	// Step 1: standard 3-way merge into ours.
 	// Use "--" to prevent file paths starting with "-" from being
 	// interpreted as git options (option injection).
@@ -120,15 +131,6 @@ func mergeAndClean(base, ours, theirs string, maxBytes int64) ([]byte, int) {
 	content, err := lint.ReadFileLimited(ours, maxBytes)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdsmith: reading merge result: %v\n", err)
-		return nil, 2
-	}
-
-	// Preserve the original permissions of git's temp file.
-	// os.WriteFile only applies perm on creation; chmod enforces it
-	// on existing files too (e.g. if git truncated rather than recreated).
-	oursMode := mergeFileMode(ours, 0o644)
-	if err := guardRegularFile(ours); err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
 		return nil, 2
 	}
 	cleaned := stripSectionConflicts(content)
