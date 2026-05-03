@@ -917,7 +917,8 @@ func TestMergeFileMode_ExistingFile(t *testing.T) {
 }
 
 func TestMergeFileMode_MissingFile_UsesDefault(t *testing.T) {
-	got := mergeFileMode("/nonexistent/path/file.md", 0o644)
+	missing := filepath.Join(t.TempDir(), "nonexistent.md")
+	got := mergeFileMode(missing, 0o644)
 	assert.Equal(t, os.FileMode(0o644), got)
 }
 

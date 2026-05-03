@@ -72,11 +72,13 @@ func runMergeDriver(args []string) int {
 	}
 }
 
-// mergeFileMode returns the mode of the named file, or defaultMode if
-// the file cannot be stat'd (e.g. does not exist yet).
+// mergeFileMode returns the permission bits of the named file, or
+// defaultMode if the file cannot be stat'd (e.g. does not exist yet).
+// It returns only Perm() (the low 9 bits) to avoid passing file-type
+// bits to os.WriteFile / os.Chmod.
 func mergeFileMode(name string, defaultMode os.FileMode) os.FileMode {
 	if info, err := os.Stat(name); err == nil {
-		return info.Mode()
+		return info.Mode().Perm()
 	}
 	return defaultMode
 }
@@ -112,11 +114,16 @@ func mergeAndClean(base, ours, theirs string, maxBytes int64) ([]byte, int) {
 	}
 
 	// Preserve the original permissions of git's temp file.
+	// os.WriteFile only applies perm on creation; chmod enforces it
+	// on existing files too (e.g. if git truncated rather than recreated).
 	oursMode := mergeFileMode(ours, 0o644)
 	cleaned := stripSectionConflicts(content)
 	if err := osWriteFile(ours, cleaned, oursMode); err != nil {
 		fmt.Fprintf(os.Stderr, "mdsmith: writing cleaned merge: %v\n", err)
 		return nil, 2
+	}
+	if err := os.Chmod(ours, oursMode); err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: chmod merge result: %v\n", err)
 	}
 	return cleaned, 0
 }
@@ -228,6 +235,9 @@ func fixAtRealPath(cleaned []byte, ours, pathname string, maxBytes int64) ([]byt
 	if err := osWriteFile(ours, fixed, oursMode); err != nil {
 		fmt.Fprintf(os.Stderr, "mdsmith: writing merge output: %v\n", err)
 		return nil, 2
+	}
+	if err := os.Chmod(ours, oursMode); err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: chmod merge output: %v\n", err)
 	}
 
 	return fixed, 0

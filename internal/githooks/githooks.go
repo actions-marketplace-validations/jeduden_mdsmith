@@ -759,11 +759,16 @@ func WriteGitattributes(path string, globs Globs) error {
 	}
 
 	// Preserve the existing file's permissions; fall back to 0o644 for new files.
+	// os.WriteFile only applies perm on creation; os.Chmod enforces it on
+	// existing files too (truncation does not change the file's mode).
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
-		mode = info.Mode()
+		mode = info.Mode().Perm()
 	}
-	return os.WriteFile(path, []byte(newContent.String()), mode)
+	if err := os.WriteFile(path, []byte(newContent.String()), mode); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
 }
 
 // StageGitattributes runs `git add -- .gitattributes` against repoRoot
