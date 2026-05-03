@@ -773,10 +773,12 @@ func WriteGitattributes(path string, globs Globs) error {
 		existed = true
 	}
 	if err := writeFile(path, []byte(newContent.String()), mode); err != nil {
-		return err
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	if existed {
-		return os.Chmod(path, mode)
+		if err := os.Chmod(path, mode); err != nil {
+			return fmt.Errorf("chmod %s: %w", path, err)
+		}
 	}
 	return nil
 }
