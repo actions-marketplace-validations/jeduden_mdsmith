@@ -57,20 +57,19 @@ enforce.
 
 Walk `*ast.CodeSpan`. For each node:
 
-1. Read the span's source bytes (between the
-   delimiters).
-2. If both the first and last byte are a single
-   ASCII space and no other whitespace is present at
-   the boundaries, treat as the CommonMark
-   single-space-trim case and skip.
-3. Otherwise, if the bytes start with whitespace,
+1. Inspect goldmark's post-CommonMark-trim text
+   segment (the bytes the AST records after stripping
+   one space from each side when both sides have a
+   space and the content is not all-whitespace).
+2. If the segment's first byte is ASCII whitespace,
    emit `code span has leading whitespace`.
-4. If the bytes end with whitespace, emit `code
-   span has trailing whitespace`.
+3. If the segment's last byte is ASCII whitespace,
+   emit `code span has trailing whitespace`.
 
-Tabs, newlines, and runs of two or more spaces at
-either boundary always emit. The single-space-trim
-exception only covers one ASCII space on each side.
+Using the post-trim segment avoids false positives.
+For `` `  x ` ``, CommonMark strips one space from
+each side, leaving one visible leading space — not
+two.
 
 ### Auto-fix
 

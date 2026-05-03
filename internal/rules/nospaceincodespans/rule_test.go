@@ -107,6 +107,20 @@ func TestCheck_TrailingNewline(t *testing.T) {
 	assert.Equal(t, msgTrailing, diags[0].Message)
 }
 
+func TestCheck_LeadingCR(t *testing.T) {
+	f := newFile(t, "Use `\rx` here.\n")
+	diags := (&Rule{}).Check(f)
+	require.Len(t, diags, 1)
+	assert.Equal(t, msgLeading, diags[0].Message)
+}
+
+func TestCheck_TrailingCR(t *testing.T) {
+	f := newFile(t, "Use `x\r` here.\n")
+	diags := (&Rule{}).Check(f)
+	require.Len(t, diags, 1)
+	assert.Equal(t, msgTrailing, diags[0].Message)
+}
+
 func TestCheck_EmptyAfterTrim_BothDiagnostics(t *testing.T) {
 	// "   " — all whitespace; both leading and trailing fire.
 	f := newFile(t, "Use `   ` here.\n")
