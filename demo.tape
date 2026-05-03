@@ -76,6 +76,10 @@ Type "LINK_DIR=$(mktemp -d)"
 Enter
 Type "cp -R demo/links/. $LINK_DIR/"
 Enter
+Type "KINDS_DIR=$(mktemp -d)"
+Enter
+Type "cp -R demo/kinds/. $KINDS_DIR/"
+Enter
 Type "ARI_DIR=$(mktemp -d)"
 Enter
 Type "cp -R demo/readability/. $ARI_DIR/"
@@ -219,7 +223,40 @@ Sleep 100ms
 Enter
 Sleep 300ms
 
-# --- Use case 6: Catch broken cross-file links ---
+# --- Use case 6: Per-file rule tuning with kinds ---
+
+Hide
+Set TypingSpeed 0
+Type "cd $KINDS_DIR && clear"
+Enter
+Sleep 50ms
+Set TypingSpeed 0.005
+Show
+
+Type "# kinds: bundle rule settings, assign by glob"
+Enter
+Sleep 100ms
+Type "cat .mdsmith.yml"
+Sleep 100ms
+Enter
+Sleep 600ms
+
+Type "mdsmith kinds list"
+Sleep 100ms
+Enter
+Sleep 400ms
+
+Type "mdsmith kinds resolve plan/9_big.md | head -20"
+Sleep 100ms
+Enter
+Sleep 400ms
+
+Type "mdsmith kinds why prompt/draft.md max-file-length"
+Sleep 100ms
+Enter
+Sleep 400ms
+
+# --- Use case 7: Catch broken cross-file links ---
 
 Hide
 Set TypingSpeed 0
@@ -247,7 +284,7 @@ Sleep 100ms
 Enter
 Sleep 300ms
 
-# --- Use case 7: Restrict file locations ---
+# --- Use case 8: Restrict file locations ---
 
 Hide
 Set TypingSpeed 0
@@ -275,7 +312,7 @@ Sleep 100ms
 Enter
 Sleep 300ms
 
-# --- Use case 8: Keep AI verbosity in check ---
+# --- Use case 9: Keep AI verbosity in check ---
 
 Hide
 Set TypingSpeed 0
@@ -298,7 +335,7 @@ Sleep 100ms
 Enter
 Sleep 300ms
 
-# --- Use case 9: Look up a rule ---
+# --- Use case 10: Look up a rule ---
 
 Hide
 Set TypingSpeed 0
@@ -316,7 +353,7 @@ Sleep 100ms
 Enter
 Sleep 300ms
 
-# --- Use case 10: Query front matter ---
+# --- Use case 11: Query front matter ---
 
 Hide
 Set TypingSpeed 0
@@ -334,7 +371,7 @@ Sleep 100ms
 Enter
 Sleep 300ms
 
-# --- Use case 11: Metrics ---
+# --- Use case 12: Metrics ---
 
 Hide
 Set TypingSpeed 0
@@ -348,41 +385,6 @@ Type "# Rank files by size"
 Enter
 Sleep 100ms
 Type "mdsmith metrics rank --by bytes --top 5 ."
-Sleep 100ms
-Enter
-Sleep 300ms
-
-# --- Use case 12: Archetypes (reusable schemas) ---
-
-Hide
-Set TypingSpeed 0
-Type "ARCH_SCENE=$(mktemp -d)"
-Enter
-Type "cd $ARCH_SCENE && clear"
-Enter
-Sleep 50ms
-Set TypingSpeed 0.005
-Show
-
-Type "# Archetypes: reusable schemas for required-structure"
-Enter
-Sleep 100ms
-Type "mdsmith archetypes init"
-Sleep 100ms
-Enter
-Sleep 100ms
-
-Type `printf 'archetypes:\n  roots: [archetypes]\n' > .mdsmith.yml`
-Sleep 100ms
-Enter
-Sleep 100ms
-
-Type "mdsmith archetypes list"
-Sleep 100ms
-Enter
-Sleep 100ms
-
-Type "mdsmith archetypes show example | head -8"
 Sleep 100ms
 Enter
 Sleep 300ms
