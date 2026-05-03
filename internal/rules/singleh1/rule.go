@@ -135,6 +135,9 @@ var (
 
 // collectH1s returns all authored H1 heading nodes in document order,
 // excluding headings whose source line falls within a generated range.
+// Line numbers are derived from headingLineStart so that empty headings
+// with no text children (offset -1) are conservatively kept rather than
+// misclassified via a stale fallback of line 1.
 func collectH1s(f *lint.File) []*ast.Heading {
 	var h1s []*ast.Heading
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -145,11 +148,17 @@ func collectH1s(f *lint.File) []*ast.Heading {
 		if !ok || h.Level != 1 {
 			return ast.WalkContinue, nil
 		}
-		line := astutil.HeadingLine(h, f)
-		for _, r := range f.GeneratedRanges {
-			if r.Contains(line) {
-				return ast.WalkContinue, nil
+		if len(f.GeneratedRanges) > 0 {
+			offset := headingLineStart(h, f.Source)
+			if offset >= 0 {
+				line := f.LineOfOffset(offset)
+				for _, r := range f.GeneratedRanges {
+					if r.Contains(line) {
+						return ast.WalkContinue, nil
+					}
+				}
 			}
+			// offset == -1: position unknown; conservatively keep the heading
 		}
 		h1s = append(h1s, h)
 		return ast.WalkContinue, nil

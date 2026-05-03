@@ -407,3 +407,30 @@ func TestFix_GeneratedH1_NotDemoted(t *testing.T) {
 	// No demotion should occur because only one authored H1 exists.
 	assert.Equal(t, src, string(got))
 }
+
+// TestCheck_EmptyH1_UnknownOffset_ConservativelyKept verifies that an H1
+// whose byte position cannot be determined (headingLineStart returns -1, e.g.
+// a synthetic node with no Lines() and no text children) is conservatively
+// kept in the authored count rather than misclassified via a stale line-1
+// fallback when generated ranges are present.
+func TestCheck_EmptyH1_UnknownOffset_ConservativelyKept(t *testing.T) {
+	// Craft source with a real authored H1 on line 1 and a synthetic H1 whose
+	// position is unknown (line-1 fallback would clash with the generated
+	// range covering line 1, incorrectly dropping it).
+	src := "# Title\n\n# Second\n"
+	f := newFile(t, src)
+	// Mark line 1 as generated — a real heading on line 1 would be excluded.
+	f.GeneratedRanges = []lint.LineRange{{From: 1, To: 1}}
+
+	// Inject a synthetic H1 with no Lines() and no children; headingLineStart
+	// returns -1. collectH1s must keep it (conservative) rather than drop it
+	// (which would leave only "# Second" and produce zero diagnostics).
+	synthetic := goldast.NewHeading(1)
+	f.AST.InsertBefore(f.AST, f.AST.FirstChild(), synthetic)
+
+	diags := (&Rule{}).Check(f)
+	// synthetic (kept) + "# Second" (not in generated range) = 2 authored H1s;
+	// the second should be flagged.
+	require.Len(t, diags, 1)
+	assert.Equal(t, "extra H1 heading; only one H1 is allowed per file", diags[0].Message)
+}
