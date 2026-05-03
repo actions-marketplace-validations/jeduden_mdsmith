@@ -258,3 +258,33 @@ func TestFix_ContentBacktick_ProtectiveSpace(t *testing.T) {
 	got := string((&Rule{}).Fix(f))
 	assert.Equal(t, "Use `` `x` `` here.\n", got)
 }
+
+// TestOpeningBacktickOffset_NoChildren exercises the !ok early-return in
+// openingBacktickOffset when the CodeSpan has no text children.
+func TestOpeningBacktickOffset_NoChildren(t *testing.T) {
+	cs := ast.NewCodeSpan()
+	off := openingBacktickOffset(cs, []byte("source"))
+	assert.Equal(t, 0, off)
+}
+
+func newFileWithGeneratedRanges(t *testing.T, src string, ranges []lint.LineRange) *lint.File {
+	t.Helper()
+	f := newFile(t, src)
+	f.GeneratedRanges = ranges
+	return f
+}
+
+func TestCheck_SkipsGeneratedRange(t *testing.T) {
+	// Code span with leading space on line 3, which is declared a generated range.
+	src := "# T\n\nUse ` x` here.\n"
+	f := newFileWithGeneratedRanges(t, src, []lint.LineRange{{From: 3, To: 3}})
+	diags := (&Rule{}).Check(f)
+	assert.Empty(t, diags)
+}
+
+func TestFix_SkipsGeneratedRange(t *testing.T) {
+	src := "# T\n\nUse ` x` here.\n"
+	f := newFileWithGeneratedRanges(t, src, []lint.LineRange{{From: 3, To: 3}})
+	got := string((&Rule{}).Fix(f))
+	assert.Equal(t, src, got)
+}
