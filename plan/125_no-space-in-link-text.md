@@ -1,7 +1,7 @@
 ---
 id: 125
 title: No space inside link text rule
-status: "🔲"
+status: "✅"
 summary: >-
   New rule MDS049 that flags Markdown links and
   images whose visible text has leading or trailing
@@ -120,22 +120,22 @@ image alt text has trailing whitespace
 
 ## Acceptance Criteria
 
-- [ ] `[text](url)` emits no diagnostic.
-- [ ] `[ text ](url)` emits leading and trailing
+- [x] `[text](url)` emits no diagnostic.
+- [x] `[ text ](url)` emits leading and trailing
       diagnostics and fixes to `[text](url)`.
-- [ ] `[text ](url)` emits one trailing diagnostic.
-- [ ] `![ alt ](img.png)` emits two diagnostics with
+- [x] `[text ](url)` emits one trailing diagnostic.
+- [x] `![ alt ](img.png)` emits two diagnostics with
       `image alt text` wording and fixes to
       `![alt](img.png)`.
-- [ ] `![ alt ](img.png)` emits no diagnostic when
+- [x] `![ alt ](img.png)` emits no diagnostic when
       `check-images: false`.
-- [ ] A link whose text spans two source lines
+- [x] A link whose text spans two source lines
       (newline between words) emits no diagnostic.
-- [ ] `[ text ][ref]` emits diagnostics on the text
+- [x] `[ text ][ref]` emits diagnostics on the text
       portion only.
-- [ ] Rule is disabled by default.
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no issues
-- [ ] `mdsmith check .` passes on the repo with the
+- [x] Rule is disabled by default.
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no issues
+- [x] `mdsmith check .` passes on the repo with the
       rule disabled (no regression for existing
       docs).
