@@ -1,0 +1,174 @@
+name: Record demo
+
+# Reusable: builds mdsmith, installs VHS + ttyd + ffmpeg, executes
+# demo.tape in an isolated copy of the repo, and uploads the result
+# as an artifact. Single source of truth for VHS pinning, called by
+# both ci.yml (for tape validation on PRs — uses MP4 to skip the
+# expensive GIF palette quantization pass) and demo.yml (for
+# publishing the GIF on push to main).
+
+on:
+  workflow_call:
+    inputs:
+      output_format:
+        description: Output format — `gif` for the published artifact, `mp4` for fast CI validation
+        type: string
+        default: gif
+    outputs:
+      artifact_name:
+        description: Name of the uploaded artifact
+        value: ${{ jobs.record.outputs.artifact_name }}
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_name: demo-${{ inputs.output_format }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go.mod
+      - name: Build mdsmith
+        run: go build -o mdsmith ./cmd/mdsmith
+      - name: Cache VHS + ttyd + ffmpeg binaries
+        id: vhs-cache
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/vhs-bin
+          key: vhs-0.10.0-ttyd-1.7.7-ffmpeg-7.0.2-${{ runner.os }}-${{ runner.arch }}
+      - name: Install VHS runtime dependencies
+        run: |
+          # Google Chrome is pre-installed on GitHub runners and
+          # go-rod (used by VHS) finds it via launcher.LookPath().
+          # ffmpeg, ttyd, and vhs are installed from upstream
+          # static/release binaries (verified by SHA-256) and
+          # cached in ~/vhs-bin/. We download from upstream rather
+          # than `apt-get install` because the apt path requires a
+          # `apt-get update` that adds ~25-30s per cache miss.
+          #
+          # The ffmpeg URL points to johnvansickle.com's "release"
+          # (latest) build; when upstream rebuilds the tarball the
+          # pinned SHA-256 below will fail-loud, prompting a version
+          # bump here and in the cache key. This is intentional.
+          if [ -f ~/vhs-bin/ffmpeg ]; then
+            sudo install ~/vhs-bin/ffmpeg /usr/local/bin/ffmpeg
+          else
+            case "${{ runner.arch }}" in
+              X64)   ffmpeg_arch="amd64"; ffmpeg_sha256="abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67" ;;
+              ARM64) ffmpeg_arch="arm64"; ffmpeg_sha256="f4149bb2b0784e30e99bdda85471c9b5930d3402014e934a5098b41d0f7201b1" ;;
+              *) echo "Unsupported arch: ${{ runner.arch }}" >&2; exit 1 ;;
+            esac
+            curl -fsSL -o /tmp/ffmpeg.tar.xz \
+              "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ffmpeg_arch}-static.tar.xz"
+            echo "${ffmpeg_sha256}  /tmp/ffmpeg.tar.xz" | sha256sum -c
+            tar -xJf /tmp/ffmpeg.tar.xz -C /tmp --strip-components=1 --wildcards '*/ffmpeg'
+            sudo install /tmp/ffmpeg /usr/local/bin/ffmpeg
+          fi
+          if [ -f ~/vhs-bin/ttyd ]; then
+            sudo install ~/vhs-bin/ttyd /usr/local/bin/ttyd
+          else
+            case "${{ runner.arch }}" in
+              X64)   ttyd_arch="x86_64";  ttyd_sha256="8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55" ;;
+              ARM64) ttyd_arch="aarch64"; ttyd_sha256="b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165" ;;
+              *) echo "Unsupported arch: ${{ runner.arch }}" >&2; exit 1 ;;
+            esac
+            curl -fsSL -o /tmp/ttyd \
+              "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${ttyd_arch}"
+            echo "${ttyd_sha256}  /tmp/ttyd" | sha256sum -c
+            sudo install /tmp/ttyd /usr/local/bin/ttyd
+          fi
+      - name: Install VHS
+        run: |
+          if [ -f ~/vhs-bin/vhs ]; then
+            sudo install ~/vhs-bin/vhs /usr/local/bin/vhs
+          else
+            case "${{ runner.arch }}" in
+              X64)   vhs_arch="x86_64"; vhs_sha256="b552c3870aca101dcafe533cfef32dceb7b783400ad32642e728775c9f125407" ;;
+              ARM64) vhs_arch="arm64";  vhs_sha256="6d7300028d4641b9dc004a05cf411d40f1e12e560cc6fca985dd90504b6652a7" ;;
+              *) echo "Unsupported arch: ${{ runner.arch }}" >&2; exit 1 ;;
+            esac
+            curl -fsSL -o /tmp/vhs.tar.gz \
+              "https://github.com/charmbracelet/vhs/releases/download/v0.10.0/vhs_0.10.0_Linux_${vhs_arch}.tar.gz"
+            echo "${vhs_sha256}  /tmp/vhs.tar.gz" | sha256sum -c
+            tar -xzf /tmp/vhs.tar.gz -C /tmp --strip-components=1 --wildcards '*/vhs'
+            sudo install /tmp/vhs /usr/local/bin/vhs
+          fi
+      - name: Populate VHS cache
+        if: steps.vhs-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/vhs-bin
+          cp /usr/local/bin/ttyd ~/vhs-bin/
+          cp /usr/local/bin/vhs ~/vhs-bin/
+          cp /usr/local/bin/ffmpeg ~/vhs-bin/
+      - name: Record demo in isolated directory
+        env:
+          OUTPUT_FORMAT: ${{ inputs.output_format }}
+        run: |
+          # Run VHS in a temp directory so demo.tape commands
+          # cannot modify the repo working tree.
+          case "$OUTPUT_FORMAT" in
+            gif|mp4) ;;
+            *) echo "Unsupported output_format: $OUTPUT_FORMAT" >&2; exit 1 ;;
+          esac
+          iso="$(mktemp -d)"
+          tar --exclude='.git' -cf - . | (cd "$iso" && tar -xf -)
+          # Rewrite the tape's `Output` line to the requested
+          # extension. The published demo (gif) and the CI
+          # validation (mp4) share one tape.
+          sed -i -E "s|^Output assets/demo\\.[a-z0-9]+|Output assets/demo.${OUTPUT_FORMAT}|" "$iso/demo.tape"
+          (cd "$iso" && vhs demo.tape)
+          mkdir -p artifacts
+          cp "$iso/assets/demo.${OUTPUT_FORMAT}" "artifacts/demo.${OUTPUT_FORMAT}"
+          rm -rf "$iso"
+      - name: Validate output
+        env:
+          OUTPUT_FORMAT: ${{ inputs.output_format }}
+        run: |
+          file="artifacts/demo.${OUTPUT_FORMAT}"
+          if [ ! -f "$file" ]; then
+            echo "ERROR: $file not produced" >&2
+            exit 1
+          fi
+          size=$(stat -c%s "$file")
+          case "$OUTPUT_FORMAT" in
+            gif)
+              header=$(head -c 6 "$file")
+              if [ "$header" != "GIF89a" ] && [ "$header" != "GIF87a" ]; then
+                echo "ERROR: $file is not a valid GIF (header: $header)" >&2
+                exit 1
+              fi
+              min=10240; max=5242880
+              ;;
+            mp4)
+              # MP4 files start with an `ftyp` box; bytes 4-7 are the box type.
+              boxtype=$(dd if="$file" bs=1 skip=4 count=4 2>/dev/null)
+              if [ "$boxtype" != "ftyp" ]; then
+                echo "ERROR: $file is not a valid MP4 (box type: $boxtype)" >&2
+                exit 1
+              fi
+              min=10240; max=10485760
+              ;;
+          esac
+          if [ "$size" -lt "$min" ]; then
+            echo "ERROR: $file too small (${size} bytes < ${min})" >&2
+            exit 1
+          fi
+          if [ "$size" -gt "$max" ]; then
+            echo "ERROR: $file too large (${size} bytes > ${max})" >&2
+            exit 1
+          fi
+          echo "demo.${OUTPUT_FORMAT} OK — ${size} bytes"
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: demo-${{ inputs.output_format }}
+          path: artifacts/demo.${{ inputs.output_format }}
+          retention-days: 7
+          if-no-files-found: error

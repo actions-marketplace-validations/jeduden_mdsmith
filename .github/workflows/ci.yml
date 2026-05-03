@@ -56,77 +56,11 @@ jobs:
       - run: ./mdsmith check .
 
   demo:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
-        with:
-          go-version-file: go.mod
-      - name: Build mdsmith
-        run: go build -o mdsmith ./cmd/mdsmith
-      - name: Cache VHS + ttyd binaries
-        id: vhs-cache
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            ~/vhs-bin
-          key: vhs-0.10.0-ttyd-1.7.7-${{ runner.os }}-${{ runner.arch }}
-      - name: Install VHS runtime dependencies
-        run: |
-          # Google Chrome is pre-installed on GitHub runners and
-          # go-rod (used by VHS) finds it via launcher.LookPath().
-          # Installing chromium via apt on Ubuntu 24.04 triggers a
-          # slow snap install (~500 MB of dependencies), so we skip
-          # it and only install ffmpeg.
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
-          if [ -f ~/vhs-bin/ttyd ]; then
-            sudo install ~/vhs-bin/ttyd /usr/local/bin/ttyd
-          else
-            curl -fsSL -o /tmp/ttyd \
-              "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64"
-            sudo install /tmp/ttyd /usr/local/bin/ttyd
-          fi
-      - name: Install VHS
-        run: |
-          if [ -f ~/vhs-bin/vhs ]; then
-            sudo install ~/vhs-bin/vhs /usr/local/bin/vhs
-          else
-            go install github.com/charmbracelet/vhs@v0.10.0
-          fi
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: Populate VHS cache
-        if: steps.vhs-cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/vhs-bin
-          cp /usr/local/bin/ttyd ~/vhs-bin/
-          cp "$(go env GOPATH)/bin/vhs" ~/vhs-bin/ 2>/dev/null || cp /usr/local/bin/vhs ~/vhs-bin/ 2>/dev/null || true
-      - name: Record demo
-        run: vhs demo.tape
-      - name: Validate GIF
-        run: |
-          file="assets/demo.gif"
-          if [ ! -f "$file" ]; then
-            echo "ERROR: $file not produced" >&2
-            exit 1
-          fi
-          header=$(head -c 6 "$file")
-          if [ "$header" != "GIF89a" ] && [ "$header" != "GIF87a" ]; then
-            echo "ERROR: $file is not a valid GIF (header: $header)" >&2
-            exit 1
-          fi
-          size=$(stat -c%s "$file")
-          if [ "$size" -lt 10240 ]; then
-            echo "ERROR: $file too small (${size} bytes < 10 KB)" >&2
-            exit 1
-          fi
-          if [ "$size" -gt 5242880 ]; then
-            echo "ERROR: $file too large (${size} bytes > 5 MB)" >&2
-            exit 1
-          fi
-          echo "assets/demo.gif OK — ${size} bytes, header: $header"
+    uses: ./.github/workflows/record-demo.yml
+    with:
+      # MP4 skips the slow GIF palette-quantization encoding pass.
+      # The published GIF is produced separately by demo.yml.
+      output_format: mp4
 
   test:
     runs-on: ubuntu-latest
