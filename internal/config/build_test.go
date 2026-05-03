@@ -285,6 +285,7 @@ func TestInjectBuildConfig_BuildRule(t *testing.T) {
 					BodyTemplate: "![{alt}]({output})",
 					Params: ParamCfg{
 						Required: []string{"source"},
+						Optional: []string{"output"},
 					},
 				},
 			},

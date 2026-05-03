@@ -50,7 +50,7 @@ build:
       body-template: "![{alt}]({output})"
       params:
         required: [source]
-        optional: [title]
+        optional: [title, output]
     vhs:
       command: "vhs {input}"
       body-template: "![{alt}]({output})"

@@ -119,11 +119,11 @@ in `.mdsmith.yml`. It cannot introduce a new recipe.
 1. [x] Implement the `<?build?>` directive in
    `internal/rules/build/` using `gensection.Engine`.
    Register as MDS039, category `meta`. `Generate`
-   renders `body_template` only; it never calls a
+   renders `body-template` only; it never calls a
    builder or touches the filesystem.
 2. [x] Implement MDS039 validation (recipe resolution,
    `output` path safety, required params, unknown
-   params, stale-section body check).
+   params, stale-body check).
 3. [x] Add `good/`, `bad/`, and `fixed/` fixtures for
    MDS039 under `internal/rules/MDS039-build/`.
 4. [x] Wire MDS039 into `cmd/mdsmith/main.go`.
@@ -137,9 +137,9 @@ in `.mdsmith.yml`. It cannot introduce a new recipe.
 ## Acceptance Criteria
 
 - [x] `<?build?>` body is regenerated on `mdsmith fix`
-      using the recipe's `body_template`
-- [x] MDS039 reports `stale-section` when the body
-      diverges from the rendered `body_template`
+      using the recipe's `body-template`
+- [x] MDS039 reports `generated section is out of date`
+      when the body diverges from the rendered `body-template`
 - [x] `mdsmith check` does **not** run any external
       tool for `<?build?>` blocks
 - [x] MDS039 rejects an unknown recipe name

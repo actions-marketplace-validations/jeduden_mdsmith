@@ -78,10 +78,10 @@ func (r *Rule) getEngine() *gensection.Engine {
 }
 
 // Check implements rule.Rule.
-// It validates each <?build?> directive and reports stale-section when
-// the rendered body differs from the expected body_template output.
+// It validates each <?build?> directive and reports "generated section is out of date"
+// when the rendered body differs from the expected body-template output.
 // Unknown params are reported as warnings, which the gensection engine
-// cannot emit alongside a stale-section check, so Check is implemented
+// cannot emit alongside a stale-body check, so Check is implemented
 // manually.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	pairs, diags := gensection.FindMarkerPairs(f, r.Name(), r.RuleID(), r.RuleName())
@@ -244,7 +244,7 @@ func (r *Rule) warnUnknownParams(
 	return diags
 }
 
-// generateBody renders the recipe's body_template using the directive params.
+// generateBody renders the recipe's body-template using the directive params.
 func (r *Rule) generateBody(
 	_ string, _ int,
 	params map[string]string,
