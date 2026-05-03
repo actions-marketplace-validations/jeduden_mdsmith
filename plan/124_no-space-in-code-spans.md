@@ -5,7 +5,7 @@ status: "✅"
 summary: >-
   New rule MDS052 that flags inline code spans with
   leading or trailing whitespace inside the backticks
-  (`` ` x ` `` instead of `` `x` ``). Closes the gap
+  (e.g. `` ` x` `` or `` `x ` ``). Closes the gap
   with markdownlint MD038.
 model: sonnet
 ---

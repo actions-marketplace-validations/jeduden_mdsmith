@@ -58,16 +58,11 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 			return ast.WalkContinue, nil
 		}
 		seg := f.Source[first:last]
-
-		// Find opening backtick offset for position reporting.
-		// recoverContentBounds undoes the CommonMark leading-space strip so we
-		// step back to the raw content boundary before walking through backticks.
-		rawStart, _ := recoverContentBounds(first, last, f.Source)
-		btStart := rawStart
-		for btStart > 0 && f.Source[btStart-1] == '`' {
-			btStart--
-		}
+		btStart := openingBacktickOffset(cs, f.Source)
 		line := f.LineOfOffset(btStart)
+		if inGeneratedSection(f, line) {
+			return ast.WalkContinue, nil
+		}
 		col := f.ColumnOfOffset(btStart)
 
 		if isASCIIWhitespace(seg[0]) {
@@ -121,18 +116,16 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		if !ok2 || last == first {
 			return ast.WalkContinue, nil
 		}
-		// Use the goldmark segment (post-CommonMark-trim) to decide whether
-		// this span needs fixing.
 		seg := f.Source[first:last]
 		if !isASCIIWhitespace(seg[0]) && !isASCIIWhitespace(seg[len(seg)-1]) {
 			return ast.WalkContinue, nil
 		}
-		// Recover the full raw content (pre-trim) from the source.
+		if inGeneratedSection(f, f.LineOfOffset(openingBacktickOffset(cs, f.Source))) {
+			return ast.WalkContinue, nil
+		}
 		start, end := recoverContentBounds(first, last, f.Source)
 		raw := f.Source[start:end]
-
-		// Use bytes.Trim with an explicit ASCII cutset (not TrimFunc) to
-		// avoid the rune-to-byte truncation hazard with non-ASCII content.
+		// bytes.Trim with an explicit cutset avoids the rune truncation hazard of TrimFunc.
 		trimmed := bytes.Trim(raw, " \t\n\r")
 		if len(trimmed) == 0 {
 			return ast.WalkContinue, nil
@@ -170,6 +163,32 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	}
 	out.Write(f.Source[prev:])
 	return out.Bytes()
+}
+
+// openingBacktickOffset returns the byte offset of the opening backtick
+// delimiter of cs by walking back through the raw source past any stripped
+// leading space and then through the backtick run.
+func openingBacktickOffset(cs *ast.CodeSpan, source []byte) int {
+	first, last, ok := spanBounds(cs)
+	if !ok {
+		return 0
+	}
+	rawStart, _ := recoverContentBounds(first, last, source)
+	off := rawStart
+	for off > 0 && source[off-1] == '`' {
+		off--
+	}
+	return off
+}
+
+// inGeneratedSection reports whether line falls inside any generated section.
+func inGeneratedSection(f *lint.File, line int) bool {
+	for _, gr := range f.GeneratedRanges {
+		if gr.Contains(line) {
+			return true
+		}
+	}
+	return false
 }
 
 // recoverContentBounds returns the [start, end) byte range of a code span's
