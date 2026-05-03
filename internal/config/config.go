@@ -15,6 +15,7 @@ var ValidCategories = []string{
 	"line",
 	"link",
 	"meta",
+	"prose",
 	"table",
 }
 

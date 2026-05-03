@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -51,6 +50,21 @@ func isWordChar(b byte) bool {
 		(b >= '0' && b <= '9') || b == '_'
 }
 
+// asciiToLower lowercases ASCII uppercase letters only. Unlike bytes.ToLower,
+// this never changes the byte length of the slice, which keeps byte offsets
+// stable when matching lowerText positions back to the original text.
+func asciiToLower(b []byte) []byte {
+	out := make([]byte, len(b))
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			out[i] = c + ('a' - 'A')
+		} else {
+			out[i] = c
+		}
+	}
+	return out
+}
+
 // wrongMatch holds one wrong-cased occurrence.
 type wrongMatch struct {
 	start  int // byte offset in f.Source
@@ -67,7 +81,8 @@ func (r *Rule) scanBytes(text []byte, baseOffset int, source []byte) []wrongMatc
 		return nil
 	}
 	// Lowercase the segment once; reused for every configured name.
-	lowerText := bytes.ToLower(text)
+	// asciiToLower never changes byte length, keeping offsets stable.
+	lowerText := asciiToLower(text)
 	var results []wrongMatch
 	for _, name := range r.Names {
 		n := len(name)
@@ -75,7 +90,7 @@ func (r *Rule) scanBytes(text []byte, baseOffset int, source []byte) []wrongMatc
 			continue
 		}
 		// Lowercase the name once per name, not once per position.
-		lowerName := []byte(strings.ToLower(name))
+		lowerName := asciiToLower([]byte(name))
 		for i := 0; i <= len(lowerText)-n; i++ {
 			// Left boundary: the byte before the match (in source) must not
 			// be a word character, or the match is at the start of the source.

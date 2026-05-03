@@ -41,6 +41,7 @@ import (
 	_ "github.com/jeduden/mdsmith/internal/rules/notrailingspaces"
 	_ "github.com/jeduden/mdsmith/internal/rules/paragraphreadability"
 	_ "github.com/jeduden/mdsmith/internal/rules/paragraphstructure"
+	_ "github.com/jeduden/mdsmith/internal/rules/propernames"
 	_ "github.com/jeduden/mdsmith/internal/rules/requiredstructure"
 	_ "github.com/jeduden/mdsmith/internal/rules/singletrailingnewline"
 	_ "github.com/jeduden/mdsmith/internal/rules/tableformat"
