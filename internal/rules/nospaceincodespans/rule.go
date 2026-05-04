@@ -58,6 +58,9 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 			return ast.WalkContinue, nil
 		}
 		seg := f.Source[first:last]
+		if !isASCIIWhitespace(seg[0]) && !isASCIIWhitespace(seg[len(seg)-1]) {
+			return ast.WalkContinue, nil
+		}
 		btStart := openingBacktickOffset(cs, f.Source)
 		line := f.LineOfOffset(btStart)
 		if inGeneratedSection(f, line) {

@@ -266,15 +266,16 @@ the broadest rule set. Plans cover inline HTML
 ([plan 106][plan106]), and HR style
 ([plan 108][plan108]). More plans cover ambiguous
 emphasis ([plan 111][plan111]), reference-style links
-([plan 107][plan107]), no-space-in-code-spans
-([plan 124][plan124]), no-space-in-link-text
+([plan 107][plan107]), no-space-in-link-text
 ([plan 125][plan125]), proper names
 ([plan 126][plan126]), single H1
 ([plan 127][plan127]), undefined reference labels
 ([plan 128][plan128]), and unused link reference
 definitions ([plan 129][plan129]).
-Image alt text ([MDS032][mds032]) and OL numbering
-([MDS046][mds046]) are already implemented.
+Image alt text ([MDS032][mds032]), OL numbering
+([MDS046][mds046]), and no-space-in-code-spans
+([MDS052][mds052], [plan 124][plan124]) are already
+implemented.
 
 ### Prose and Readability
 
