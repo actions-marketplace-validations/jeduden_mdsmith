@@ -22,6 +22,7 @@ import (
 	fixpkg "github.com/jeduden/mdsmith/internal/fix"
 	"github.com/jeduden/mdsmith/internal/lint"
 	vlog "github.com/jeduden/mdsmith/internal/log"
+	"github.com/jeduden/mdsmith/internal/lsp/index"
 	"github.com/jeduden/mdsmith/internal/rule"
 )
 
@@ -51,6 +52,13 @@ type Server struct {
 	pending       map[string]*time.Timer
 	pendingRespMu sync.Mutex
 	pendingResp   map[string]chan rpcResponse
+
+	// idx is the lazy workspace symbol index. It is populated on
+	// first symbol-navigation request and kept in sync via
+	// document events and watcher notifications. nil until
+	// ensureIndex builds it.
+	idxMu sync.Mutex
+	idx   *index.Index
 
 	nextReqID        atomic.Int64
 	shutdown         atomic.Bool // we are tearing down (any cause)
@@ -247,6 +255,33 @@ func (s *Server) dispatch(ctx context.Context, msg *requestMessage) {
 		}
 		return
 	}
+	if s.dispatchLifecycle(ctx, msg) {
+		return
+	}
+	if s.dispatchDocument(ctx, msg) {
+		return
+	}
+	if s.dispatchNavigation(msg) {
+		return
+	}
+	if s.dispatchWorkspace(ctx, msg) {
+		return
+	}
+	switch msg.Method {
+	case "$/cancelRequest", "$/setTrace", "$/progress":
+		// Notifications we silently accept.
+	default:
+		// Notifications (no ID) are silently ignored per the LSP
+		// spec; only requests get a method-not-found error.
+		if msg.ID != nil {
+			_ = s.t.writeError(msg.ID, codeMethodNotFound, "method not supported: "+msg.Method)
+		}
+	}
+}
+
+// dispatchLifecycle handles the LSP lifecycle methods. Returns true
+// when the message was handled.
+func (s *Server) dispatchLifecycle(ctx context.Context, msg *requestMessage) bool {
 	switch msg.Method {
 	case "initialize":
 		s.handleInitialize(msg)
@@ -261,6 +296,16 @@ func (s *Server) dispatch(ctx context.Context, msg *requestMessage) {
 		s.shutdown.Store(true)
 		s.exitRequested.Store(true)
 		s.stopPendingLints()
+	default:
+		return false
+	}
+	return true
+}
+
+// dispatchDocument handles textDocument/* sync and the codeAction
+// surface that's tied to it.
+func (s *Server) dispatchDocument(ctx context.Context, msg *requestMessage) bool {
+	switch msg.Method {
 	case "textDocument/didOpen":
 		s.handleDidOpen(ctx, msg.Params)
 	case "textDocument/didChange":
@@ -271,19 +316,51 @@ func (s *Server) dispatch(ctx context.Context, msg *requestMessage) {
 		s.handleDidClose(msg.Params)
 	case "textDocument/codeAction":
 		s.handleCodeAction(msg)
+	default:
+		return false
+	}
+	return true
+}
+
+// dispatchNavigation handles the symbol-navigation surface added in
+// plan 131: documentSymbol, definition, implementation, references,
+// workspace/symbol, and the call-hierarchy trio.
+func (s *Server) dispatchNavigation(msg *requestMessage) bool {
+	switch msg.Method {
+	case "textDocument/documentSymbol":
+		s.handleDocumentSymbol(msg)
+	case "textDocument/definition":
+		s.handleDefinition(msg)
+	case "textDocument/implementation":
+		s.handleImplementation(msg)
+	case "textDocument/references":
+		s.handleReferences(msg)
+	case "workspace/symbol":
+		s.handleWorkspaceSymbol(msg)
+	case "textDocument/prepareCallHierarchy":
+		s.handlePrepareCallHierarchy(msg)
+	case "callHierarchy/incomingCalls":
+		s.handleIncomingCalls(msg)
+	case "callHierarchy/outgoingCalls":
+		s.handleOutgoingCalls(msg)
+	default:
+		return false
+	}
+	return true
+}
+
+// dispatchWorkspace handles the workspace/* events that don't fit
+// the navigation grouping.
+func (s *Server) dispatchWorkspace(ctx context.Context, msg *requestMessage) bool {
+	switch msg.Method {
 	case "workspace/didChangeWatchedFiles":
 		s.handleDidChangeWatchedFiles(ctx, msg.Params)
 	case "workspace/didChangeConfiguration":
 		s.handleDidChangeConfiguration(ctx)
-	case "$/cancelRequest", "$/setTrace", "$/progress":
-		// Notifications we silently accept.
 	default:
-		// Notifications (no ID) are silently ignored per the LSP
-		// spec; only requests get a method-not-found error.
-		if msg.ID != nil {
-			_ = s.t.writeError(msg.ID, codeMethodNotFound, "method not supported: "+msg.Method)
-		}
+		return false
 	}
+	return true
 }
 
 func (s *Server) handleInitialize(msg *requestMessage) {
@@ -319,6 +396,12 @@ func (s *Server) handleInitialize(msg *requestMessage) {
 			CodeActionProvider: codeActionOptions{
 				CodeActionKinds: []string{kindQuickFix, kindSourceFixAll},
 			},
+			DocumentSymbolProvider:  true,
+			DefinitionProvider:      true,
+			ImplementationProvider:  true,
+			ReferencesProvider:      true,
+			WorkspaceSymbolProvider: true,
+			CallHierarchyProvider:   true,
 		},
 		ServerInfo: serverInfo{Name: "mdsmith", Version: "lsp"},
 	}
@@ -369,6 +452,7 @@ func (s *Server) handleDidOpen(ctx context.Context, raw json.RawMessage) {
 		text:    []byte(p.TextDocument.Text),
 		version: p.TextDocument.Version,
 	})
+	s.indexUpdate(path, []byte(p.TextDocument.Text))
 	// didOpen lints unless run=off — the user wants an initial
 	// snapshot when linting is on at all. scheduleLint applies the
 	// same off-skip as every other trigger.
@@ -391,6 +475,7 @@ func (s *Server) handleDidChange(ctx context.Context, raw json.RawMessage) {
 	doc.text = []byte(last.Text)
 	doc.version = p.TextDocument.Version
 	s.docs.set(p.TextDocument.URI, doc)
+	s.indexUpdate(doc.path, doc.text)
 	s.scheduleLint(p.TextDocument.URI, lintTriggerChange)
 }
 
@@ -413,7 +498,15 @@ func (s *Server) handleDidClose(raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return
 	}
+	doc, _ := s.docs.get(p.TextDocument.URI)
 	s.docs.delete(p.TextDocument.URI)
+	// Refresh the index from on-disk content so the closed buffer's
+	// last-saved state replaces the editor-only edits we accumulated.
+	// When the file no longer exists on disk we silently skip — the
+	// watcher path will catch the deletion if it lands separately.
+	if doc != nil {
+		s.indexReloadFromDisk(doc.path)
+	}
 	// Clear diagnostics so VS Code stops showing stale squiggles.
 	_ = s.t.writeNotification("textDocument/publishDiagnostics",
 		publishDiagnosticsParams{URI: p.TextDocument.URI, Diagnostics: []Diagnostic{}})
@@ -424,19 +517,30 @@ func (s *Server) handleDidChangeWatchedFiles(ctx context.Context, raw json.RawMe
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return
 	}
-	relevant := false
+	configChanged := false
+	mdChanges := make([]string, 0, len(p.Changes))
 	for _, c := range p.Changes {
-		if strings.HasSuffix(uriToPath(c.URI), ".mdsmith.yml") {
-			relevant = true
-			break
+		path := uriToPath(c.URI)
+		if strings.HasSuffix(path, ".mdsmith.yml") {
+			configChanged = true
+			continue
+		}
+		if strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".markdown") {
+			mdChanges = append(mdChanges, path)
 		}
 	}
-	if !relevant {
+	if configChanged {
+		s.reloadConfig()
+		// kind / ignore globs may have shifted — drop the index so
+		// the next symbol request rebuilds it from scratch.
+		s.invalidateIndex()
+		for _, uri := range s.docs.openURIs() {
+			s.scheduleLint(uri, lintTriggerConfig)
+		}
 		return
 	}
-	s.reloadConfig()
-	for _, uri := range s.docs.openURIs() {
-		s.scheduleLint(uri, lintTriggerConfig)
+	for _, path := range mdChanges {
+		s.indexReloadFromDisk(path)
 	}
 }
 
@@ -1148,13 +1252,18 @@ func (s *Server) deliverResponse(id string, resp rpcResponse) {
 	}
 }
 
-// registerWatchers asks the client to watch the project's
-// `.mdsmith.yml` and notify the server on change. The request is
-// best-effort: clients that don't support dynamic registration
-// silently ignore it. There is no polling fallback — when the
-// watcher is absent, the server only sees a config change on the
-// next initialize, didChangeConfiguration, or explicit
-// workspace/didChangeWatchedFiles the client decides to send.
+// registerWatchers asks the client to watch project files we depend
+// on:
+//
+//   - `**/.mdsmith.yml` invalidates cached config and the symbol
+//     index (kind / ignore globs may shift scope).
+//   - `**/*.md` keeps the symbol index in sync when files change
+//     outside of any open buffer (sibling editor, VCS checkout).
+//
+// The request is best-effort: clients that don't support dynamic
+// registration silently ignore it. There is no polling fallback;
+// when the watcher is absent, the index still updates from open
+// buffer events.
 func (s *Server) registerWatchers() {
 	id := s.nextReqID.Add(1)
 	// json.Marshal(int64) cannot fail; ignoring the error is safe.
@@ -1164,7 +1273,11 @@ func (s *Server) registerWatchers() {
 			ID:     "mdsmith-watch",
 			Method: "workspace/didChangeWatchedFiles",
 			RegisterOptions: didChangeWatchedFilesRegistrationOptions{
-				Watchers: []fileSystemWatcher{{GlobPattern: "**/.mdsmith.yml"}},
+				Watchers: []fileSystemWatcher{
+					{GlobPattern: "**/.mdsmith.yml"},
+					{GlobPattern: "**/*.md"},
+					{GlobPattern: "**/*.markdown"},
+				},
 			},
 		}}})
 }

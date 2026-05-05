@@ -1,0 +1,102 @@
+package index
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestLocateHeading(t *testing.T) {
+	t.Parallel()
+	src := "# Top heading\n\nbody\n"
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 1, 3)
+	assert.Equal(t, TokenHeading, res.Tag)
+	assert.Equal(t, "top-heading", res.Anchor)
+	assert.Equal(t, 1, res.Level)
+}
+
+func TestLocateAnchorLink(t *testing.T) {
+	t.Parallel()
+	src := "# Top\n\nSee [here](#sec).\n\n## Sec\n"
+	// Cursor inside `[here](#sec)` (line 3, col 8).
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 3, 14)
+	assert.Equal(t, TokenAnchorLink, res.Tag)
+	assert.Equal(t, "sec", res.TargetAnchor)
+}
+
+func TestLocateFileLink(t *testing.T) {
+	t.Parallel()
+	src := "# Top\n\n[a](./other.md#sub)\n"
+	res := Locator{Path: "doc.md"}.Locate([]byte(src), 3, 6)
+	assert.Equal(t, TokenFileLink, res.Tag)
+	assert.Equal(t, "other.md", res.TargetFile)
+	assert.Equal(t, "sub", res.TargetAnchor)
+}
+
+func TestLocateRefUse(t *testing.T) {
+	t.Parallel()
+	src := "# Top\n\nSee [linked][label].\n\n[label]: https://example.com\n"
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 3, 8)
+	assert.Equal(t, TokenRefUse, res.Tag)
+	assert.Equal(t, "label", res.Label)
+}
+
+func TestLocateRefDef(t *testing.T) {
+	t.Parallel()
+	src := "# T\n\n[See][label]\n\n[label]: https://example.com\n"
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 5, 3)
+	assert.Equal(t, TokenRefDef, res.Tag)
+	assert.Equal(t, "label", res.Label)
+}
+
+func TestLocateDirectiveArg(t *testing.T) {
+	t.Parallel()
+	src := strings.Join([]string{
+		"# Top",
+		"",
+		"<?include",
+		`file: "x.md"`,
+		"?>",
+		"<?/include?>",
+		"",
+	}, "\n")
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 4, 8)
+	assert.Equal(t, TokenDirectiveArg, res.Tag)
+	assert.Equal(t, "include", res.DirectiveName)
+	assert.Equal(t, "file", res.DirectiveArg)
+	assert.Equal(t, "x.md", res.DirectiveValue)
+	assert.Equal(t, "x.md", res.DirectiveTargetFile)
+}
+
+func TestLocateFrontMatterKey(t *testing.T) {
+	t.Parallel()
+	src := "---\ntitle: Hello\nkinds:\n  - guide\n---\n# Body\n"
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 2, 2)
+	assert.Equal(t, TokenFrontMatterKey, res.Tag)
+	assert.Equal(t, "title", res.FrontMatterKey)
+}
+
+func TestLocateFrontMatterValue(t *testing.T) {
+	t.Parallel()
+	src := "---\ntitle: Hello\nkind: guide\n---\n# Body\n"
+	// Cursor after the colon on line 3.
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 3, 8)
+	assert.Equal(t, TokenFrontMatterValue, res.Tag)
+	assert.Equal(t, "kind", res.FrontMatterKey)
+	assert.Equal(t, "guide", res.FrontMatterValue)
+}
+
+func TestLocateFileTop(t *testing.T) {
+	t.Parallel()
+	src := "# Top\n"
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 1, 1)
+	assert.Equal(t, TokenFileTop, res.Tag)
+}
+
+func TestLocateNoneOnPlainProse(t *testing.T) {
+	t.Parallel()
+	src := "# Top\n\nordinary text without links\n"
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 3, 5)
+	assert.Equal(t, TokenNone, res.Tag)
+}

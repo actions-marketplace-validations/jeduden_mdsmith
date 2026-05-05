@@ -114,6 +114,32 @@ command expects. Bind it to save by setting:
 Or set `mdsmith.fixOnSave` to `true`, which wires the
 same behavior without touching `editor.codeActionsOnSave`.
 
+## Outline and Go to Definition
+
+The server publishes a hierarchical outline of each
+open Markdown file. It also resolves cross-document
+jumps. VS Code surfaces these as the Outline pane,
+"Go to Definition" (F12), "Find All References"
+(Shift-F12), the `Ctrl-T`/`Cmd-T` symbol picker, and
+the call-hierarchy view.
+
+The relevant LSP methods are:
+
+- `textDocument/documentSymbol`
+- `textDocument/definition`
+- `textDocument/implementation`
+- `textDocument/references`
+- `workspace/symbol`
+- `textDocument/prepareCallHierarchy`
+
+Headings nest by level. Front-matter keys hang off a
+synthetic "front matter" entry. Directives
+(`<?include?>`, `<?catalog?>`, `<?build?>`) attach to
+their enclosing heading or to the file root. See the
+[`mdsmith lsp` reference](../../reference/cli/lsp.md#symbol-navigation)
+for the symbol-kind table and the cursor → target
+matrix.
+
 ## Configuration discovery
 
 The server starts at the workspace root supplied at

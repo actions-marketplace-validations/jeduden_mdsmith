@@ -25,12 +25,18 @@ uses stdio either way.
 
 ## Capabilities advertised
 
-| Capability                        | Behavior                                                      |
-|-----------------------------------|---------------------------------------------------------------|
-| `textDocumentSync = Full`         | Full-document sync; lint trigger gated by `mdsmith.run`       |
-| `publishDiagnostics`              | One push after each lint                                      |
-| `codeActionProvider`              | `quickfix` per fixable diagnostic, `source.fixAll.mdsmith`    |
-| `workspace/didChangeWatchedFiles` | Immediate re-lint of open buffers when `.mdsmith.yml` changes |
+| Capability                        | Behavior                                                                           |
+|-----------------------------------|------------------------------------------------------------------------------------|
+| `textDocumentSync = Full`         | Full-document sync; lint trigger gated by `mdsmith.run`                            |
+| `publishDiagnostics`              | One push after each lint                                                           |
+| `codeActionProvider`              | `quickfix` per fixable diagnostic, `source.fixAll.mdsmith`                         |
+| `documentSymbolProvider`          | Hierarchical outline (headings, link refs, front matter, directives)               |
+| `definitionProvider`              | Jump-to-definition for anchor / file / ref-style links and directive arguments     |
+| `implementationProvider`          | Multi-target jump for `kind:` values and headings (every link target)              |
+| `referencesProvider`              | Workspace links pointing at the symbol under the cursor                            |
+| `workspaceSymbolProvider`         | Substring search across headings, link refs, front-matter `title:`, and kind names |
+| `callHierarchyProvider`           | File-level call graph over `<?include?>`, `<?catalog?>`, `<?build?>`, and links    |
+| `workspace/didChangeWatchedFiles` | Immediate re-lint and index refresh on `.mdsmith.yml` and Markdown file changes    |
 
 `mdsmith.run` controls when the server actually re-lints:
 
@@ -73,6 +79,88 @@ prints:
 - **`source.fixAll.mdsmith`** — runs `mdsmith fix` on the
   current buffer; produces the same bytes the on-disk fixer
   would write.
+
+## Symbol navigation
+
+The server indexes the workspace into a symbol graph. The
+graph is built lazily on the first symbol-navigation
+request and is kept in sync via:
+
+- `didOpen` / `didChange` re-parse the open buffer
+  and swap its slice of the index.
+- `**/*.md` watcher events refresh one file from disk
+  when it changes outside any open buffer.
+- `.mdsmith.yml` changes invalidate the whole index
+  because kind / ignore globs may shift scope.
+
+### Symbol kinds
+
+| Concept                   | LSP `SymbolKind` | Container                 |
+|---------------------------|------------------|---------------------------|
+| Heading (H1–H6)           | `String` (15)    | parent heading            |
+| Link-reference definition | `Key` (20)       | file                      |
+| Front-matter field        | `Property` (7)   | file                      |
+| Directive (`<?name … ?>`) | `Event` (24)     | enclosing heading or file |
+
+Headings drive the outline; the others hang off the
+synthetic file-root entry. The cross-document key is
+`(file, anchor)` for headings (slug from
+`mdtext.CollectTOCItems`) and `(file, label)` for link
+refs.
+
+### Definition and implementation
+
+| Cursor on…                     | `Definition`                 | `Implementation` adds      |
+|--------------------------------|------------------------------|----------------------------|
+| `[text](#anchor)`              | heading in this file         | —                          |
+| `[text](./other.md)`           | line 1 of `other.md`         | —                          |
+| `[text](./other.md#anchor)`    | heading in `other.md`        | —                          |
+| `[text][label]`                | matching `[label]: url`      | —                          |
+| `<?include file: "x.md"?>` arg | `x.md` line 1                | —                          |
+| `<?build source: "x.md"?>` arg | `x.md` line 1                | —                          |
+| `kind:` value in front matter  | kind block in `.mdsmith.yml` | every file with that kind  |
+| Heading line                   | the heading                  | every link target matching |
+
+### References
+
+| Cursor on…                | References returned                              |
+|---------------------------|--------------------------------------------------|
+| Heading                   | every workspace link to `(file, anchor)`         |
+| `[label]: url` definition | every `[text][label]` and shortcut in the file   |
+| File line 1               | every link target with this path (no anchor)     |
+| `kind:` value             | every file with that kind assignment             |
+| Directive block           | every directive whose `file:` / `source:` = this |
+
+`includeDeclaration: false` excludes the heading or
+definition itself.
+
+### Workspace symbol
+
+The query is a case-insensitive substring. It matches
+heading text, link-ref labels, front-matter `title:`,
+and kind names. The relative path goes in
+`containerName`.
+
+### Call hierarchy
+
+A Markdown file is the unit of "function"; an outbound
+reference is a "call". `incomingCalls` answers "who
+depends on this runbook?", `outgoingCalls` answers
+"what does this overview embed?".
+
+`prepareCallHierarchy` accepts three cursor positions:
+
+- File root → the item is the file.
+- Heading line → the item is that heading section.
+- Directive arg → the item is the target file.
+
+`incomingCalls` returns every edge into the item, with
+sources from cross-file links, `<?include?>`,
+`<?catalog?>` matches, and `<?build?>`. Each entry
+carries the source file and the reference line.
+`outgoingCalls` returns every edge out of the item;
+catalog matches collapse to one entry per directive
+(expansion would inflate large globs into noise).
 
 ## Configuration discovery
 

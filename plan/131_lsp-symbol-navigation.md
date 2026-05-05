@@ -1,7 +1,7 @@
 ---
 id: 131
 title: LSP symbol navigation for agents (Claude)
-status: "🔲"
+status: "✅"
 model: opus
 summary: >-
   Extend `mdsmith lsp` with the document-symbol,
@@ -262,36 +262,36 @@ that ignores them sees the post-plan-121 server.
 
 ## Acceptance Criteria
 
-- [ ] `documentSymbol` returns a hierarchical
+- [x] `documentSymbol` returns a hierarchical
       outline whose nesting matches heading levels.
-- [ ] `definition` jumps to a heading from an
+- [x] `definition` jumps to a heading from an
       anchor link, to line 1 of a file from a
       relative link, and to the matching reference
       def from `[text][ref]`.
-- [ ] `implementation` on a `kind:` value returns
+- [x] `implementation` on a `kind:` value returns
       one location per file assigned that kind.
-- [ ] `references` on a heading returns every
+- [x] `references` on a heading returns every
       workspace anchor link to it;
       `includeDeclaration: false` excludes the
       heading itself.
-- [ ] `workspace/symbol` substring queries match
+- [x] `workspace/symbol` substring queries match
       headings, link-ref labels, front-matter
       titles, and kind names.
-- [ ] `prepareCallHierarchy` on a file returns one
+- [x] `prepareCallHierarchy` on a file returns one
       item; `incomingCalls` lists files that
       include / link to it; `outgoingCalls` lists
       files it includes / links to.
-- [ ] Cold-build benchmark reports under 1 s on
+- [x] Cold-build benchmark reports under 1 s on
       1 000 files; incremental-update under 20 ms
       per `didChange`. Invocation:
       `go test -run=^$ -bench=. ./internal/lsp/...`
-- [ ] [`docs/reference/cli/lsp.md`](../docs/reference/cli/lsp.md)
+- [x] [`docs/reference/cli/lsp.md`](../docs/reference/cli/lsp.md)
       lists every new capability and the symbol-
       kind table.
-- [ ] All tests pass: `go test ./...`.
-- [ ] `go tool golangci-lint run` reports no
+- [x] All tests pass: `go test ./...`.
+- [x] `go tool golangci-lint run` reports no
       issues.
-- [ ] `mdsmith check .` passes including the new
+- [x] `mdsmith check .` passes including the new
       docs and the updated `PLAN.md` catalog.
 
 ## Open Questions

@@ -95,8 +95,14 @@ type serverInfo struct {
 }
 
 type serverCapabilities struct {
-	TextDocumentSync   textDocumentSyncOptions `json:"textDocumentSync"`
-	CodeActionProvider codeActionOptions       `json:"codeActionProvider"`
+	TextDocumentSync        textDocumentSyncOptions `json:"textDocumentSync"`
+	CodeActionProvider      codeActionOptions       `json:"codeActionProvider"`
+	DocumentSymbolProvider  bool                    `json:"documentSymbolProvider,omitempty"`
+	DefinitionProvider      bool                    `json:"definitionProvider,omitempty"`
+	ImplementationProvider  bool                    `json:"implementationProvider,omitempty"`
+	ReferencesProvider      bool                    `json:"referencesProvider,omitempty"`
+	WorkspaceSymbolProvider bool                    `json:"workspaceSymbolProvider,omitempty"`
+	CallHierarchyProvider   bool                    `json:"callHierarchyProvider,omitempty"`
 }
 
 // textDocumentSyncKind is the LSP enum for change notification mode.
