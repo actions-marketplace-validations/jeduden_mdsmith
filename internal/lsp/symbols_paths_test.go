@@ -117,6 +117,23 @@ func TestIndexReloadFromDiskRejectsNonMarkdown(t *testing.T) {
 	}
 }
 
+func TestEffectiveKindsForNoCfgWithScalarKind(t *testing.T) {
+	t.Parallel()
+	// No config → no kind-assignment globs, but the file's own
+	// `kind: guide` front matter must still surface as effective
+	// kind so workspace-symbol search picks it up.
+	got := effectiveKindsFor(nil, "a.md", []byte("---\nkind: guide\n---\n# A\n"))
+	assert.Equal(t, []string{"guide"}, got)
+}
+
+func TestEffectiveKindsForNoCfgNoFrontMatterKind(t *testing.T) {
+	t.Parallel()
+	// No config and no front-matter kinds → nil (the index falls
+	// back to whatever buildFileEntry parsed natively).
+	got := effectiveKindsFor(nil, "a.md", []byte("# A\n"))
+	assert.Nil(t, got)
+}
+
 func TestEffectiveKindsForScalarKind(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()

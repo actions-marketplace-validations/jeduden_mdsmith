@@ -90,9 +90,7 @@ func (s *Server) buildIndexFromDisk(idx *index.Index, cfg *config.Config, root s
 }
 
 // effectiveKindsFor resolves the effective kind list for a file
-// given the config and the live source bytes. Returns nil when no
-// config is loaded (so UpdateWithKinds falls back to front-matter
-// kinds parsed by buildFileEntry).
+// given the config and the live source bytes.
 //
 // Both the scalar `kind: <name>` and the list `kinds: [a, b]`
 // front-matter forms are recognized — the scalar form is treated
@@ -100,10 +98,12 @@ func (s *Server) buildIndexFromDisk(idx *index.Index, cfg *config.Config, root s
 // reads the list form; mdsmith's other tooling accepts both, so
 // the index has to too or `implementation`/`references` on a
 // `kind:` value would silently miss files using the scalar form.
+//
+// When cfg is nil there are no kind-assignment globs to apply,
+// but the file's front-matter kinds are still returned (deduped
+// via config.EffectiveKinds) so config-less workspaces still
+// pick up scalar / list declarations on the file itself.
 func effectiveKindsFor(cfg *config.Config, rel string, source []byte) []string {
-	if cfg == nil {
-		return nil
-	}
 	fmBytes, _ := lint.StripFrontMatter(source)
 	fmKinds, err := lint.ParseFrontMatterKinds(fmBytes)
 	if err != nil {
@@ -111,6 +111,9 @@ func effectiveKindsFor(cfg *config.Config, rel string, source []byte) []string {
 	}
 	if scalar, ok := frontMatterScalarKind(fmBytes); ok {
 		fmKinds = append([]string{scalar}, fmKinds...)
+	}
+	if len(fmKinds) == 0 && cfg == nil {
+		return nil
 	}
 	return config.EffectiveKinds(cfg, rel, fmKinds)
 }
@@ -283,8 +286,14 @@ func isWindowsDrivePath(p string) bool {
 	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
-// workspaceURI returns a file:// URI for a workspace-relative path.
-// Falls back to the rel path itself when no root is set.
+// workspaceURI returns a file:// URI for rel, joined against the
+// workspace root when one was supplied at initialize. When no
+// root is configured the helper still emits a real URI for
+// rel inputs that are themselves absolute (POSIX `/`, Windows
+// drive `C:`, or UNC `\\server`); a non-absolute rel returns ""
+// so the caller drops the location instead of sending an
+// invalid URI to the client (LSP requires Location.URI to be a
+// real URI, not a bare path).
 func (s *Server) workspaceURI(rel string) string {
 	_, _, root := s.snapshotConfig()
 	if root == "" {
