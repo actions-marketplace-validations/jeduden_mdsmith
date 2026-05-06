@@ -66,6 +66,53 @@ func TestDocTextOrFileNonFileURI(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestEffectiveKindsForScalarKind(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, ".mdsmith.yml"),
+		[]byte("kinds:\n  guide: {}\n"), 0o644))
+	h := newHarness(t)
+	rootURI := pathToFileURI(t, tmp)
+	_, errResp := h.request("initialize", initializeParams{
+		RootURI: &rootURI, Capabilities: clientCapabilities{},
+	})
+	require.Nil(t, errResp)
+	h.srv.reloadConfig()
+	cfg, _, _ := h.srv.snapshotConfig()
+	require.NotNil(t, cfg)
+	// Scalar `kind: guide` form must surface as effective kind.
+	got := effectiveKindsFor(cfg, "a.md", []byte("---\nkind: guide\n---\n# A\n"))
+	assert.Contains(t, got, "guide")
+}
+
+func TestInsideWorkspaceRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "secret.md")
+	require.NoError(t, os.WriteFile(target, []byte("# Secret\n"), 0o644))
+	link := filepath.Join(root, "leak.md")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported on this filesystem: %v", err)
+	}
+	// Symlink lives under root but resolves outside → must be rejected.
+	assert.False(t, insideWorkspace(root, link),
+		"symlink pointing outside root must not pass workspace gate")
+}
+
+func TestInsideWorkspaceAcceptsInRootSymlink(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	target := filepath.Join(root, "real.md")
+	require.NoError(t, os.WriteFile(target, []byte("# Real\n"), 0o644))
+	link := filepath.Join(root, "alias.md")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported on this filesystem: %v", err)
+	}
+	assert.True(t, insideWorkspace(root, link),
+		"in-root symlink must pass workspace gate")
+}
+
 func TestDirectiveArgLocationsEmpty(t *testing.T) {
 	t.Parallel()
 	h, _, _ := rootedHarness(t, map[string]string{"a.md": "# A\n"})

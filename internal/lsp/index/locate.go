@@ -590,9 +590,14 @@ func offsetAt(lines [][]byte, line, col int) int {
 	return off
 }
 
-// SafeURLPathEscape returns a fragment-safe version of anchor for
-// emitting Location URIs. Currently it just URL-escapes percent
-// sequences so callers don't double-encode.
+// SafeURLPathEscape applies net/url.PathEscape to s. PathEscape
+// percent-encodes every byte that would be unsafe in a URL path
+// segment — spaces, slashes, `%`, and a long list of reserved /
+// non-ASCII characters — so the result is guaranteed safe to
+// drop into a `file://` URI fragment without further encoding.
+// Despite the name, the function is not limited to "%" sequences;
+// callers that need a more permissive encoding should reach for
+// QueryEscape directly.
 func SafeURLPathEscape(s string) string {
 	return url.PathEscape(s)
 }

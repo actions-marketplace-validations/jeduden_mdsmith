@@ -335,13 +335,20 @@ func collectLinkRefDefs(filePath string, ctx parser.Context, body []byte, lines 
 	if len(wanted) == 0 {
 		return nil
 	}
+	// Track normalized labels we've already emitted: goldmark
+	// resolves only the first definition for any label, so duplicate
+	// regex matches must not produce extra outline entries that
+	// would confuse the symbol picker.
+	seen := map[string]bool{}
 	var out []Symbol
 	for _, m := range refDefRE.FindAllSubmatchIndex(body, -1) {
 		raw := body[m[2]:m[3]]
 		label := string(raw)
-		if !wanted[string(util.ToLinkReference(raw))] {
+		anchor := string(util.ToLinkReference(raw))
+		if !wanted[anchor] || seen[anchor] {
 			continue
 		}
+		seen[anchor] = true
 		// m[2]-1 is the offset of `[`; m[2] is the offset of the
 		// label's first byte. Use the label position so "go to
 		// definition" highlights the label, not the bracket.
@@ -352,7 +359,7 @@ func collectLinkRefDefs(filePath string, ctx parser.Context, body []byte, lines 
 			File:          filePath,
 			Kind:          SymbolLinkRef,
 			Name:          label,
-			Anchor:        string(util.ToLinkReference(raw)),
+			Anchor:        anchor,
 			StartLine:     line,
 			EndLine:       line,
 			SelectionLine: line,

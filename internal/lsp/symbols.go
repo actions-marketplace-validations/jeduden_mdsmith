@@ -14,6 +14,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/discovery"
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/lsp/index"
+	"github.com/jeduden/mdsmith/internal/yamlutil"
 )
 
 // ensureIndex returns the workspace symbol index, building it on
@@ -92,6 +93,13 @@ func (s *Server) buildIndexFromDisk(idx *index.Index, cfg *config.Config, root s
 // given the config and the live source bytes. Returns nil when no
 // config is loaded (so UpdateWithKinds falls back to front-matter
 // kinds parsed by buildFileEntry).
+//
+// Both the scalar `kind: <name>` and the list `kinds: [a, b]`
+// front-matter forms are recognized — the scalar form is treated
+// as a single-element kinds list. lint.ParseFrontMatterKinds only
+// reads the list form; mdsmith's other tooling accepts both, so
+// the index has to too or `implementation`/`references` on a
+// `kind:` value would silently miss files using the scalar form.
 func effectiveKindsFor(cfg *config.Config, rel string, source []byte) []string {
 	if cfg == nil {
 		return nil
@@ -101,7 +109,45 @@ func effectiveKindsFor(cfg *config.Config, rel string, source []byte) []string {
 	if err != nil {
 		fmKinds = nil
 	}
+	if scalar, ok := frontMatterScalarKind(fmBytes); ok {
+		fmKinds = append([]string{scalar}, fmKinds...)
+	}
 	return config.EffectiveKinds(cfg, rel, fmKinds)
+}
+
+// frontMatterScalarKind extracts a scalar `kind: <name>` value
+// from front matter, if present. Returns ("", false) when the
+// key is absent or the value isn't a scalar.
+func frontMatterScalarKind(fm []byte) (string, bool) {
+	if len(fm) == 0 {
+		return "", false
+	}
+	var m map[string]any
+	if err := yamlutil.UnmarshalSafe(stripFrontMatterDelimiters(fm), &m); err != nil {
+		return "", false
+	}
+	v, ok := m["kind"]
+	if !ok {
+		return "", false
+	}
+	if s, ok := v.(string); ok && s != "" {
+		return s, true
+	}
+	return "", false
+}
+
+// stripFrontMatterDelimiters removes the leading `---\n` and
+// trailing `---\n` (or `---`) from a front-matter prefix as
+// returned by lint.StripFrontMatter. Mirrors the helper inside
+// internal/lsp/index, kept private to avoid leaking the index's
+// internal naming.
+func stripFrontMatterDelimiters(fm []byte) []byte {
+	body := fm
+	body = bytes.TrimPrefix(body, []byte("---\n"))
+	if t := bytes.TrimSuffix(body, []byte("---\n")); len(t) != len(body) {
+		return t
+	}
+	return bytes.TrimSuffix(body, []byte("---"))
 }
 
 // invalidateIndex drops the cached index. The next symbol request
@@ -274,19 +320,26 @@ func (s *Server) docTextOrFile(uri string) ([]byte, string, bool) {
 }
 
 // insideWorkspace reports whether p resolves inside root after
-// path normalization. An empty root fails closed: when no
-// workspace was supplied at initialize, on-disk reads must be
-// rejected so a client can't drive symbol requests against
+// symlink-resolved path normalization. An empty root fails closed:
+// when no workspace was supplied at initialize, on-disk reads must
+// be rejected so a client can't drive symbol requests against
 // arbitrary local files outside any project.
+//
+// Both root and p are resolved through filepath.EvalSymlinks
+// before the containment check so a markdown symlink inside the
+// workspace that points outside the root is rejected. Without
+// this, an attacker who could plant a symlink in the project
+// could read arbitrary files via symbol requests.
 func insideWorkspace(root, p string) bool {
 	if root == "" {
 		return false
 	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
+	resolvedRoot := resolveAbsAndSymlinks(root)
+	resolvedP := resolveAbsAndSymlinks(p)
+	if resolvedRoot == "" || resolvedP == "" {
 		return false
 	}
-	rel, err := filepath.Rel(root, abs)
+	rel, err := filepath.Rel(resolvedRoot, resolvedP)
 	if err != nil {
 		return false
 	}
@@ -294,6 +347,22 @@ func insideWorkspace(root, p string) bool {
 		return false
 	}
 	return true
+}
+
+// resolveAbsAndSymlinks returns p as an absolute, symlink-resolved
+// path, falling back to a cleaned absolute form when the target
+// doesn't exist (e.g. a path the client supplied for a file that
+// hasn't been created yet — still subject to the lexical
+// containment check).
+func resolveAbsAndSymlinks(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	return filepath.Clean(abs)
 }
 
 // isMarkdownExt reports whether p has a .md or .markdown extension.
