@@ -421,9 +421,21 @@ func refDefOnLine(body []byte, lines [][]byte, line, col int) (LocateResult, boo
 }
 
 // locateInFrontMatter resolves a cursor within the YAML front matter
-// to a key or value token. The cursor's column is used to distinguish:
-// inside the indent/key range yields TokenFrontMatterKey, past the
-// colon yields TokenFrontMatterValue.
+// to a key or value token. Three line shapes are recognized:
+//
+//   - `key: value` scalar — column ≤ colon yields TokenFrontMatterKey,
+//     past the colon yields TokenFrontMatterValue.
+//   - `key:` followed by a block list — the cursor lands on the key.
+//   - `  - item` — list-item line under the most recent key. Returns
+//     TokenFrontMatterValue with FrontMatterKey set to the parent
+//     key and FrontMatterValue set to the trimmed item, so callers
+//     can resolve `kinds:` block-list assignments the same way
+//     they handle inline `kind: value`.
+//
+// The trailing-key form is the only case the previous regex-only
+// approach mishandled — Markdown `kinds:` lists are the canonical
+// way to assign kinds, so missing them broke navigation on every
+// real workspace.
 func locateInFrontMatter(fm []byte, line, col int) LocateResult {
 	if line < 1 {
 		return LocateResult{Tag: TokenNone}
@@ -433,6 +445,14 @@ func locateInFrontMatter(fm []byte, line, col int) LocateResult {
 		return LocateResult{Tag: TokenNone}
 	}
 	row := string(lines[line-1])
+	if item, ok := frontMatterListItem(row); ok {
+		parent := frontMatterParentKey(lines, line-1)
+		return LocateResult{
+			Tag:              TokenFrontMatterValue,
+			FrontMatterKey:   parent,
+			FrontMatterValue: item,
+		}
+	}
 	colonIdx := strings.IndexByte(row, ':')
 	if colonIdx < 0 {
 		return LocateResult{Tag: TokenNone}
@@ -450,6 +470,45 @@ func locateInFrontMatter(fm []byte, line, col int) LocateResult {
 		FrontMatterKey:   key,
 		FrontMatterValue: value,
 	}
+}
+
+// frontMatterListItem returns the trimmed item value when row is a
+// YAML block-list line ("  - foo" or "- foo"). Inline `[a, b]` and
+// quoted forms are intentionally not handled here — those parse as
+// scalars on the parent line.
+func frontMatterListItem(row string) (string, bool) {
+	trimmed := strings.TrimLeft(row, " \t")
+	if !strings.HasPrefix(trimmed, "- ") && trimmed != "-" {
+		return "", false
+	}
+	if trimmed == "-" {
+		return "", true
+	}
+	return strings.Trim(strings.TrimPrefix(trimmed, "- "), `"' `), true
+}
+
+// frontMatterParentKey scans backward from idx for the most recent
+// line that introduces a key (`name:` form). Lines deeper than the
+// item's indent (further to the right) cannot be the parent, but
+// the indent calculation here is intentionally lenient: any prior
+// `key:` line is treated as a candidate, since the canonical
+// `kinds:\n  - foo` form has the parent column 0 and child column 2.
+func frontMatterParentKey(lines [][]byte, idx int) string {
+	for i := idx - 1; i >= 0; i-- {
+		row := string(lines[i])
+		trim := strings.TrimSpace(row)
+		if trim == "" {
+			continue
+		}
+		// Skip another list item — not a key.
+		if strings.HasPrefix(strings.TrimLeft(row, " \t"), "- ") {
+			continue
+		}
+		if c := strings.IndexByte(row, ':'); c >= 0 {
+			return strings.TrimSpace(row[:c])
+		}
+	}
+	return ""
 }
 
 // offsetAt converts a 1-based (line, col) position to a byte offset

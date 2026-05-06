@@ -12,6 +12,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/archetype/gensection"
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/mdtext"
+	"github.com/jeduden/mdsmith/internal/yamlutil"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
@@ -207,13 +208,16 @@ func lineOfOffset(source []byte, offset int) int {
 
 // frontMatterSymbols extracts top-level YAML keys from the front
 // matter prefix and returns one Symbol per key. Lines are 1-based
-// from the start of the file.
+// from the start of the file. Parsing goes through yamlutil so the
+// index never expands a YAML alias on user-controlled content — the
+// rest of mdsmith treats every front-matter parse as a potential
+// alias-bomb vector and the symbol index has to match.
 func frontMatterSymbols(filePath string, fm []byte) []Symbol {
 	if len(fm) == 0 {
 		return nil
 	}
-	var node yaml.Node
-	if err := yaml.Unmarshal(stripDelimiters(fm), &node); err != nil {
+	node, err := yamlutil.UnmarshalNodeSafe(stripDelimiters(fm))
+	if err != nil {
 		return nil
 	}
 	if node.Kind != yaml.DocumentNode || len(node.Content) == 0 {
@@ -259,12 +263,14 @@ func stripDelimiters(fm []byte) []byte {
 
 // frontMatterScalar returns a top-level scalar key from front matter
 // as a string. Empty string + false when absent or non-scalar.
+// yamlutil.UnmarshalSafe rejects anchors/aliases so a malicious file
+// can't trigger expansion during the symbol-index build.
 func frontMatterScalar(fm []byte, key string) (string, bool) {
 	if len(fm) == 0 {
 		return "", false
 	}
 	var m map[string]any
-	if err := yaml.Unmarshal(stripDelimiters(fm), &m); err != nil {
+	if err := yamlutil.UnmarshalSafe(stripDelimiters(fm), &m); err != nil {
 		return "", false
 	}
 	v, ok := m[key]
@@ -282,12 +288,14 @@ func frontMatterScalar(fm []byte, key string) (string, bool) {
 }
 
 // frontMatterStringList returns a top-level YAML list of strings.
+// Parses via yamlutil so YAML aliases are rejected before any
+// expansion can happen on the user's input.
 func frontMatterStringList(fm []byte, key string) ([]string, bool) {
 	if len(fm) == 0 {
 		return nil, false
 	}
 	var m map[string]any
-	if err := yaml.Unmarshal(stripDelimiters(fm), &m); err != nil {
+	if err := yamlutil.UnmarshalSafe(stripDelimiters(fm), &m); err != nil {
 		return nil, false
 	}
 	v, ok := m[key]

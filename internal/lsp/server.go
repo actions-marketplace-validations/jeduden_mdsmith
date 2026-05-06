@@ -539,9 +539,31 @@ func (s *Server) handleDidChangeWatchedFiles(ctx context.Context, raw json.RawMe
 		}
 		return
 	}
+	openPaths := s.openDocPaths()
 	for _, path := range mdChanges {
+		// Skip files the editor currently has open as a buffer — the
+		// watcher event would otherwise overwrite the live edits with
+		// the stale on-disk content, and symbol navigation would
+		// silently jump back to the last saved version. Open buffers
+		// are kept in sync via didOpen/didChange instead.
+		if openPaths[path] {
+			continue
+		}
 		s.indexReloadFromDisk(path)
 	}
+}
+
+// openDocPaths returns the set of filesystem paths currently held as
+// open buffers. The map is keyed by the same absolute path the
+// watcher emits so callers can do a direct lookup.
+func (s *Server) openDocPaths() map[string]bool {
+	out := make(map[string]bool)
+	for _, uri := range s.docs.openURIs() {
+		if doc, ok := s.docs.get(uri); ok {
+			out[doc.path] = true
+		}
+	}
+	return out
 }
 
 func (s *Server) handleDidChangeConfiguration(ctx context.Context) {

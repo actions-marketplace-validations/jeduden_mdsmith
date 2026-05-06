@@ -258,3 +258,40 @@ func TestRefStyleLinkEdge(t *testing.T) {
 	}
 	assert.True(t, saw, "edges: %+v", fe.Outgoing)
 }
+
+func TestUpdateWithKindsOverridesFrontMatter(t *testing.T) {
+	t.Parallel()
+	idx := New("/root")
+	src := "---\nkinds:\n  - guide\n---\n# A\n"
+	idx.UpdateWithKinds("a.md", []byte(src), []string{"guide", "assigned"})
+	fe, ok := idx.File("a.md")
+	require.True(t, ok)
+	assert.Equal(t, []string{"guide", "assigned"}, fe.Kinds)
+	assert.ElementsMatch(t, []string{"a.md"}, idx.FilesByKind("assigned"))
+}
+
+func TestUpdateWithKindsNilFallsBackToFrontMatter(t *testing.T) {
+	t.Parallel()
+	idx := New("/root")
+	src := "---\nkinds:\n  - guide\n---\n# A\n"
+	idx.UpdateWithKinds("a.md", []byte(src), nil)
+	fe, ok := idx.File("a.md")
+	require.True(t, ok)
+	assert.Equal(t, []string{"guide"}, fe.Kinds)
+}
+
+func TestFrontMatterAliasRejected(t *testing.T) {
+	t.Parallel()
+	// YAML alias bomb — UnmarshalSafe should reject it without
+	// expanding any node, so the index either skips the file or
+	// produces an empty front-matter symbol set.
+	src := "---\na: &a [\"x\"]\nb: &b [*a, *a]\nc: &c [*b, *b]\n---\n# Body\n"
+	idx := New("/root")
+	idx.Update("a.md", []byte(src))
+	fe, ok := idx.File("a.md")
+	require.True(t, ok)
+	for _, s := range fe.Symbols {
+		assert.NotEqual(t, SymbolFrontMatter, s.Kind,
+			"alias-bearing front matter must not produce front-matter symbols: %+v", s)
+	}
+}

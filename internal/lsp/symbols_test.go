@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -313,6 +314,213 @@ func TestOutgoingCallsForIncludeChain(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &calls))
 	require.Len(t, calls, 1)
 	assert.Equal(t, "b.md", calls[0].To.Name)
+}
+
+func TestIncomingCallsCoalescesByFile(t *testing.T) {
+	t.Parallel()
+	// b.md links to a.md twice — the call-hierarchy view should show
+	// b.md once with two fromRanges, not two separate caller items.
+	srcA := "# A\n"
+	srcB := "# B\n\n[one](./a.md)\n[two](./a.md)\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": srcA, "b.md": srcB})
+	uriA := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uriA, LanguageID: "markdown", Version: 1, Text: srcA},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+
+	raw, errResp := h.request("textDocument/prepareCallHierarchy", textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uriA},
+		Position:     Position{Line: 0, Character: 0},
+	})
+	require.Nil(t, errResp)
+	var items []callHierarchyItem
+	require.NoError(t, json.Unmarshal(raw, &items))
+	require.Len(t, items, 1)
+
+	raw, errResp = h.request("callHierarchy/incomingCalls", callHierarchyIncomingCallsParams{Item: items[0]})
+	require.Nil(t, errResp)
+	var calls []callHierarchyIncomingCall
+	require.NoError(t, json.Unmarshal(raw, &calls))
+	require.Len(t, calls, 1, "expected one caller (coalesced)")
+	assert.Len(t, calls[0].FromRanges, 2, "expected two fromRanges for the two links")
+}
+
+func TestOutgoingCallsScopedToHeading(t *testing.T) {
+	t.Parallel()
+	// a.md has two H2 sections, only the first links to b.md. A
+	// heading-scoped outgoingCalls on the second section must not
+	// inherit calls from the first.
+	srcA := "# Top\n\n## First\n\n[one](./b.md)\n\n## Second\n\nno links here\n"
+	srcB := "# B\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": srcA, "b.md": srcB})
+	uriA := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uriA, LanguageID: "markdown", Version: 1, Text: srcA},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+
+	// Cursor on `## Second` (line 7, 1-based → 6).
+	raw, errResp := h.request("textDocument/prepareCallHierarchy", textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uriA},
+		Position:     Position{Line: 6, Character: 4},
+	})
+	require.Nil(t, errResp)
+	var items []callHierarchyItem
+	require.NoError(t, json.Unmarshal(raw, &items))
+	require.Len(t, items, 1)
+	require.NotNil(t, items[0].Data)
+	assert.Equal(t, "second", items[0].Data.Anchor)
+
+	raw, errResp = h.request("callHierarchy/outgoingCalls", callHierarchyOutgoingCallsParams{Item: items[0]})
+	require.Nil(t, errResp)
+	var calls []callHierarchyOutgoingCall
+	require.NoError(t, json.Unmarshal(raw, &calls))
+	assert.Empty(t, calls, "Second section has no links; outgoingCalls must not leak from First")
+}
+
+func TestReferencesOnDirectiveArgIncludesIncludeDirectives(t *testing.T) {
+	t.Parallel()
+	// a.md is the include target; b.md and c.md both <?include?> it.
+	// We turn off lint runs so the (stateful, package-level) include
+	// rule isn't invoked by didOpen — this test exercises symbol
+	// navigation, not lint, and the include rule's chain state would
+	// otherwise race with sibling parallel tests sharing the
+	// rule.Register singleton.
+	srcTarget := "# Target\n"
+	srcIncluder := "# B\n\n<?include\nfile: \"./a.md\"\n?>\n<?/include?>\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{
+		"a.md": srcTarget,
+		"b.md": srcIncluder,
+		"c.md": strings.Replace(srcIncluder, "# B", "# C", 1),
+	})
+	h.srv.settingsMu.Lock()
+	h.srv.settings.Run = runOff
+	h.srv.settingsMu.Unlock()
+
+	uriB := rootURI + "/b.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uriB, LanguageID: "markdown", Version: 1, Text: srcIncluder},
+	})
+
+	// Cursor inside `file: "./a.md"` on line 4 of b.md.
+	raw, errResp := h.request("textDocument/references", referencesParams{
+		textDocumentPositionParams: textDocumentPositionParams{
+			TextDocument: textDocumentIdentifier{URI: uriB},
+			Position:     Position{Line: 3, Character: 8},
+		},
+		Context: referencesContext{IncludeDeclaration: false},
+	})
+	require.Nil(t, errResp)
+	var locs []location
+	require.NoError(t, json.Unmarshal(raw, &locs))
+	// Both b.md and c.md include a.md → two locations.
+	assert.GreaterOrEqual(t, len(locs), 2,
+		"expected references to include both <?include?> directives, got %v", locs)
+}
+
+func TestImplementationIncludesKindAssignment(t *testing.T) {
+	t.Parallel()
+	// `implementation` on a `kind:` value must surface every file
+	// assigned that kind, including config-driven `kind-assignment`
+	// matches — front-matter declarations alone aren't enough.
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, ".mdsmith.yml"), []byte(`
+kinds:
+  guide: {}
+kind-assignment:
+  - glob: ["assigned.md"]
+    kinds: [guide]
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "fm.md"),
+		[]byte("---\nkinds:\n  - guide\n---\n# FM declared\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "assigned.md"),
+		[]byte("# Globbed in by config\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "src.md"),
+		[]byte("---\nkind: guide\n---\n# Cursor here\n"), 0o644))
+
+	h := newHarness(t)
+	rootURI := pathToFileURI(t, tmp)
+	_, errResp := h.request("initialize", initializeParams{
+		RootURI:      &rootURI,
+		Capabilities: clientCapabilities{},
+	})
+	require.Nil(t, errResp)
+	h.srv.settingsMu.Lock()
+	h.srv.settings.Run = runOff
+	h.srv.settingsMu.Unlock()
+	h.srv.reloadConfig()
+	h.srv.invalidateIndex()
+
+	uri := rootURI + "/src.md"
+	srcText := "---\nkind: guide\n---\n# Cursor here\n"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{
+			URI: uri, LanguageID: "markdown", Version: 1, Text: srcText,
+		},
+	})
+
+	// Cursor on `kind: guide` value (line 2, char 8).
+	raw, errResp := h.request("textDocument/implementation", textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     Position{Line: 1, Character: 8},
+	})
+	require.Nil(t, errResp)
+	var locs []location
+	require.NoError(t, json.Unmarshal(raw, &locs))
+	uris := map[string]bool{}
+	for _, l := range locs {
+		uris[l.URI] = true
+	}
+	assert.True(t, uris[rootURI+"/fm.md"], "expected fm.md in implementations: %v", locs)
+	assert.True(t, uris[rootURI+"/assigned.md"], "expected assigned.md in implementations: %v", locs)
+}
+
+func TestWatcherSkipsOpenBuffer(t *testing.T) {
+	t.Parallel()
+	// File on disk has no headings. Editor buffer has one, so the
+	// index should reflect the open buffer. A subsequent
+	// didChangeWatchedFiles event for the same file must not
+	// overwrite the index entry with the stale on-disk content.
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "a.md"), []byte("text only\n"), 0o644))
+	h := newHarness(t)
+	rootURI := pathToFileURI(t, tmp)
+	_, errResp := h.request("initialize", initializeParams{
+		RootURI:      &rootURI,
+		Capabilities: clientCapabilities{},
+	})
+	require.Nil(t, errResp)
+	h.srv.settingsMu.Lock()
+	h.srv.settings.Run = runOff
+	h.srv.settingsMu.Unlock()
+
+	uri := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uri, LanguageID: "markdown", Version: 1, Text: "# Live Heading\n"},
+	})
+
+	// Force the index to build with the open buffer's contents.
+	_, _ = h.request("textDocument/documentSymbol", documentSymbolParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+	})
+
+	// Fire a watcher event for the same file. With the bug, this
+	// would re-read the on-disk content and replace the index entry,
+	// hiding the live heading.
+	h.notify("workspace/didChangeWatchedFiles", didChangeWatchedFilesParams{
+		Changes: []fileEvent{{URI: uri, Type: 2}},
+	})
+
+	// Documentsymbol should still see the live heading.
+	raw, errResp := h.request("textDocument/documentSymbol", documentSymbolParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+	})
+	require.Nil(t, errResp)
+	var syms []documentSymbol
+	require.NoError(t, json.Unmarshal(raw, &syms))
+	require.NotEmpty(t, syms)
+	assert.Equal(t, "Live Heading", syms[0].Name)
 }
 
 // silence unused warnings in this file

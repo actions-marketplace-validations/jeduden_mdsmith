@@ -10,7 +10,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/discovery"
+	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/lsp/index"
 )
 
@@ -34,18 +36,7 @@ func (s *Server) ensureIndex() *index.Index {
 			FollowSymlinks: cfg != nil && cfg.FollowSymlinks,
 		})
 		if err == nil {
-			rels := make([]string, 0, len(files))
-			for _, abs := range files {
-				rel := workspaceRelative(root, abs)
-				if rel == "" {
-					continue
-				}
-				rels = append(rels, rel)
-			}
-			idx.Build(rels, func(rel string) ([]byte, error) {
-				abs := filepath.Join(root, filepath.FromSlash(rel))
-				return os.ReadFile(abs) //nolint:gosec // workspace-rooted, glob-validated
-			})
+			s.buildIndexFromDisk(idx, cfg, root, files)
 		}
 	}
 	// Layer in any open buffers so unsaved edits are visible to
@@ -59,10 +50,62 @@ func (s *Server) ensureIndex() *index.Index {
 		if rel == "" {
 			continue
 		}
-		idx.Update(rel, doc.text)
+		idx.UpdateWithKinds(rel, doc.text, effectiveKindsFor(cfg, rel, doc.text))
 	}
 	s.idx = idx
 	return idx
+}
+
+// buildIndexFromDisk walks the discovered files and feeds each into
+// the index using the resolved effective-kinds list (front matter ∪
+// config kind-assignment).
+func (s *Server) buildIndexFromDisk(idx *index.Index, cfg *config.Config, root string, files []string) {
+	rels := make([]string, 0, len(files))
+	for _, abs := range files {
+		rel := workspaceRelative(root, abs)
+		if rel == "" {
+			continue
+		}
+		rels = append(rels, rel)
+	}
+	type loaded struct {
+		path string
+		data []byte
+	}
+	cache := make(map[string]loaded, len(rels))
+	idx.Build(rels, func(rel string) ([]byte, error) {
+		abs := filepath.Join(root, filepath.FromSlash(rel))
+		data, err := os.ReadFile(abs) //nolint:gosec // workspace-rooted, glob-validated
+		if err == nil {
+			cache[rel] = loaded{path: rel, data: data}
+		}
+		return data, err
+	})
+	// Re-emit each file with config-resolved kinds so front-matter-only
+	// kinds: lists are augmented by kind-assignment globs.
+	for _, rel := range rels {
+		l, ok := cache[rel]
+		if !ok {
+			continue
+		}
+		idx.UpdateWithKinds(rel, l.data, effectiveKindsFor(cfg, rel, l.data))
+	}
+}
+
+// effectiveKindsFor resolves the effective kind list for a file
+// given the config and the live source bytes. Returns nil when no
+// config is loaded (so UpdateWithKinds falls back to front-matter
+// kinds parsed by buildFileEntry).
+func effectiveKindsFor(cfg *config.Config, rel string, source []byte) []string {
+	if cfg == nil {
+		return nil
+	}
+	fmBytes, _ := lint.StripFrontMatter(source)
+	fmKinds, err := lint.ParseFrontMatterKinds(fmBytes)
+	if err != nil {
+		fmKinds = nil
+	}
+	return config.EffectiveKinds(cfg, rel, fmKinds)
 }
 
 // invalidateIndex drops the cached index. The next symbol request
@@ -85,12 +128,12 @@ func (s *Server) indexUpdate(absOrRel string, source []byte) {
 		// open buffers (this one included).
 		return
 	}
-	_, _, root := s.snapshotConfig()
+	cfg, _, root := s.snapshotConfig()
 	rel := workspaceRelative(root, absOrRel)
 	if rel == "" {
 		rel = absOrRel
 	}
-	idx.Update(index.NormalizePath(rel), source)
+	idx.UpdateWithKinds(index.NormalizePath(rel), source, effectiveKindsFor(cfg, rel, source))
 }
 
 // indexReloadFromDisk re-reads path from disk and replaces its
@@ -102,7 +145,7 @@ func (s *Server) indexReloadFromDisk(absOrRel string) {
 	if idx == nil {
 		return
 	}
-	_, _, root := s.snapshotConfig()
+	cfg, _, root := s.snapshotConfig()
 	rel := workspaceRelative(root, absOrRel)
 	if rel == "" {
 		rel = absOrRel
@@ -116,7 +159,7 @@ func (s *Server) indexReloadFromDisk(absOrRel string) {
 		idx.Remove(index.NormalizePath(rel))
 		return
 	}
-	idx.Update(index.NormalizePath(rel), data)
+	idx.UpdateWithKinds(index.NormalizePath(rel), data, effectiveKindsFor(cfg, rel, data))
 }
 
 // indexPatterns returns the glob patterns the workspace index walks.
@@ -678,11 +721,15 @@ func (s *Server) handleReferences(msg *requestMessage) {
 			out = s.locationsForFilesByKind(res.FrontMatterValue, idx)
 		}
 	case index.TokenDirectiveArg:
-		// References to "this directive's target file" — same as
-		// references to that file's top.
+		// References on a directive argument resolve to "every
+		// workspace edge that points at this file" — file links
+		// (no anchor) plus every <?include?>, <?build?>, and
+		// <?catalog?>. Limiting to EdgeFileLink (the previous
+		// behavior) hid the directive-to-directive references that
+		// users actually need when navigating include / build chains.
 		if res.DirectiveTargetFile != "" {
 			tgt := index.NormalizePath(path.Clean(path.Join(path.Dir(rel), filepath.ToSlash(res.DirectiveTargetFile))))
-			out = s.locationsForFileTop(tgt, idx)
+			out = s.locationsForFileReferences(tgt, idx)
 		}
 	}
 	if out == nil {
@@ -730,6 +777,39 @@ func (s *Server) locationsForFileTop(file string, idx *index.Index) []location {
 			continue
 		}
 		if e.TargetAnchor != "" {
+			continue
+		}
+		out = append(out, location{
+			URI:   s.workspaceURI(e.SourceFile),
+			Range: rangeAt(e.SourceLine, e.SourceCol, nil),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].URI != out[j].URI {
+			return out[i].URI < out[j].URI
+		}
+		return out[i].Range.Start.Line < out[j].Range.Start.Line
+	})
+	return out
+}
+
+// locationsForFileReferences returns every workspace edge whose
+// target is file: the union of file-top links and the include /
+// build / catalog directives that target this file. Reference-style
+// link uses are not included because they target a label, not a
+// file path.
+func (s *Server) locationsForFileReferences(file string, idx *index.Index) []location {
+	edges := idx.IncomingEdges(file, "")
+	var out []location
+	for _, e := range edges {
+		switch e.Kind {
+		case index.EdgeFileLink:
+			if e.TargetAnchor != "" {
+				continue
+			}
+		case index.EdgeInclude, index.EdgeBuild, index.EdgeCatalog:
+			// keep
+		default:
 			continue
 		}
 		out = append(out, location{
@@ -873,6 +953,10 @@ func lineCount(source []byte) int {
 }
 
 // handleIncomingCalls returns every workspace edge into the item.
+// Edges from the same source file are coalesced into one entry with
+// multiple `fromRanges`; LSP clients render each fromRange as a
+// click target under the same caller, so emitting one item per edge
+// would show the same caller N times in the call-hierarchy view.
 func (s *Server) handleIncomingCalls(msg *requestMessage) {
 	var p callHierarchyIncomingCallsParams
 	if err := json.Unmarshal(msg.Params, &p); err != nil {
@@ -886,26 +970,44 @@ func (s *Server) handleIncomingCalls(msg *requestMessage) {
 	idx := s.ensureIndex()
 	edges := idx.IncomingEdges(p.Item.Data.File, p.Item.Data.Anchor)
 
-	out := make([]callHierarchyIncomingCall, 0, len(edges))
+	type bucket struct {
+		item   callHierarchyItem
+		ranges []Range
+	}
+	order := make([]string, 0, len(edges))
+	groups := make(map[string]*bucket, len(edges))
 	for _, e := range edges {
-		fromName := e.SourceFile
-		fromURI := s.workspaceURI(e.SourceFile)
-		out = append(out, callHierarchyIncomingCall{
-			From: callHierarchyItem{
-				Name:           fromName,
+		r := rangeAt(e.SourceLine, e.SourceCol, nil)
+		if g, ok := groups[e.SourceFile]; ok {
+			g.ranges = append(g.ranges, r)
+			continue
+		}
+		groups[e.SourceFile] = &bucket{
+			item: callHierarchyItem{
+				Name:           e.SourceFile,
 				Kind:           symbolKindString,
-				URI:            fromURI,
-				Range:          rangeAt(e.SourceLine, e.SourceCol, nil),
-				SelectionRange: rangeAt(e.SourceLine, e.SourceCol, nil),
+				URI:            s.workspaceURI(e.SourceFile),
+				Range:          r,
+				SelectionRange: r,
 				Data:           &callHierarchyData{File: e.SourceFile},
 			},
-			FromRanges: []Range{rangeAt(e.SourceLine, e.SourceCol, nil)},
-		})
+			ranges: []Range{r},
+		}
+		order = append(order, e.SourceFile)
+	}
+	out := make([]callHierarchyIncomingCall, 0, len(order))
+	for _, k := range order {
+		g := groups[k]
+		out = append(out, callHierarchyIncomingCall{From: g.item, FromRanges: g.ranges})
 	}
 	_ = s.t.writeResponse(msg.ID, out)
 }
 
-// handleOutgoingCalls returns every edge out of the item.
+// handleOutgoingCalls returns every edge out of the item, scoped
+// to the section when the item carries an anchor (heading-level
+// call hierarchy). Edges to the same target file are coalesced into
+// one entry with multiple `fromRanges`, matching the LSP grouping
+// contract.
 func (s *Server) handleOutgoingCalls(msg *requestMessage) {
 	var p callHierarchyOutgoingCallsParams
 	if err := json.Unmarshal(msg.Params, &p); err != nil {
@@ -918,22 +1020,40 @@ func (s *Server) handleOutgoingCalls(msg *requestMessage) {
 	}
 	idx := s.ensureIndex()
 	edges := idx.OutgoingEdges(p.Item.Data.File)
+	startLine, endLine := outgoingScope(idx, p.Item.Data)
 
-	out := make([]callHierarchyOutgoingCall, 0, len(edges))
+	type bucket struct {
+		item   callHierarchyItem
+		ranges []Range
+	}
+	order := make([]string, 0, len(edges))
+	groups := make(map[string]*bucket, len(edges))
 	for _, e := range edges {
-		// Skip same-file anchor links and reference-style links —
-		// the call-hierarchy view only exposes cross-file flow.
+		// Same-file anchor / ref-style links are intra-document and
+		// don't fit the cross-file call-graph view.
 		if e.Kind == index.EdgeAnchorLink || e.Kind == index.EdgeRefLink {
+			continue
+		}
+		// Heading-scoped item: skip edges outside the section's
+		// source range so a heading with no outbound links doesn't
+		// inherit calls from sibling sections.
+		if endLine > 0 && (e.SourceLine < startLine || e.SourceLine > endLine) {
 			continue
 		}
 		toFile := e.TargetFile
 		if toFile == "" {
-			// Catalog without expansion — point back at the host
-			// directory as a placeholder.
+			// Catalog without expansion: point at the host file's
+			// directory as a placeholder. Plan 131 documents this
+			// fallback explicitly under "Open Questions".
 			toFile = path.Dir(p.Item.Data.File)
 		}
-		out = append(out, callHierarchyOutgoingCall{
-			To: callHierarchyItem{
+		r := rangeAt(e.SourceLine, e.SourceCol, nil)
+		if g, ok := groups[toFile]; ok {
+			g.ranges = append(g.ranges, r)
+			continue
+		}
+		groups[toFile] = &bucket{
+			item: callHierarchyItem{
 				Name:           toFile,
 				Kind:           symbolKindString,
 				URI:            s.workspaceURI(toFile),
@@ -941,8 +1061,34 @@ func (s *Server) handleOutgoingCalls(msg *requestMessage) {
 				SelectionRange: Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 0}},
 				Data:           &callHierarchyData{File: toFile, Anchor: e.TargetAnchor},
 			},
-			FromRanges: []Range{rangeAt(e.SourceLine, e.SourceCol, nil)},
-		})
+			ranges: []Range{r},
+		}
+		order = append(order, toFile)
+	}
+	out := make([]callHierarchyOutgoingCall, 0, len(order))
+	for _, k := range order {
+		g := groups[k]
+		out = append(out, callHierarchyOutgoingCall{To: g.item, FromRanges: g.ranges})
 	}
 	_ = s.t.writeResponse(msg.ID, out)
+}
+
+// outgoingScope returns the [startLine, endLine] bound for outgoing
+// edges when the call-hierarchy item is heading-scoped. Returns
+// (1, 0) — i.e. an open-ended range — for file-level items so the
+// caller treats every edge as in scope.
+func outgoingScope(idx *index.Index, data *callHierarchyData) (int, int) {
+	if data == nil || data.Anchor == "" {
+		return 1, 0
+	}
+	fe, ok := idx.File(data.File)
+	if !ok {
+		return 1, 0
+	}
+	for _, sym := range fe.Symbols {
+		if sym.Kind == index.SymbolHeading && sym.Anchor == data.Anchor {
+			return sym.StartLine, sym.EndLine
+		}
+	}
+	return 1, 0
 }

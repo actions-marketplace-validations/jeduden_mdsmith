@@ -208,6 +208,18 @@ func mergeCategories(base, override map[string]bool) map[string]bool {
 	return result
 }
 
+// EffectiveKinds returns the same list resolveEffectiveKinds computes
+// internally — the front-matter kinds plus every config-driven
+// kind-assignment match in order, deduplicated. Exposed for callers
+// outside the config package (e.g. the LSP symbol index) that need
+// effective-kind resolution without re-implementing the merge rules.
+func EffectiveKinds(cfg *Config, filePath string, fmKinds []string) []string {
+	if cfg == nil {
+		return append([]string(nil), fmKinds...)
+	}
+	return resolveEffectiveKinds(cfg, filePath, fmKinds)
+}
+
 // resolveEffectiveKinds builds the ordered, deduplicated effective kind list
 // for a file. fmKinds are the kinds declared in the file's front matter;
 // they come first. kind-assignment matches are appended in config order.

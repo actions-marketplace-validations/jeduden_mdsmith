@@ -100,3 +100,23 @@ func TestLocateNoneOnPlainProse(t *testing.T) {
 	res := Locator{Path: "a.md"}.Locate([]byte(src), 3, 5)
 	assert.Equal(t, TokenNone, res.Tag)
 }
+
+func TestLocateFrontMatterKindsListItem(t *testing.T) {
+	t.Parallel()
+	src := "---\ntitle: T\nkinds:\n  - guide\n  - reference\n---\n# Body\n"
+	// Cursor on `  - guide` line (line 4).
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 4, 5)
+	assert.Equal(t, TokenFrontMatterValue, res.Tag)
+	assert.Equal(t, "kinds", res.FrontMatterKey)
+	assert.Equal(t, "guide", res.FrontMatterValue)
+}
+
+func TestLocateFrontMatterKindsListItemWithDifferentValues(t *testing.T) {
+	t.Parallel()
+	src := "---\nkinds:\n  - guide\n  - reference\n---\n# Body\n"
+	// Cursor on the second list item.
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 4, 5)
+	assert.Equal(t, TokenFrontMatterValue, res.Tag)
+	assert.Equal(t, "kinds", res.FrontMatterKey)
+	assert.Equal(t, "reference", res.FrontMatterValue)
+}

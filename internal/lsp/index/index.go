@@ -220,6 +220,30 @@ func (i *Index) Update(path string, source []byte) {
 	i.upsert(fe)
 }
 
+// UpdateWithKinds is Update plus an override for the file's effective
+// kinds list. Callers pass the resolved (front-matter ∪ kind-
+// assignment) list so workspace-symbol search and `kind:` navigation
+// see config-driven assignments, not just front-matter declarations.
+// When kinds is nil the result is identical to Update.
+func (i *Index) UpdateWithKinds(path string, source []byte, kinds []string) {
+	if i == nil {
+		return
+	}
+	path = NormalizePath(path)
+	if path == "" {
+		return
+	}
+	if len(source) == 0 {
+		i.Remove(path)
+		return
+	}
+	fe := buildFileEntry(path, source)
+	if kinds != nil {
+		fe.Kinds = append([]string(nil), kinds...)
+	}
+	i.upsert(fe)
+}
+
 // Build walks the workspace and indexes every Markdown file the
 // supplied loader yields. The loader is called once per discovered
 // path; returning an error skips that file. files is the list of
