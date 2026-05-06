@@ -366,9 +366,6 @@ func piContainsLine(source []byte, pi *lint.ProcessingInstruction, line int) boo
 	endLine := startLine
 	if pi.HasClosure() && pi.ClosureLine.Start > startSeg.Start {
 		endLine = lineOfOffset(source, pi.ClosureLine.Start)
-	} else if pi.Lines().Len() > 1 {
-		last := pi.Lines().At(pi.Lines().Len() - 1)
-		endLine = lineOfOffset(source, last.Start)
 	}
 	return line >= startLine && line <= endLine
 }

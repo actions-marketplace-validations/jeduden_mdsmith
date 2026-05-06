@@ -203,6 +203,160 @@ func TestResolveRelTargetExported(t *testing.T) {
 	assert.Empty(t, ResolveRelTarget("docs/a.md", "../../escape.md"))
 }
 
+func TestCollectLinkEdgesAnchorOnlyTakesAnchorBranch(t *testing.T) {
+	t.Parallel()
+	// `[x](#sec)` exercises the LocalAnchor=true branch of
+	// collectLinkEdges; the case `t.Path != ""` is then false, so
+	// the file-link arm is skipped.
+	idx := New("/r")
+	idx.Update("a.md", []byte("# T\n\n## Sec\n\n[x](#sec)\n"))
+	fe, ok := idx.File("a.md")
+	require.True(t, ok)
+	var anchorEdges, fileEdges int
+	for _, e := range fe.Outgoing {
+		switch e.Kind {
+		case EdgeAnchorLink:
+			anchorEdges++
+		case EdgeFileLink:
+			fileEdges++
+		}
+	}
+	assert.Equal(t, 1, anchorEdges)
+	assert.Equal(t, 0, fileEdges)
+}
+
+func TestCollectDirectiveEdgesEmptyFileParam(t *testing.T) {
+	t.Parallel()
+	// Empty file: → the `file != ""` guard fires false, no edge.
+	src := "# T\n\n<?include\nfile: \"\"\n?>\n<?/include?>\n"
+	idx := New("/r")
+	idx.Update("a.md", []byte(src))
+	fe, ok := idx.File("a.md")
+	require.True(t, ok)
+	for _, e := range fe.Outgoing {
+		assert.NotEqual(t, EdgeInclude, e.Kind)
+	}
+}
+
+func TestCollectDirectiveEdgesAbsoluteBuildSource(t *testing.T) {
+	t.Parallel()
+	// Absolute source: → resolveRelTarget returns "" → tgt != ""
+	// is false, no edge emitted.
+	src := "# T\n\n<?build\nsource: \"/abs.md\"\n?>\n<?/build?>\n"
+	idx := New("/r")
+	idx.Update("a.md", []byte(src))
+	fe, ok := idx.File("a.md")
+	require.True(t, ok)
+	for _, e := range fe.Outgoing {
+		assert.NotEqual(t, EdgeBuild, e.Kind)
+	}
+}
+
+func TestCatalogEdgeOnlyKindMatched(t *testing.T) {
+	t.Parallel()
+	// `<?catalog?>` exercises the catalog case of the switch.
+	src := "# T\n\n<?catalog\nglob:\n  - \"*.md\"\n?>\n<?/catalog?>\n"
+	idx := New("/r")
+	idx.Update("a.md", []byte(src))
+	fe, ok := idx.File("a.md")
+	require.True(t, ok)
+	var sawCatalog bool
+	for _, e := range fe.Outgoing {
+		if e.Kind == EdgeCatalog {
+			sawCatalog = true
+		}
+	}
+	assert.True(t, sawCatalog)
+}
+
+func TestIncomingEdgesMatchesEmptyTargetFile(t *testing.T) {
+	t.Parallel()
+	// An EdgeAnchorLink has empty TargetFile; IncomingEdges
+	// "tFile == "" → use SourceFile" branch fires when the caller
+	// asks for the same file, which is the only context where
+	// anchor edges count as incoming.
+	idx := New("/r")
+	idx.Update("a.md", []byte("# A\n\n## Sec\n\n[x](#sec)\n"))
+	got := idx.IncomingEdges("a.md", "sec")
+	assert.NotEmpty(t, got)
+}
+
+func TestIncomingEdgesAnchorMismatch(t *testing.T) {
+	t.Parallel()
+	// Anchor mismatch path: edge exists for "sec" but caller asks
+	// for "other".
+	idx := New("/r")
+	idx.Update("a.md", []byte("# A\n\n## Sec\n\n[x](#sec)\n"))
+	got := idx.IncomingEdges("a.md", "other")
+	assert.Empty(t, got)
+}
+
+func TestUniqueAnchorRetriesPastFirstSuffix(t *testing.T) {
+	t.Parallel()
+	// Pre-existing "same-1" forces the disambiguator to skip past
+	// it: c=0→1 picks "same-1" (already used) → c=2 picks "same-2".
+	// The inner loop's used[anchor] check fires false on the
+	// second iteration.
+	used := map[string]bool{"same": true, "same-1": true}
+	counts := map[string]int{}
+	got := uniqueAnchor("same", used, counts)
+	assert.Equal(t, "same-2", got)
+}
+
+func TestNodePositionWithLaterTextSegments(t *testing.T) {
+	t.Parallel()
+	// A link with emphasis inside (`[foo *bar* baz](url)`) gives
+	// goldmark multiple text segments. nodePosition should keep
+	// the earliest, exercising the `t.Segment.Start < off` branch
+	// in its compound condition.
+	src := "# T\n\n[foo *bar* baz](./b.md)\n"
+	idx := New("/r")
+	idx.Update("a.md", []byte(src))
+	fe, ok := idx.File("a.md")
+	require.True(t, ok)
+	require.NotEmpty(t, fe.Outgoing)
+	// The recorded source position points at the first byte of
+	// "foo", not the later segments.
+	assert.Equal(t, 3, fe.Outgoing[0].SourceLine)
+}
+
+func TestHeadingPunctuationOnlyEmptySlug(t *testing.T) {
+	t.Parallel()
+	// `# !!!` slugifies to "" — the disambiguator's `a != ""`
+	// guard fires false.
+	src := "# !!!\n\n# foo\n"
+	idx := New("/r")
+	idx.Update("a.md", []byte(src))
+	fe, ok := idx.File("a.md")
+	require.True(t, ok)
+	// `!!!` slugifies to "" so its symbol has an empty anchor; the
+	// `foo` heading still gets its slug. The test fires the
+	// `a != ""` guard's false branch in uniqueAnchor.
+	var anchors []string
+	for _, s := range fe.Symbols {
+		if s.Kind == SymbolHeading {
+			anchors = append(anchors, s.Anchor)
+		}
+	}
+	assert.Contains(t, anchors, "")
+	assert.Contains(t, anchors, "foo")
+}
+
+func TestIncomingEdgesSkipsNonMatchingFiles(t *testing.T) {
+	t.Parallel()
+	// Two files link to different targets. Asking for a.md only
+	// the b→a edge should match — the c→other edge fires the
+	// "tFile != file" branch (true) and is skipped.
+	idx := New("/r")
+	idx.Update("a.md", []byte("# A\n"))
+	idx.Update("other.md", []byte("# Other\n"))
+	idx.Update("b.md", []byte("# B\n\n[a](./a.md)\n"))
+	idx.Update("c.md", []byte("# C\n\n[o](./other.md)\n"))
+	got := idx.IncomingEdges("a.md", "")
+	require.Len(t, got, 1)
+	assert.Equal(t, "b.md", got[0].SourceFile)
+}
+
 func TestParsePIParamsInvalidYAML(t *testing.T) {
 	t.Parallel()
 	// PI body with malformed YAML — parsePIParams returns ok=false,

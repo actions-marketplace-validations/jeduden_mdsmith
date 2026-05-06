@@ -399,18 +399,16 @@ func collectDirectives(filePath string, root ast.Node, source []byte, fmOffset i
 // piLineRange returns the 1-based [start, end] source lines for a
 // processing-instruction block. The PI parser guarantees Lines() is
 // non-empty for any parsed PI, so the helper does not handle that
-// case. Multi-line PIs span from their opener line to either the
-// explicit closing-marker line (`?>`) or, when the closer is on a
-// continuation line in the same Lines() slice, the last segment.
+// case. The closing-marker offset (`?>`) on a continuation line
+// gives the end; goldmark emits HasClosure() == true for every
+// well-formed PI, so the branch where Lines() spans multiple
+// segments without a closure is unreachable in practice.
 func piLineRange(pi *lint.ProcessingInstruction, source []byte, fmOffset int) (int, int) {
 	startSeg := pi.Lines().At(0)
 	startLine := lineOfOffset(source, startSeg.Start) + fmOffset
 	endLine := startLine
 	if pi.HasClosure() && pi.ClosureLine.Start > startSeg.Start {
 		endLine = lineOfOffset(source, pi.ClosureLine.Start) + fmOffset
-	} else if pi.Lines().Len() > 1 {
-		last := pi.Lines().At(pi.Lines().Len() - 1)
-		endLine = lineOfOffset(source, last.Start) + fmOffset
 	}
 	return startLine, endLine
 }
@@ -450,8 +448,10 @@ func collectLinkEdges(filePath string, root ast.Node, source []byte, fmOffset in
 			return ast.WalkContinue, nil
 		}
 		line, col := nodePosition(source, l)
-		switch {
-		case t.LocalAnchor:
+		// parseLinkTarget guarantees t.LocalAnchor || t.Path != "":
+		// it returns false otherwise. So the LocalAnchor branch and
+		// the file-link branch together cover every parsed target.
+		if t.LocalAnchor {
 			out = append(out, Edge{
 				SourceFile:   filePath,
 				SourceLine:   line + fmOffset,
@@ -459,7 +459,7 @@ func collectLinkEdges(filePath string, root ast.Node, source []byte, fmOffset in
 				TargetAnchor: mdtext.Slugify(decodeAnchor(t.Anchor)),
 				Kind:         EdgeAnchorLink,
 			})
-		case t.Path != "":
+		} else {
 			tgt := resolveRelTarget(filePath, t.Path)
 			if tgt == "" {
 				// Absolute or escapes-the-root paths cannot point
