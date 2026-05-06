@@ -162,8 +162,9 @@ func TestParseLinkTargetOpaqueMailto(t *testing.T) {
 func TestCollectLinkRefDefsDuplicateLabel(t *testing.T) {
 	t.Parallel()
 	// Two definitions with the same label — goldmark only registers
-	// the first; the regex still matches both. The build must skip
-	// the second match.
+	// the first; the regex still matches both. The build must emit
+	// exactly one outline entry per label, otherwise the symbol
+	// picker shows duplicates.
 	src := "# T\n\n[a][lab]\n\n[lab]: u1\n[lab]: u2\n"
 	idx := New("/r")
 	idx.Update("a.md", []byte(src))
@@ -175,8 +176,7 @@ func TestCollectLinkRefDefsDuplicateLabel(t *testing.T) {
 			refs++
 		}
 	}
-	// At most one link-ref symbol per label — duplicates are skipped.
-	assert.LessOrEqual(t, refs, 2)
+	assert.Equal(t, 1, refs, "expected exactly one SymbolLinkRef for 'lab'")
 }
 
 func TestParseLinkTargetEmptyAfterTrim(t *testing.T) {

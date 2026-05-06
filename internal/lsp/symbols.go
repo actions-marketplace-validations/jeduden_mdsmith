@@ -177,6 +177,15 @@ func (s *Server) indexUpdate(absOrRel string, source []byte) {
 
 // indexReloadFromDisk re-reads path from disk and replaces its
 // FileEntry. When path no longer exists the entry is removed.
+//
+// The on-disk read is gated by the same workspace + extension
+// rules docTextOrFile applies: the path must resolve inside the
+// workspace root (with symlinks resolved) and must be a Markdown
+// file. handleDidClose and handleDidChangeWatchedFiles pass
+// client-derived paths to this helper, and a malicious client
+// could otherwise send events for out-of-workspace files and
+// drive arbitrary local reads. Fail closed if either invariant
+// is violated.
 func (s *Server) indexReloadFromDisk(absOrRel string) {
 	s.idxMu.Lock()
 	idx := s.idx
@@ -190,7 +199,13 @@ func (s *Server) indexReloadFromDisk(absOrRel string) {
 	if !filepath.IsAbs(abs) && root != "" {
 		abs = filepath.Join(root, filepath.FromSlash(rel))
 	}
-	data, err := os.ReadFile(abs) //nolint:gosec // path comes from server-tracked state
+	if !insideWorkspace(root, abs) || !isMarkdownExt(abs) {
+		// Drop any stale entry under the workspace-relative form
+		// but never read the file from disk.
+		idx.Remove(index.NormalizePath(rel))
+		return
+	}
+	data, err := os.ReadFile(abs) //nolint:gosec // workspace-root + extension guarded above
 	if err != nil {
 		idx.Remove(index.NormalizePath(rel))
 		return

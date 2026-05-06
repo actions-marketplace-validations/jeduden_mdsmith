@@ -66,6 +66,53 @@ func TestDocTextOrFileNonFileURI(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestIndexReloadFromDiskRejectsOutsideRoot(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "a.md"), []byte("# A\n"), 0o644))
+	outside := filepath.Join(t.TempDir(), "leak.md")
+	require.NoError(t, os.WriteFile(outside, []byte("# Secret\n"), 0o644))
+
+	h := newHarness(t)
+	rootURI := pathToFileURI(t, tmp)
+	_, errResp := h.request("initialize", initializeParams{
+		RootURI: &rootURI, Capabilities: clientCapabilities{},
+	})
+	require.Nil(t, errResp)
+	h.srv.settingsMu.Lock()
+	h.srv.settings.Run = runOff
+	h.srv.settingsMu.Unlock()
+	h.srv.ensureIndex()
+
+	// Reload from a path outside the workspace — must be a no-op
+	// (not crash, not leak the secret file's contents).
+	h.srv.indexReloadFromDisk(outside)
+	// The outside path is normalized away from the workspace, so
+	// the index never sees it.
+	files := h.srv.idx.Files()
+	for _, f := range files {
+		assert.NotContains(t, f, "leak.md")
+		assert.NotContains(t, f, "Secret")
+	}
+}
+
+func TestIndexReloadFromDiskRejectsNonMarkdown(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "secret.txt"), []byte("data"), 0o644))
+	h := newHarness(t)
+	rootURI := pathToFileURI(t, tmp)
+	_, errResp := h.request("initialize", initializeParams{
+		RootURI: &rootURI, Capabilities: clientCapabilities{},
+	})
+	require.Nil(t, errResp)
+	h.srv.ensureIndex()
+	h.srv.indexReloadFromDisk(filepath.Join(tmp, "secret.txt"))
+	for _, f := range h.srv.idx.Files() {
+		assert.NotContains(t, f, "secret.txt")
+	}
+}
+
 func TestEffectiveKindsForScalarKind(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
@@ -210,19 +257,19 @@ func TestWorkspaceSymbolWithDirective(t *testing.T) {
 	t.Parallel()
 	src := "# Top\n\n<?include\nfile: \"x.md\"\n?>\n<?/include?>\n"
 	h, _, _ := rootedHarness(t, map[string]string{"a.md": src, "x.md": "# X\n"})
-	raw, errResp := h.request("workspace/symbol", workspaceSymbolParams{Query: ""})
+	// Force the index to populate via an initial query.
+	_, _ = h.request("workspace/symbol", workspaceSymbolParams{Query: ""})
+	// SearchSymbols only matches headings, link refs, titles, and
+	// kinds — directives don't appear in workspace/symbol results
+	// today; verify the empty query returns at least the heading
+	// from a.md so a regression that drops headings would be
+	// caught.
+	raw, errResp := h.request("workspace/symbol", workspaceSymbolParams{Query: "Top"})
 	require.Nil(t, errResp)
 	var hits []symbolInformation
 	require.NoError(t, json.Unmarshal(raw, &hits))
-	// The query is empty; index returns all symbols including the
-	// directive (Event kind).
-	var sawEvent bool
-	for _, h := range hits {
-		if h.Kind == symbolKindEvent {
-			sawEvent = true
-		}
-	}
-	_ = sawEvent
+	require.NotEmpty(t, hits)
+	assert.Equal(t, "Top", hits[0].Name)
 }
 
 func TestLocationsForRefsToHeadingMultiFileSort(t *testing.T) {
