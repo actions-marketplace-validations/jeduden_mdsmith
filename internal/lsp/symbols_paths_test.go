@@ -663,6 +663,63 @@ func TestHandlePrepareCallHierarchyMissingDocument(t *testing.T) {
 	assert.Empty(t, items)
 }
 
+func TestWatcherAcceptsCaseInsensitiveMarkdownExt(t *testing.T) {
+	t.Parallel()
+	// The watcher must accept `.MD` / `.Markdown` as Markdown so a
+	// rename to an upper-case extension still refreshes the index.
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "a.MD"), []byte("# Upper\n"), 0o644))
+
+	h := newHarness(t)
+	rootURI := pathToFileURI(t, tmp)
+	_, errResp := h.request("initialize", initializeParams{
+		RootURI: &rootURI, Capabilities: clientCapabilities{},
+	})
+	require.Nil(t, errResp)
+	h.srv.settingsMu.Lock()
+	h.srv.settings.Run = runOff
+	h.srv.settingsMu.Unlock()
+	// Force the index to build empty.
+	h.srv.ensureIndex()
+
+	abs := filepath.Join(tmp, "a.MD")
+	h.notify("workspace/didChangeWatchedFiles", didChangeWatchedFilesParams{
+		Changes: []fileEvent{{URI: "file://" + abs, Type: 1}},
+	})
+	// The watcher dispatches asynchronously; issue a follow-up
+	// request to drain the queue, then verify the index picked up
+	// the case-shifted extension.
+	_, _ = h.request("workspace/symbol", workspaceSymbolParams{Query: ""})
+	assert.Contains(t, h.srv.idx.Files(), "a.MD")
+}
+
+func TestHandlePrepareCallHierarchyOnPlainProseEmpty(t *testing.T) {
+	t.Parallel()
+	// Cursor sits in a paragraph that's neither a heading nor a
+	// directive arg. The handler must NOT synthesize a file-level
+	// item for arbitrary mid-document positions — that would
+	// surface a phantom "Call Hierarchy" entry for every
+	// paragraph in the file. Only TokenFileTop (line 1, col 1)
+	// anchors at the file.
+	src := "# Top\n\nplain prose with no link\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": src})
+	uri := rootURI + "/a.md"
+	h.srv.settingsMu.Lock()
+	h.srv.settings.Run = runOff
+	h.srv.settingsMu.Unlock()
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uri, LanguageID: "markdown", Version: 1, Text: src},
+	})
+	raw, errResp := h.request("textDocument/prepareCallHierarchy", textDocumentPositionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     Position{Line: 2, Character: 5},
+	})
+	require.Nil(t, errResp)
+	var items []callHierarchyItem
+	require.NoError(t, json.Unmarshal(raw, &items))
+	assert.Empty(t, items)
+}
+
 func TestHandlePrepareCallHierarchyDirectiveMissingTarget(t *testing.T) {
 	t.Parallel()
 	// Cursor on a directive arg whose key isn't `file:` or

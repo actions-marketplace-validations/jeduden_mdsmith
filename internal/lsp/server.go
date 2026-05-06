@@ -525,7 +525,13 @@ func (s *Server) handleDidChangeWatchedFiles(ctx context.Context, raw json.RawMe
 			configChanged = true
 			continue
 		}
-		if strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".markdown") {
+		// Use isMarkdownExt for case-insensitive extension match
+		// — the rest of the navigation surface (docTextOrFile,
+		// indexReloadFromDisk) treats `.MD` / `.Markdown` as
+		// Markdown, and the watcher must agree or a rename to a
+		// case-shifted extension would silently stop refreshing
+		// the index.
+		if isMarkdownExt(path) {
 			mdChanges = append(mdChanges, path)
 		}
 	}

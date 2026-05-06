@@ -1133,8 +1133,14 @@ func (s *Server) handlePrepareCallHierarchy(msg *requestMessage) {
 				Data:           &callHierarchyData{File: tgt},
 			}
 		}
-	default:
-		// File-level item: cursor anywhere on line 1 (or fallback).
+	case index.TokenFileTop:
+		// File-level call hierarchy: only the very top of the
+		// document anchors at the file. Plain prose lower in the
+		// file does not — see Plan 131's cursor matrix
+		// (file root / heading / directive arg). Without this
+		// gate the editor would offer a "call hierarchy" entry
+		// for arbitrary positions, including paragraphs that
+		// have no inbound or outbound references.
 		item = callHierarchyItem{
 			Name:           rel,
 			Kind:           symbolKindString,
