@@ -159,3 +159,33 @@ func nonNegativeUTF16RuneLen(r rune) int {
 	}
 	return 1
 }
+
+// byteOffsetFromUTF16 maps a UTF-16 column position (LSP wire form)
+// back to the matching UTF-8 byte offset within line. The result is
+// clamped to [0, len(line)] so a malformed or past-end LSP position
+// stays within the slice.
+//
+// This is the inverse of utf16FromByteOffset. The navigation surface
+// uses it to convert `Position.Character` (UTF-16) to a byte column
+// before calling the Locator, which works in 1-based byte columns.
+// Without it, every cursor on a non-ASCII line would mis-locate by
+// the number of multi-byte runes between byte 0 and the cursor.
+func byteOffsetFromUTF16(line []byte, utf16Off int) int {
+	if utf16Off <= 0 {
+		return 0
+	}
+	units := 0
+	for i := 0; i < len(line); {
+		r, size := utf8.DecodeRune(line[i:])
+		w := nonNegativeUTF16RuneLen(r)
+		if units+w > utf16Off {
+			return i
+		}
+		units += w
+		i += size
+		if units == utf16Off {
+			return i
+		}
+	}
+	return len(line)
+}

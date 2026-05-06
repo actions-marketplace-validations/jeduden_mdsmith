@@ -182,6 +182,30 @@ func TestLocateRefDefOnLineWithoutLabel(t *testing.T) {
 	assert.Equal(t, TokenHeading, res.Tag)
 }
 
+func TestLocateCursorAfterLinkOnSameLine(t *testing.T) {
+	t.Parallel()
+	// Cursor sits on the prose after a link on the same line. The
+	// previous bound stretched the link's range to end-of-line and
+	// would mis-tag this position as TokenAnchorLink.
+	src := "# T\n\nSee [a](#sec) and then plain prose here.\n\n## Sec\n"
+	// Column 28 is somewhere in `plain prose here`.
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 3, 28)
+	assert.NotEqual(t, TokenAnchorLink, res.Tag,
+		"cursor in trailing prose must not be tagged as link, got %+v", res)
+}
+
+func TestLocateRefStyleInlineLink(t *testing.T) {
+	t.Parallel()
+	// Reference-style link: cursor inside `[text][label]` should
+	// surface as TokenRefUse; cursor on the prose after the link
+	// must not.
+	src := "# T\n\nSee [text][lab] here.\n\n[lab]: https://x.com\n"
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 3, 8)
+	assert.Equal(t, TokenRefUse, res.Tag)
+	res = Locator{Path: "a.md"}.Locate([]byte(src), 3, 22)
+	assert.NotEqual(t, TokenRefUse, res.Tag)
+}
+
 func TestLocateEmptyAnchorOnRefDef(t *testing.T) {
 	t.Parallel()
 	src := "# T\n\n[label]: https://x.com\n"

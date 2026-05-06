@@ -287,22 +287,99 @@ func linkContainsOffset(source []byte, l *ast.Link, off int) bool {
 	if startOff < 0 {
 		return false
 	}
-	// Widen left to '[' and right to the closing `)` or `]` on the
-	// same line. This keeps the cursor-in-link test true even when
-	// the cursor is in the URL portion.
+	// Widen left to '[' and right to the matching closing delimiter
+	// on the same line. Reference-style links close with `]` after
+	// the label (`[text][label]`); inline links close with `)`
+	// after the destination (`[text](dest)`). Bounding only on
+	// end-of-line was too loose: it tagged plain prose typed after
+	// a link as still being "inside" the link, so cursor → token
+	// resolution fired definition / references for unrelated
+	// positions.
 	open := bytes.LastIndexByte(source[:startOff], '[')
 	if open < 0 || open < startOff-200 {
 		open = startOff
 	}
-	// Find a closing paren after endOff on the same line.
-	lineEnd := endOff
-	for lineEnd < len(source) && source[lineEnd] != '\n' {
-		lineEnd++
+	close := linkCloseOffset(source, l, endOff)
+	if close < 0 {
+		// Couldn't find a closing delimiter (malformed link); fall
+		// back to the text segment so we don't claim coverage of
+		// the entire source line.
+		close = endOff
 	}
-	if open <= off && off <= lineEnd {
+	if open <= off && off <= close {
 		return true
 	}
 	return false
+}
+
+// linkCloseOffset returns the byte offset of the matching closing
+// delimiter for a link whose display text ends at `after`. Goldmark
+// emits both shapes:
+//
+//   - `[text](dest)` — inline. After the `]` comes a `(`, then the
+//     destination, then the closing `)`. The cursor-in-link range
+//     extends through the `)`.
+//   - `[text][label]`, `[label]`, `[text][]` — reference-style.
+//     The closing delimiter is `]`.
+//
+// Reference-style is detected via the AST node's `Reference` field;
+// inline detection scans for the `(` that immediately follows the
+// display-text close. Stops at newline so multi-line content past
+// the link can't be misattributed back to it.
+func linkCloseOffset(source []byte, l *ast.Link, after int) int {
+	if l != nil && l.Reference != nil {
+		// `[text][label]` — close at the second `]`. There may be
+		// a `[` right after `after`; scan past both.
+		seenOpen := false
+		for i := after; i < len(source); i++ {
+			switch source[i] {
+			case '[':
+				seenOpen = true
+			case ']':
+				if seenOpen || i > after {
+					return i
+				}
+				return i
+			case '\n':
+				return -1
+			}
+		}
+		return -1
+	}
+	// Inline `[text](dest)`: skip past the `]` to find `(`, then
+	// match the closing `)`. The `]` can be at `after-1` already
+	// since the text segment ends just before it.
+	i := after
+	for i < len(source) && source[i] == ']' {
+		i++
+	}
+	if i >= len(source) || source[i] != '(' {
+		// Not an inline link shape; treat the next `]` as close.
+		for j := after; j < len(source); j++ {
+			switch source[j] {
+			case ']':
+				return j
+			case '\n':
+				return -1
+			}
+		}
+		return -1
+	}
+	depth := 0
+	for ; i < len(source); i++ {
+		switch source[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		case '\n':
+			return -1
+		}
+	}
+	return -1
 }
 
 func piContainsLine(source []byte, pi *lint.ProcessingInstruction, line int) bool {

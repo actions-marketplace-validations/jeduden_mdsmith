@@ -412,7 +412,9 @@ func TestResolveRelTargetEscapesRoot(t *testing.T) {
 	t.Parallel()
 	idx := New("/root")
 	// `[x](../up.md)` from `docs/a.md` resolves to `up.md`.
-	// `[x](../../way-up.md)` resolves to "" (escapes root).
+	// `[x](../../way-up.md)` and `[x](/abs.md)` resolve outside the
+	// workspace; collectLinkEdges drops those entries entirely so the
+	// index never sees a self-reference masquerading as an escape.
 	idx.Update("docs/a.md", []byte("# A\n\n[1](../up.md)\n[2](../../way-up.md)\n[3](/abs.md)\n"))
 	fe, ok := idx.File("docs/a.md")
 	require.True(t, ok)
@@ -422,8 +424,7 @@ func TestResolveRelTargetEscapesRoot(t *testing.T) {
 			got = append(got, e.TargetFile)
 		}
 	}
-	assert.Contains(t, got, "up.md")
-	assert.Contains(t, got, "")
+	assert.Equal(t, []string{"up.md"}, got)
 }
 
 func TestColumnOfLineEdgeCases(t *testing.T) {

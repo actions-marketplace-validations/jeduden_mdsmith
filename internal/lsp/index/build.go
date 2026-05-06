@@ -444,6 +444,15 @@ func collectLinkEdges(filePath string, root ast.Node, source []byte, fmOffset in
 			})
 		case t.Path != "":
 			tgt := resolveRelTarget(filePath, t.Path)
+			if tgt == "" {
+				// Absolute or escapes-the-root paths cannot point
+				// at anything inside the workspace. Emitting an
+				// edge with empty TargetFile would be ambiguous —
+				// IncomingEdges treats `""` as "same file as
+				// source", so the link would be misattributed as a
+				// self-reference. Drop it instead.
+				return ast.WalkContinue, nil
+			}
 			out = append(out, Edge{
 				SourceFile:   filePath,
 				SourceLine:   line + fmOffset,
@@ -565,26 +574,35 @@ func collectDirectiveEdges(filePath string, root ast.Node, source []byte, fmOffs
 		if !ok {
 			continue
 		}
+		// Empty resolveRelTarget means the target is absolute or
+		// escapes the workspace root. Recording it would surface as
+		// an empty TargetFile, which IncomingEdges treats as
+		// "same file as source" and would silently misattribute the
+		// reference back to the host file.
 		switch pi.Name {
 		case "include":
 			if file := strings.TrimSpace(params["file"]); file != "" {
-				out = append(out, Edge{
-					SourceFile: filePath,
-					SourceLine: startLine,
-					SourceCol:  1,
-					TargetFile: resolveRelTarget(filePath, file),
-					Kind:       EdgeInclude,
-				})
+				if tgt := resolveRelTarget(filePath, file); tgt != "" {
+					out = append(out, Edge{
+						SourceFile: filePath,
+						SourceLine: startLine,
+						SourceCol:  1,
+						TargetFile: tgt,
+						Kind:       EdgeInclude,
+					})
+				}
 			}
 		case "build":
 			if src := strings.TrimSpace(params["source"]); src != "" {
-				out = append(out, Edge{
-					SourceFile: filePath,
-					SourceLine: startLine,
-					SourceCol:  1,
-					TargetFile: resolveRelTarget(filePath, src),
-					Kind:       EdgeBuild,
-				})
+				if tgt := resolveRelTarget(filePath, src); tgt != "" {
+					out = append(out, Edge{
+						SourceFile: filePath,
+						SourceLine: startLine,
+						SourceCol:  1,
+						TargetFile: tgt,
+						Kind:       EdgeBuild,
+					})
+				}
 			}
 		case "catalog":
 			// Catalog targets are globs; the index records one

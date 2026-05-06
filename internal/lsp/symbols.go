@@ -475,9 +475,30 @@ func rangeForLines(start, end int, source []byte) Range {
 	}
 }
 
-// rangeAt returns a zero-width LSP Range at (line, col) where line
-// and col are 1-based. Used for selection ranges that point at a
-// single token.
+// lspPositionToByteColumn converts an LSP Position.Character
+// (UTF-16 code units, 0-based) to a 1-based UTF-8 byte column for
+// the given 1-based source line. The Locator works in byte columns
+// (so it can index into the parsed AST consistently with the rest
+// of mdsmith), but LSP clients send UTF-16; without this
+// translation, every cursor on a line containing non-ASCII text
+// would mis-locate by the count of multi-byte runes preceding it.
+func lspPositionToByteColumn(source []byte, line, utf16Char int) int {
+	if line < 1 || utf16Char <= 0 {
+		return 1
+	}
+	lines := splitLines(source)
+	if line-1 >= len(lines) {
+		return 1
+	}
+	return byteOffsetFromUTF16(lines[line-1], utf16Char) + 1
+}
+
+// rangeAt returns an LSP Range that anchors at (line, col) and
+// extends to end-of-line. line and col are 1-based; col is a UTF-8
+// byte column. Despite the name, the End is the line's UTF-16
+// length so editors can highlight the whole containing line — see
+// callers like definition / references / implementation that want
+// the editor to flash the matched line, not just the cursor.
 func rangeAt(line, col int, source []byte) Range {
 	if line < 1 {
 		line = 1
@@ -536,12 +557,7 @@ func (s *Server) resolveTargets(p textDocumentPositionParams, wantAll bool) []lo
 	idx := s.ensureIndex()
 
 	line := p.Position.Line + 1
-	// LSP positions are UTF-16; we approximate by passing them as
-	// byte columns. For files that are pure ASCII (the vast
-	// majority of Markdown source), this is exact. Non-ASCII gives
-	// a near-position match — close enough for cursor tagging
-	// since the Locator scans the whole AST node anyway.
-	col := p.Position.Character + 1
+	col := lspPositionToByteColumn(source, line, p.Position.Character)
 	res := index.Locator{Path: rel}.Locate(source, line, col)
 
 	switch res.Tag {
@@ -743,7 +759,9 @@ func (s *Server) handleReferences(msg *requestMessage) {
 		return
 	}
 	idx := s.ensureIndex()
-	res := index.Locator{Path: rel}.Locate(source, p.Position.Line+1, p.Position.Character+1)
+	line := p.Position.Line + 1
+	col := lspPositionToByteColumn(source, line, p.Position.Character)
+	res := index.Locator{Path: rel}.Locate(source, line, col)
 
 	var out []location
 	switch res.Tag {
@@ -931,7 +949,9 @@ func (s *Server) handlePrepareCallHierarchy(msg *requestMessage) {
 		return
 	}
 	idx := s.ensureIndex()
-	res := index.Locator{Path: rel}.Locate(source, p.Position.Line+1, p.Position.Character+1)
+	line := p.Position.Line + 1
+	col := lspPositionToByteColumn(source, line, p.Position.Character)
+	res := index.Locator{Path: rel}.Locate(source, line, col)
 
 	var item callHierarchyItem
 	switch res.Tag {

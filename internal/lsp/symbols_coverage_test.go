@@ -653,6 +653,44 @@ func TestLocationsForFileTopFiltersAnchored(t *testing.T) {
 	assert.Empty(t, locs, "anchored links shouldn't match file-top references")
 }
 
+func TestLSPPositionToByteColumnAscii(t *testing.T) {
+	t.Parallel()
+	src := []byte("# Hello\n\nfoo\n")
+	// Cursor at UTF-16 char 5 on line 1 → byte column 6 (1-based).
+	got := lspPositionToByteColumn(src, 1, 5)
+	assert.Equal(t, 6, got)
+}
+
+func TestLSPPositionToByteColumnNonASCII(t *testing.T) {
+	t.Parallel()
+	// "héllo" has `é` taking 2 UTF-8 bytes but 1 UTF-16 unit, so
+	// UTF-16 char 3 corresponds to UTF-8 byte 4.
+	src := []byte("héllo\n")
+	got := lspPositionToByteColumn(src, 1, 3)
+	assert.Equal(t, 5, got) // 1-based
+}
+
+func TestLSPPositionToByteColumnEdgeCases(t *testing.T) {
+	t.Parallel()
+	src := []byte("foo\n")
+	assert.Equal(t, 1, lspPositionToByteColumn(src, 0, 5))
+	assert.Equal(t, 1, lspPositionToByteColumn(src, 1, 0))
+	assert.Equal(t, 1, lspPositionToByteColumn(src, 99, 5))
+}
+
+func TestByteOffsetFromUTF16(t *testing.T) {
+	t.Parallel()
+	// Surrogate pair: U+1F600 (emoji 😀) is 4 UTF-8 bytes and 2
+	// UTF-16 units. Cursor past the emoji at UTF-16 char 2 maps to
+	// byte 4.
+	line := []byte("😀x")
+	assert.Equal(t, 4, byteOffsetFromUTF16(line, 2))
+	// Cursor halfway "into" the surrogate pair clamps to before it.
+	assert.Equal(t, 0, byteOffsetFromUTF16(line, 1))
+	assert.Equal(t, 0, byteOffsetFromUTF16(line, -1))
+	assert.Equal(t, len(line), byteOffsetFromUTF16(line, 1000))
+}
+
 func TestPathToURIDriveLetter(t *testing.T) {
 	t.Parallel()
 	got := pathToURI(`C:\foo\bar.md`)

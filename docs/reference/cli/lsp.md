@@ -36,7 +36,7 @@ uses stdio either way.
 | `referencesProvider`              | Workspace links pointing at the symbol under the cursor                            |
 | `workspaceSymbolProvider`         | Substring search across headings, link refs, front-matter `title:`, and kind names |
 | `callHierarchyProvider`           | File-level call graph over `<?include?>`, `<?catalog?>`, `<?build?>`, and links    |
-| `workspace/didChangeWatchedFiles` | Immediate re-lint and index refresh on `.mdsmith.yml` and Markdown file changes    |
+| `workspace/didChangeWatchedFiles` | Re-lint open buffers on `.mdsmith.yml` change; index refresh on Markdown changes   |
 
 `mdsmith.run` controls when the server actually re-lints:
 
