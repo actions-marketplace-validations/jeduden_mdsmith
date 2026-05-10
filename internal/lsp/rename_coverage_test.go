@@ -602,6 +602,34 @@ func TestRenameOnCodeBlockRefDefRejected(t *testing.T) {
 	assert.Equal(t, codeInvalidParams, errResp.Code)
 }
 
+// TestBracketPairsHandlesNestedBrackets verifies that the
+// bracket walker pairs the outer `]` with the outer `[` for
+// CommonMark text containing balanced inner brackets (e.g.
+// `[a [b]][label]`). A naive first-`]` matcher would close the
+// outer pair on the inner `]`, which would cascade into wrong
+// label ranges in refUseLabelBytes.
+func TestBracketPairsHandlesNestedBrackets(t *testing.T) {
+	t.Parallel()
+	row := []byte(`[a [b]][label]`)
+	pairs := bracketPairs(row)
+	require.Len(t, pairs, 2)
+	assert.Equal(t, "a [b]", string(row[pairs[0].open+1:pairs[0].close]))
+	assert.Equal(t, "label", string(row[pairs[1].open+1:pairs[1].close]))
+}
+
+// TestRefUseLabelBytesNestedBrackets exercises refUseLabelBytes
+// against a full reference link with balanced inner brackets in
+// the text. The cursor on `b` (inside the inner pair) should
+// resolve to the outer trailing label range.
+func TestRefUseLabelBytesNestedBrackets(t *testing.T) {
+	t.Parallel()
+	row := []byte(`See [a [b]][label] inline`)
+	// Cursor on `b` (offset 8). Label is "label".
+	start, end, ok := refUseLabelBytes(row, 8, "label")
+	require.True(t, ok)
+	assert.Equal(t, "label", string(row[start:end]))
+}
+
 // TestIsValidRefDefLineBodyLineUnderflow covers the
 // bodyLine < 1 short-circuit. A cursor whose source line is
 // inside (or before) the front matter would translate to a

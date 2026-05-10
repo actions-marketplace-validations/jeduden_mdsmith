@@ -797,9 +797,11 @@ func anchorFragmentBytes(row []byte, textStart int, oldSlug string) (int, int, b
 	return hash + 1, fragEnd, true
 }
 
-// destBounds returns the `(` open and `)` close byte offsets of a
-// link destination starting at or after `from` on row, accounting
-// for nested parens. Backslash-escaped parens are treated as
+// destBounds returns the byte offsets of the destination *content*
+// — the byte just after `(` and the byte at the matching `)` — for
+// a link starting at or after `from` on row. Callers slice
+// row[open:close] to get the destination text. Nested parens are
+// matched depth-aware, and backslash-escaped parens are treated as
 // literal bytes (CommonMark allows `\(` / `\)` inside the
 // destination), so a link like `[t](foo\(bar\)#sec)` resolves to
 // the outer parens, not the escaped inner ones.
@@ -1246,27 +1248,39 @@ func linkTextBounds(l *ast.Link, body []byte) (int, int) {
 	return start, end
 }
 
-// bracketPairs returns every `[` / `]` pair on row, in left-to-right
-// order. Escaped `\]` is honored. The function only tracks pairs at
-// the row level; nested brackets inside images/links are intentionally
-// not modeled because reference labels never nest in CommonMark.
+// bracketPairs returns every top-level `[` / `]` pair on row, in
+// left-to-right order. The walker is depth-aware: a `[` opens a new
+// nesting level and a `]` closes the innermost open `[`, so a
+// CommonMark link with balanced bracket text such as
+// `[a [b]][label]` records two pairs — the outer text `[a [b]]` and
+// the trailing `[label]` — instead of mis-pairing the inner `[b]`
+// with the first `]`. Backslash-escaped brackets (`\[`, `\]`) and
+// any backslash-escaped byte are skipped, so escapes never open or
+// close a level.
 type bracketPair struct{ open, close int }
 
 func bracketPairs(row []byte) []bracketPair {
 	var pairs []bracketPair
+	var stack []int
 	for i := 0; i < len(row); i++ {
-		if row[i] != '[' {
+		if row[i] == '\\' && i+1 < len(row) {
+			i++ // skip escaped byte
 			continue
 		}
-		for j := i + 1; j < len(row); j++ {
-			if row[j] == '\\' && j+1 < len(row) {
-				j++
+		switch row[i] {
+		case '[':
+			stack = append(stack, i)
+		case ']':
+			if len(stack) == 0 {
 				continue
 			}
-			if row[j] == ']' {
-				pairs = append(pairs, bracketPair{i, j})
-				i = j
-				break
+			top := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				// Only emit pairs once we've popped back to the
+				// outermost level. Inner balanced pairs are part
+				// of the link's text content.
+				pairs = append(pairs, bracketPair{open: top, close: i})
 			}
 		}
 	}
