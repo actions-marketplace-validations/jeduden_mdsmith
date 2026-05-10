@@ -842,7 +842,7 @@ func stableSortEdits(changes map[string][]textEdit) {
 // label in the same file.
 //
 // Collision handling: a new label that matches another existing def
-// in the file fails with InvalidParams — MDS028 / MDS029 would
+// in the file fails with InvalidParams — MDS053 / MDS054 would
 // surface the breakage on the next lint pass anyway, but the LSP
 // error catches it before the edit applies.
 func (s *Server) renameLinkRef(
@@ -898,7 +898,7 @@ func (s *Server) renameLinkRef(
 // normalized label survives. Trusting the index would let a rename
 // pass collision when the buffer carries a duplicate `[label]: …`
 // line for newLabel — silently producing two coexisting defs that
-// MDS028 / MDS029 would have to clean up later.
+// MDS053 / MDS054 would have to clean up later.
 func labelConflict(source []byte, oldLabel, newLabel string) string {
 	body, _ := bodyAndFMOffset(source)
 	for _, m := range index.RefDefRegexpMatches(body) {

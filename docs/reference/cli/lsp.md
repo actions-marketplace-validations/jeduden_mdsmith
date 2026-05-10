@@ -293,9 +293,11 @@ label name so the client can surface it in the rename UI:
 }
 ```
 
-MDS027, MDS028, and MDS029 would surface the same
-breakage on the next lint pass. The LSP error catches it
-sooner. No edit reaches the buffer.
+A later lint pass would catch the same breakage:
+MDS027 covers anchor links across files. MDS053 flags
+duplicate / unused link-reference definitions. MDS054
+flags uses pointing at undefined labels. The LSP error
+catches it sooner; no edit reaches the buffer.
 
 `InvalidParams` also fires for `newName` values the server
 can't safely write back into the document:
