@@ -358,6 +358,20 @@ func normalizedLabel(b []byte) string {
 	return string(util.ToLinkReference(b))
 }
 
+// invalidLinkRefRune returns the first rune in s that would make
+// the resulting `[label]: …` line unparsable, or 0 when s is safe.
+// Newlines and bare brackets are the canonical breakers — both
+// terminate the label run before the literal text the user typed.
+func invalidLinkRefRune(s string) rune {
+	for _, r := range s {
+		switch r {
+		case '\n', '\r', '[', ']':
+			return r
+		}
+	}
+	return 0
+}
+
 // handleRename answers textDocument/rename. The reply is a
 // WorkspaceEdit that covers every affected file. Heading rename
 // rewrites incoming anchor links across the workspace; link-ref
@@ -411,6 +425,17 @@ func (s *Server) renameHeading(
 	oldText := res.Name
 	if strings.TrimSpace(newName) == strings.TrimSpace(oldText) {
 		_ = s.t.writeResponse(msg.ID, &workspaceEdit{Changes: map[string][]textEdit{}})
+		return
+	}
+	// Reject a new heading text that slugifies to nothing (e.g.
+	// punctuation-only). The renamed heading would have no
+	// addressable anchor — CollectTOCItems and the index's heading
+	// walk both skip empty slugs — and the per-edge rewrite would
+	// produce `#` placeholders that break every incoming link
+	// instead of redirecting them.
+	if res.Anchor != "" && mdtext.Slugify(newName) == "" {
+		_ = s.t.writeError(msg.ID, codeInvalidParams,
+			"new heading text has no addressable slug; pick text containing letters or digits")
 		return
 	}
 	oldSlugs, newSlugs, conflict := computeSlugRemap(source, line, oldText, newName)
@@ -820,6 +845,18 @@ func (s *Server) renameLinkRef(
 ) {
 	if strings.TrimSpace(newName) == "" {
 		_ = s.t.writeError(msg.ID, codeInvalidParams, "label cannot be empty")
+		return
+	}
+	// Reject labels that would break the on-disk syntax. A bare
+	// `]` would close the bracket pair early, producing an
+	// unparsable `[label]:` line; a newline or `[` similarly
+	// destroys the def. CommonMark allows escapes (`\]`), but
+	// emitting an escaped form here would silently rewrite the
+	// user's typed text — forcing the user to pick a valid label
+	// is the safer path.
+	if invalid := invalidLinkRefRune(newName); invalid != 0 {
+		_ = s.t.writeError(msg.ID, codeInvalidParams,
+			fmt.Sprintf("label cannot contain %q", invalid))
 		return
 	}
 	// Don't early-return when the normalized label is unchanged.

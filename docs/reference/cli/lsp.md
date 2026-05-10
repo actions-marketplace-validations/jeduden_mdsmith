@@ -238,14 +238,16 @@ the symbol under the cursor. The reply also carries a
 placeholder string. The client pre-fills the popup with it.
 Returning `null` skips the rename at unsupported positions.
 
-| Cursor on…                    | `prepareRename` range                                        |
-|-------------------------------|--------------------------------------------------------------|
-| ATX heading (`## Setup`)      | the heading text run, excluding leading and trailing `#`s    |
-| Setext heading (text line)    | the entire text line, trimmed of leading/trailing whitespace |
-| `[label]: url` definition     | the label text inside `[…]`                                  |
-| `[text][label]` reference use | the label text inside `[…][label]`                           |
-| Shortcut `[label]` use        | the label text inside `[…]`                                  |
-| Anywhere else                 | `null`                                                       |
+| Cursor on…                       | `prepareRename` range                                        |
+|----------------------------------|--------------------------------------------------------------|
+| ATX heading (`## Setup`)         | the heading text run, excluding leading and trailing `#`s    |
+| Setext heading (text line)       | the entire text line, trimmed of leading/trailing whitespace |
+| `[label]: url` definition        | the label text inside `[…]`                                  |
+| `[text][label]` reference use    | the label text inside `[…][label]`                           |
+| Shortcut `[label]` use           | the label text inside `[…]`                                  |
+| Collapsed `[label][]` use        | the label text inside the leading `[…]`                      |
+| Trailing `[]` of a collapsed use | the label text inside the leading `[…]`                      |
+| Anywhere else                    | `null`                                                       |
 
 `textDocument/rename` answers with one `WorkspaceEdit`
 covering every affected file.
@@ -259,8 +261,10 @@ covering every affected file.
   from `setup-1` back to `setup`) emit additional edits to
   keep incoming links pointing at the right anchor.
 - **Link-reference rename** rewrites the `[label]: url`
-  definition and every `[text][label]` and shortcut
-  `[label]` use in the same file. Reference labels are
+  definition and every reference-style use in the same file:
+  full `[text][label]`, shortcut `[label]`, and collapsed
+  `[label][]` (the leading bracket pair carries the label
+  text in the collapsed form). Reference labels are
   file-local in CommonMark, so the WorkspaceEdit never
   spills into other files.
 
@@ -291,6 +295,16 @@ label name so the client can surface it in the rename UI:
 MDS027, MDS028, and MDS029 would surface the same
 breakage on the next lint pass. The LSP error catches it
 sooner. No edit reaches the buffer.
+
+`InvalidParams` also fires for `newName` values the server
+can't safely write back into the document:
+
+- A heading rename whose new text slugifies to the empty
+  string (e.g. punctuation-only). The renamed heading would
+  have no addressable anchor.
+- A link-reference rename whose new label contains `[`,
+  `]`, or a newline. Inserting them unescaped would break
+  the `[label]: url` line and corrupt subsequent navigation.
 
 ## Configuration discovery
 

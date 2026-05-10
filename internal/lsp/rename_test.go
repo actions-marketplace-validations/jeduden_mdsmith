@@ -298,6 +298,54 @@ func TestRenameLinkRefDetectsDuplicateDefCollision(t *testing.T) {
 	assert.Equal(t, codeInvalidParams, errResp.Code)
 }
 
+// TestRenameHeadingRejectsEmptySlugNewName verifies that a
+// heading rename whose new text slugifies to "" (e.g.
+// punctuation-only) is rejected. Allowing it would produce
+// `#` placeholder anchors and break every incoming link
+// instead of redirecting them.
+func TestRenameHeadingRejectsEmptySlugNewName(t *testing.T) {
+	t.Parallel()
+	src := "# Top\n\n## Setup\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": src})
+	uri := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uri, LanguageID: "markdown", Version: 1, Text: src},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+
+	_, errResp := h.request("textDocument/rename", renameParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		// Cursor on `## Setup` (line 3, 1-based) → LSP line 2.
+		Position: Position{Line: 2, Character: 4},
+		NewName:  "!!!",
+	})
+	require.NotNil(t, errResp)
+	assert.Equal(t, codeInvalidParams, errResp.Code)
+}
+
+// TestRenameLinkRefRejectsBracketInNewName verifies that a
+// new label containing `]` is rejected outright. Inserting it
+// unescaped would close the bracket pair early, producing an
+// unparsable `[label]:` line.
+func TestRenameLinkRefRejectsBracketInNewName(t *testing.T) {
+	t.Parallel()
+	src := "# T\n\nSee [t][docs].\n\n[docs]: https://x\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": src})
+	uri := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uri, LanguageID: "markdown", Version: 1, Text: src},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+
+	_, errResp := h.request("textDocument/rename", renameParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     Position{Line: 4, Character: 2},
+		NewName:      "bad]label",
+	})
+	require.NotNil(t, errResp)
+	assert.Equal(t, codeInvalidParams, errResp.Code)
+}
+
 // TestRenameOnPlainProseReturnsError checks that a rename request
 // at a position with no renameable symbol surfaces InvalidParams
 // rather than silently returning an empty WorkspaceEdit (which an
