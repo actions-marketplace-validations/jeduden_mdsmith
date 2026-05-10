@@ -2694,3 +2694,24 @@ func TestHoverUnknownDocument(t *testing.T) {
 	require.Nil(t, hoverErr)
 	assert.Equal(t, "null", string(resultRaw), "hover on unknown document must return null")
 }
+
+func TestPosInRange(t *testing.T) {
+	t.Parallel()
+	r := Range{Start: Position{Line: 2, Character: 5}, End: Position{Line: 2, Character: 10}}
+
+	// Inside the range.
+	assert.True(t, posInRange(Position{2, 5}, r), "start boundary is inside")
+	assert.True(t, posInRange(Position{2, 7}, r), "mid-range")
+	assert.True(t, posInRange(Position{2, 9}, r), "one before end")
+
+	// Outside: end boundary is exclusive.
+	assert.False(t, posInRange(Position{2, 10}, r), "end boundary is exclusive")
+	assert.False(t, posInRange(Position{2, 11}, r), "past end")
+	assert.False(t, posInRange(Position{2, 4}, r), "before start")
+	assert.False(t, posInRange(Position{1, 7}, r), "wrong line before")
+	assert.False(t, posInRange(Position{3, 7}, r), "wrong line after")
+
+	// Empty range (Start == End): nothing is inside.
+	empty := Range{Start: Position{Line: 1, Character: 3}, End: Position{Line: 1, Character: 3}}
+	assert.False(t, posInRange(Position{1, 3}, empty), "position at empty range is outside")
+}

@@ -173,7 +173,8 @@ func directiveHoverAt(source []byte, pos Position) *hoverResult {
 	return result
 }
 
-// posInRange reports whether pos falls within LSP range r (end-exclusive).
+// posInRange reports whether pos falls within LSP range r. Range.End is
+// exclusive per the LSP spec, so a position exactly at End is outside.
 func posInRange(pos Position, r Range) bool {
 	if pos.Line < r.Start.Line || pos.Line > r.End.Line {
 		return false
@@ -181,7 +182,7 @@ func posInRange(pos Position, r Range) bool {
 	if pos.Line == r.Start.Line && pos.Character < r.Start.Character {
 		return false
 	}
-	if pos.Line == r.End.Line && pos.Character > r.End.Character {
+	if pos.Line == r.End.Line && pos.Character >= r.End.Character {
 		return false
 	}
 	return true
