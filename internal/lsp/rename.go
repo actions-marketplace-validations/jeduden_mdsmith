@@ -852,20 +852,22 @@ func fragmentMatchesSlug(rawFrag []byte, oldSlug string) bool {
 	return mdtext.Slugify(decoded) == oldSlug
 }
 
-// stableSortEdits sorts each file's TextEdit slice by start
-// position. The LSP spec leaves ordering unspecified but most
-// clients require non-overlapping edits applied bottom-up; sorting
-// keeps the output deterministic for tests and lets the client (or
-// a fallback bottom-up applier in our integration tests) apply
-// edits in reverse order without surprises.
+// stableSortEdits sorts each file's TextEdit slice in reverse
+// document order so a client that applies edits sequentially in
+// array order ends up with the right buffer state. The LSP spec
+// only forbids overlap; it does not pin down application order,
+// and naive clients walk the array top-to-bottom. Emitting
+// bottom-up means earlier (later-positioned) edits don't shift
+// the offsets the next edit relies on — particularly when two
+// edits share a line.
 func stableSortEdits(changes map[string][]textEdit) {
 	for uri, edits := range changes {
 		sort.SliceStable(edits, func(i, j int) bool {
 			a, b := edits[i].Range.Start, edits[j].Range.Start
 			if a.Line != b.Line {
-				return a.Line < b.Line
+				return a.Line > b.Line
 			}
-			return a.Character < b.Character
+			return a.Character > b.Character
 		})
 		changes[uri] = edits
 	}
@@ -1059,17 +1061,17 @@ func refUseEdit(
 ) (textEdit, bool) {
 	textStart, textEnd := linkTextBounds(l, body)
 	bodyLine := bodyIdx.LineOfOffset(textStart)
+	// fileLine arithmetic stays inside the line table: textStart
+	// came from a parsed link that lives in body, and fmOffset
+	// is the same line shift the splitLines call used. lineStart
+	// is always at or before textStart-1 (the `[` precedes the
+	// first text byte), so textOpenCol is non-negative without
+	// an explicit clamp.
 	fileLine := bodyLine + fmOffset
-	if fileLine-1 >= len(lines) {
-		return textEdit{}, false
-	}
 	row := lines[fileLine-1]
 	lineStart := bodyIdx.LineStart(bodyLine)
 	textOpenCol := textStart - lineStart - 1 // include the `[`
-	if textOpenCol < 0 {
-		textOpenCol = 0
-	}
-	textCloseCol := textEnd - lineStart // points just past last text byte
+	textCloseCol := textEnd - lineStart      // points just past last text byte
 	pairs := bracketPairs(row)
 	first, second := matchingPair(pairs, textOpenCol, textCloseCol)
 	if first.open < 0 {
