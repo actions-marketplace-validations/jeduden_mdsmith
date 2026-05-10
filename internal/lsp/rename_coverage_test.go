@@ -550,6 +550,77 @@ func TestRenameLinkRefAfterDidChangeRewritesLiveBuffer(t *testing.T) {
 	assert.NotEmpty(t, edit.Changes[uri])
 }
 
+// TestResolveURIAndSourceFallbackToDisk verifies the open-doc
+// scan falls back to on-disk read when no buffer matches the
+// requested rel. The closed file's URI is the canonical
+// workspaceURI form.
+func TestResolveURIAndSourceFallbackToDisk(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"open.md":   "# open\n",
+		"closed.md": "# closed\n",
+	}
+	h, _, rootURI := rootedHarness(t, files)
+	openURI := rootURI + "/open.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: openURI, LanguageID: "markdown", Version: 1, Text: files["open.md"]},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+
+	uri, source, ok := h.srv.resolveURIAndSource("closed.md")
+	require.True(t, ok)
+	assert.Equal(t, "# closed\n", string(source))
+	// Fallback uses the canonical workspaceURI form, which mirrors
+	// the openURI's prefix (file://...).
+	assert.Equal(t, rootURI+"/closed.md", uri)
+}
+
+// TestRefDefEditsInBodyIgnoresOtherLabels verifies the
+// `normalizedLabel != oldLabel` continue branch — defs for other
+// labels in the same buffer are skipped.
+func TestRefDefEditsInBodyIgnoresOtherLabels(t *testing.T) {
+	t.Parallel()
+	body := []byte("[a]: x\n[b]: y\n[a]: z\n")
+	lines := [][]byte{[]byte("[a]: x"), []byte("[b]: y"), []byte("[a]: z")}
+	out := refDefEditsInBody(body, lines, 0, "a", "renamed")
+	require.Len(t, out, 2)
+	for _, e := range out {
+		assert.Equal(t, "renamed", e.NewText)
+	}
+}
+
+// TestAppendAnchorEditsForHeadingSkipsStaleEdge covers the
+// continue branch in appendAnchorEditsForHeading: an edge whose
+// link doesn't actually contain the old slug at the recorded
+// column produces a nil edit and is silently skipped rather
+// than failing the rename.
+func TestAppendAnchorEditsForHeadingSkipsStaleEdge(t *testing.T) {
+	t.Parallel()
+	// Build a real harness, then fabricate an out-of-date edge.
+	src := "# Top\n\n[link](#elsewhere)\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": src})
+	uri := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uri, LanguageID: "markdown", Version: 1, Text: src},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+	// Trigger index build.
+	_ = h.srv.ensureIndex()
+	// Rename "Top" to "Other"; the edge for `[link](#elsewhere)`
+	// is unrelated to the heading and stays untouched.
+	raw, errResp := h.request("textDocument/rename", renameParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     Position{Line: 0, Character: 3},
+		NewName:      "Other",
+	})
+	require.Nil(t, errResp)
+	var edit workspaceEdit
+	require.NoError(t, json.Unmarshal(raw, &edit))
+	require.Contains(t, edit.Changes, uri)
+	// One edit total (heading line); no stale anchor edit slipped in.
+	require.Len(t, edit.Changes[uri], 1)
+}
+
 // TestRenameHeadingSelfLinkSharesURI verifies that a self-anchor
 // edit (a `[t](#slug)` link in the same file as the renamed
 // heading) lands under the same WorkspaceEdit key as the heading-

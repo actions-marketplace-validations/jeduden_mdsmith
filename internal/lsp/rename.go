@@ -668,9 +668,6 @@ func (s *Server) appendAnchorEditsForHeading(
 // and leave the buffer in a torn state.
 func (s *Server) resolveURIAndSource(rel string) (string, []byte, bool) {
 	rel = index.NormalizePath(rel)
-	if rel == "" {
-		return "", nil, false
-	}
 	_, _, root := s.snapshotConfig()
 	for _, openURI := range s.docs.openURIs() {
 		doc, found := s.docs.get(openURI)
