@@ -9,19 +9,10 @@ import (
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/yuin/goldmark/ast"
 )
 
 // ---- ParseInline edge cases ----
-
-func TestSetScopeInt_RejectsNonIntegerFloat(t *testing.T) {
-	// setScopeInt's float branch should reject non-whole values.
-	// We can't reach it via ParseInline because the repeating-
-	// pattern key gets blocked first, so call the helper directly.
-	var dst int
-	err := setScopeInt(&dst, 1.5, "scope", "min")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must be an integer")
-}
 
 // TestParseInline_RejectsRepeatingPatternKeys covers the parse-
 // time rejection of `repeats`, `sequential`, `min`, and `max` —
@@ -219,23 +210,6 @@ func TestParseInline_RejectsBadAliasItemType(t *testing.T) {
 	_, err := ParseInline(raw, "kind x")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "aliases[0] must be a string")
-}
-
-func TestSetScopeInt_RejectsNonNumericType(t *testing.T) {
-	// Direct setScopeInt call exercises the default branch — a
-	// string value can't be coerced to int.
-	var dst int
-	err := setScopeInt(&dst, "two", "scope", "min")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "min must be an integer")
-}
-
-func TestSetScopeInt_AcceptsInt64(t *testing.T) {
-	// YAML decoders may surface an integer as int64; setScopeInt
-	// must accept that without coercing to the float branch.
-	var dst int
-	require.NoError(t, setScopeInt(&dst, int64(2), "scope", "min"))
-	assert.Equal(t, 2, dst)
 }
 
 func TestParseInline_RejectsBadRulesType(t *testing.T) {
@@ -932,6 +906,52 @@ func TestValidate_LateListedScopeRecursesIntoChildren(t *testing.T) {
 		"late B's nested required B-child must still be checked")
 }
 
+// TestParseInline_RejectsWildcardAsHeadingText regresses a
+// confusing-input case: a mapping-form scope with `heading: "..."`
+// would silently be treated as a literal section named "...".
+// Reject it at parse time so the only path to a wildcard slot is
+// the bare-string entry form.
+func TestParseInline_RejectsWildcardAsHeadingText(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{"heading": "..."},
+		},
+	}
+	_, err := ParseInline(raw, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		`"..."`)
+	assert.Contains(t, err.Error(), "reserved for the bare-string")
+}
+
+func TestParseInline_RejectsWildcardAsAlias(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{
+				"heading": "Overview",
+				"aliases": []any{"..."},
+			},
+		},
+	}
+	_, err := ParseInline(raw, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		`alias "..."`)
+}
+
+// TestHeadingLine_FallbackTo1 covers the empty-Lines path of
+// headingLine. Goldmark normally populates Lines() for any
+// heading; a hand-constructed *ast.Heading with no Lines and no
+// child Text nodes models the edge case where neither offset
+// source is available, and the helper must return 1 (not 0) so
+// the per-scope walker's line filter still sees the heading.
+func TestHeadingLine_FallbackTo1(t *testing.T) {
+	doc := newDocFile(t, "doc.md", "# T\n")
+	empty := &ast.Heading{Level: 2}
+	got := headingLine(empty, doc)
+	assert.Equal(t, 1, got)
+}
+
 // TestValidate_WildcardHeadingParticipatesInOutOfOrder regresses
 // the "?" wildcard fallback: a later listed scope whose Heading is
 // "?" must still be claimable via out-of-order detection, because
@@ -1210,17 +1230,6 @@ func TestParseInline_ScopeLevelClosed(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sch.Sections, 1)
 	assert.True(t, sch.Sections[0].Closed)
-}
-
-func TestSetScopeInt_AcceptsPlainInt(t *testing.T) {
-	// `int` (Go-typed, not int64 or float64) is uncommon from a
-	// YAML decoder but the helper accepts it. Tested directly
-	// because the only ParseInline path that would feed setScopeInt
-	// is the repeating-pattern keys, and those are rejected up
-	// front based on key presence.
-	var dst int
-	require.NoError(t, setScopeInt(&dst, int(2), "scope", "min"))
-	assert.Equal(t, 2, dst)
 }
 
 func TestSetScopeSections_RejectsNonList(t *testing.T) {

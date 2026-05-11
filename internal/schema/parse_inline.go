@@ -210,7 +210,37 @@ func parseInlineScopeEntry(entry any, path string) (Scope, error) {
 		return Scope{}, fmt.Errorf(
 			"%s: non-wildcard scope must set a non-empty heading", path)
 	}
+	if err := rejectWildcardLikeText(sc, path); err != nil {
+		return Scope{}, err
+	}
 	return sc, nil
+}
+
+// rejectWildcardLikeText rejects a mapping-form scope whose
+// `heading:` or any alias is the literal `"..."`. The bare string
+// "..." is the wildcard slot at the entry level; using it as a
+// heading text inside a mapping is confusing — it would render in
+// diagnostics as a scope named "...", which is not a helpful way
+// to name a real section.
+func rejectWildcardLikeText(sc Scope, path string) error {
+	if strings.TrimSpace(sc.Heading) == SectionWildcard {
+		return fmt.Errorf(
+			"%s: `heading: \"%s\"` is reserved for the bare-string "+
+				"wildcard entry — use `- \"%s\"` as a list item to "+
+				"declare a wildcard slot, not a mapping with heading",
+			path, SectionWildcard, SectionWildcard)
+	}
+	for _, a := range sc.Aliases {
+		if strings.TrimSpace(a) == SectionWildcard {
+			return fmt.Errorf(
+				"%s: alias %q is reserved for the bare-string "+
+					"wildcard entry — remove it from `aliases:` and "+
+					"add a separate `- \"%s\"` slot if you need a "+
+					"wildcard at that position",
+				path, SectionWildcard, SectionWildcard)
+		}
+	}
+	return nil
 }
 
 // firstRepeatingPatternKey returns the first repeating-pattern key
@@ -228,9 +258,11 @@ func firstRepeatingPatternKey(m map[string]any) (string, bool) {
 	return "", false
 }
 
-// applyScopeFields walks the scope mapping and populates sc. Each
-// field's parsing is delegated to a dedicated helper to keep this
-// loop within a manageable cyclomatic budget.
+// applyScopeFields walks the scope mapping and populates sc. The
+// repeating-pattern keys (repeats, sequential, min, max) are
+// intentionally absent here: parseInlineScopeEntry rejects them
+// upfront via firstRepeatingPatternKey, so this loop never sees
+// them. Plan 142 will lift the rejection and restore the cases.
 func applyScopeFields(m map[string]any, sc *Scope, path string) error {
 	for k, vv := range m {
 		var err error
@@ -241,14 +273,6 @@ func applyScopeFields(m map[string]any, sc *Scope, path string) error {
 			err = setScopeBool(&sc.Required, vv, path, k)
 		case "aliases":
 			err = setScopeAliases(sc, vv, path)
-		case "repeats":
-			err = setScopeBool(&sc.Repeats, vv, path, k)
-		case "sequential":
-			err = setScopeBool(&sc.Sequential, vv, path, k)
-		case "min":
-			err = setScopeInt(&sc.Min, vv, path, k)
-		case "max":
-			err = setScopeInt(&sc.Max, vv, path, k)
 		case "closed":
 			err = setScopeBool(&sc.Closed, vv, path, k)
 		case "sections":
@@ -280,27 +304,6 @@ func setScopeBool(dst *bool, v any, path, key string) error {
 		return fmt.Errorf("%s.%s must be a boolean, got %T", path, key, v)
 	}
 	*dst = b
-	return nil
-}
-
-func setScopeInt(dst *int, v any, path, key string) error {
-	switch n := v.(type) {
-	case int:
-		*dst = n
-	case int64:
-		*dst = int(n)
-	case float64:
-		// YAML decodes plain numbers as float64; only accept whole-
-		// number values so a typo like `min: 1.5` does not silently
-		// round to 1.
-		if n != float64(int(n)) {
-			return fmt.Errorf(
-				"%s.%s must be an integer, got %v", path, key, n)
-		}
-		*dst = int(n)
-	default:
-		return fmt.Errorf("%s.%s must be an integer, got %T", path, key, v)
-	}
 	return nil
 }
 
