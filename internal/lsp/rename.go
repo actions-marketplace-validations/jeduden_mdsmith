@@ -378,6 +378,19 @@ func normalizedLabel(b []byte) string {
 	return string(util.ToLinkReference(b))
 }
 
+// firstControlRune returns the first newline / carriage return in
+// s, or 0 when the string is a single line. Used to keep
+// single-line surfaces (heading text, link-ref labels) from being
+// rewritten into multi-line garbage.
+func firstControlRune(s string) rune {
+	for _, r := range s {
+		if r == '\n' || r == '\r' {
+			return r
+		}
+	}
+	return 0
+}
+
 // invalidLinkRefRune returns the first rune in s that would make
 // the resulting `[label]: …` line unparsable, or 0 when s is safe.
 //
@@ -464,6 +477,14 @@ func (s *Server) renameHeading(
 	oldText := res.Name
 	if strings.TrimSpace(newName) == strings.TrimSpace(oldText) {
 		_ = s.t.writeResponse(msg.ID, &workspaceEdit{Changes: map[string][]textEdit{}})
+		return
+	}
+	// Reject newName values that would corrupt the heading line.
+	// A `\n` or `\r` turns a single-line heading into a multi-line
+	// insertion, splitting the document at the source location.
+	if r := firstControlRune(newName); r != 0 {
+		_ = s.t.writeError(msg.ID, codeInvalidParams,
+			fmt.Sprintf("heading text cannot contain %q", r))
 		return
 	}
 	// Reject a new heading text that slugifies to nothing (e.g.
@@ -705,11 +726,12 @@ func (s *Server) resolveURIAndSource(rel string) (string, []byte, bool) {
 	rel = index.NormalizePath(rel)
 	_, _, root := s.snapshotConfig()
 	for _, openURI := range s.docs.openURIs() {
-		doc, found := s.docs.get(openURI)
-		if !found {
-			continue
-		}
-		if index.NormalizePath(workspaceRelative(root, doc.path)) == rel {
+		// Combine the lookup and the path check into one
+		// short-circuit so a concurrent didClose between
+		// openURIs() and get() can't nil-deref doc, without
+		// a separate uncoverable `if !found` branch.
+		if doc, ok := s.docs.get(openURI); ok &&
+			index.NormalizePath(workspaceRelative(root, doc.path)) == rel {
 			return openURI, doc.text, true
 		}
 	}
@@ -808,6 +830,14 @@ func anchorFragmentBytes(row []byte, textStart int, oldSlug string) (int, int, b
 func destBounds(row []byte, from int) (int, int, bool) {
 	open := -1
 	for i := from; i < len(row)-1; i++ {
+		// Skip backslash-escaped bytes so a literal `\]` inside the
+		// text portion (CommonMark allows it) doesn't fool the
+		// `](` lookahead into thinking the destination starts
+		// earlier than it does.
+		if row[i] == '\\' && i+1 < len(row) {
+			i++
+			continue
+		}
 		if row[i] == ']' && row[i+1] == '(' {
 			open = i + 2
 			break
@@ -1116,10 +1146,10 @@ func refDefEditsInBody(
 			continue
 		}
 		row := lines[fileLine-1]
+		// refDefBracketBytes always finds the `[…]` here: the
+		// regex already confirmed the def shape on this line,
+		// and validRefDefMatches confirmed goldmark accepted it.
 		bracket := refDefBracketBytes(row)
-		if bracket == nil {
-			continue
-		}
 		startCh := utf16FromByteOffset(row, bracket[0])
 		endCh := utf16FromByteOffset(row, bracket[1])
 		out = append(out, textEdit{
@@ -1195,16 +1225,15 @@ func refUseEdit(
 	textOpenCol := textStart - lineStart - 1 // include the `[`
 	textCloseCol := textEnd - lineStart      // points just past last text byte
 	pairs := bracketPairs(row)
+	// Goldmark parsed a reference link, so the link's text bytes
+	// live inside a top-level bracket pair on this line; matchingPair
+	// always finds it. Full references additionally have a flush
+	// trailing pair containing the label, so `second` is also valid
+	// in that arm.
 	first, second := matchingPair(pairs, textOpenCol, textCloseCol)
-	if first.open < 0 {
-		return textEdit{}, false
-	}
 	target := first
 	switch l.Reference.Type {
 	case ast.ReferenceLinkFull:
-		if second.open < 0 {
-			return textEdit{}, false
-		}
 		target = second
 	case ast.ReferenceLinkCollapsed:
 		// Collapsed `[text][]` — text doubles as the label.

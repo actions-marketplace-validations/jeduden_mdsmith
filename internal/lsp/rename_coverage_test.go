@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeduden/mdsmith/internal/lsp/index"
 )
 
 // TestHandlePrepareRenameOnUnknownDocument verifies the
@@ -600,6 +602,187 @@ func TestRenameOnCodeBlockRefDefRejected(t *testing.T) {
 	})
 	require.NotNil(t, errResp)
 	assert.Equal(t, codeInvalidParams, errResp.Code)
+}
+
+// TestRenameHeadingRejectsNewline verifies that a newline in
+// newName turns into InvalidParams instead of a multi-line edit.
+func TestRenameHeadingRejectsNewline(t *testing.T) {
+	t.Parallel()
+	src := "# Top\n\n## Setup\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": src})
+	uri := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uri, LanguageID: "markdown", Version: 1, Text: src},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+	_, errResp := h.request("textDocument/rename", renameParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     Position{Line: 2, Character: 4},
+		NewName:      "Bad\nName",
+	})
+	require.NotNil(t, errResp)
+	assert.Equal(t, codeInvalidParams, errResp.Code)
+}
+
+// TestDestBoundsEscapedClosingInText verifies the `\]` escape
+// inside link text is honored by destBounds.
+func TestDestBoundsEscapedClosingInText(t *testing.T) {
+	t.Parallel()
+	row := []byte(`[a\](b)](#sec)`)
+	open, close, ok := destBounds(row, 0)
+	require.True(t, ok)
+	assert.Equal(t, "#sec", string(row[open:close]))
+}
+
+// TestHandleRenameOnRefUseRewritesViaUse covers handleRename's
+// TokenRefUse case — the cursor on `[text][label]` instead of
+// the def line.
+func TestHandleRenameOnRefUseRewritesViaUse(t *testing.T) {
+	t.Parallel()
+	src := "# T\n\nSee [t][docs] here.\n\n[docs]: https://x\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": src})
+	uri := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uri, LanguageID: "markdown", Version: 1, Text: src},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+	raw, errResp := h.request("textDocument/rename", renameParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     Position{Line: 2, Character: 12},
+		NewName:      "manual",
+	})
+	require.Nil(t, errResp)
+	var edit workspaceEdit
+	require.NoError(t, json.Unmarshal(raw, &edit))
+	require.Contains(t, edit.Changes, uri)
+	assert.Len(t, edit.Changes[uri], 2)
+}
+
+// TestResolveURIAndSourceMissingOnDisk hits the on-disk fallback
+// path where the file doesn't exist.
+func TestResolveURIAndSourceMissingOnDisk(t *testing.T) {
+	t.Parallel()
+	h, _, _ := rootedHarness(t, map[string]string{})
+	uri, src, ok := h.srv.resolveURIAndSource("missing.md")
+	assert.False(t, ok)
+	assert.Empty(t, uri)
+	assert.Nil(t, src)
+}
+
+// TestAnchorEditForEdgeStalePaths covers anchorEditForEdge's
+// defensive branches: unresolvable source file, SourceLine out
+// of range, and a fragment that doesn't match.
+func TestAnchorEditForEdgeStalePaths(t *testing.T) {
+	t.Parallel()
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": "# A\n\n[t](#sec)\n"})
+	uri := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uri, LanguageID: "markdown", Version: 1, Text: "# A\n\n[t](#sec)\n"},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+	_, _, ok := h.srv.anchorEditForEdge(index.Edge{SourceFile: "gone.md", SourceLine: 1, SourceCol: 1}, "sec", "new")
+	assert.False(t, ok)
+	_, _, ok = h.srv.anchorEditForEdge(index.Edge{SourceFile: "a.md", SourceLine: 999, SourceCol: 1}, "sec", "new")
+	assert.False(t, ok)
+	_, _, ok = h.srv.anchorEditForEdge(index.Edge{SourceFile: "a.md", SourceLine: 3, SourceCol: 1}, "missing", "new")
+	assert.False(t, ok)
+}
+
+// TestRefUseEditsInBodyIgnoresOtherLabels covers the
+// `Reference.Value != oldLabel` continue branch.
+func TestRefUseEditsInBodyIgnoresOtherLabels(t *testing.T) {
+	t.Parallel()
+	src := "# T\n\nSee [a][docs] and [b][manual].\n\n[docs]: x\n[manual]: y\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": src})
+	uri := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uri, LanguageID: "markdown", Version: 1, Text: src},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+	raw, errResp := h.request("textDocument/rename", renameParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     Position{Line: 4, Character: 2},
+		NewName:      "renamed",
+	})
+	require.Nil(t, errResp)
+	var edit workspaceEdit
+	require.NoError(t, json.Unmarshal(raw, &edit))
+	require.Contains(t, edit.Changes, uri)
+	assert.Len(t, edit.Changes[uri], 2)
+}
+
+// TestRefUseEditCollapsedReferenceLabel covers the
+// ReferenceLinkCollapsed arm of refUseEdit.
+func TestRefUseEditCollapsedReferenceLabel(t *testing.T) {
+	t.Parallel()
+	src := "# T\n\nSee [docs][] inline.\n\n[docs]: x\n"
+	h, _, rootURI := rootedHarness(t, map[string]string{"a.md": src})
+	uri := rootURI + "/a.md"
+	h.notify("textDocument/didOpen", didOpenTextDocumentParams{
+		TextDocument: textDocumentItem{URI: uri, LanguageID: "markdown", Version: 1, Text: src},
+	})
+	_ = h.awaitNotification("textDocument/publishDiagnostics", 5*time.Second)
+	raw, errResp := h.request("textDocument/rename", renameParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     Position{Line: 4, Character: 2},
+		NewName:      "manual",
+	})
+	require.Nil(t, errResp)
+	var edit workspaceEdit
+	require.NoError(t, json.Unmarshal(raw, &edit))
+	require.Contains(t, edit.Changes, uri)
+	assert.Len(t, edit.Changes[uri], 2)
+}
+
+// TestBracketPairsStrayClosingBracket covers the empty-stack
+// branch — a `]` with no matching `[` is dropped silently.
+func TestBracketPairsStrayClosingBracket(t *testing.T) {
+	t.Parallel()
+	pairs := bracketPairs([]byte(`stray ] then [ok]`))
+	require.Len(t, pairs, 1)
+}
+
+// TestMatchingPairNoMatchReturnsFalse covers the no-match return.
+func TestMatchingPairNoMatchReturnsFalse(t *testing.T) {
+	t.Parallel()
+	pairs := []bracketPair{{open: 10, close: 20}}
+	first, _ := matchingPair(pairs, 0, 5)
+	assert.Equal(t, -1, first.open)
+}
+
+// TestValidRefDefMatchesSkipsRegexHitGoldmarkRefused covers the
+// `!wanted[norm]` continue arm. The first `[unaccepted]: url`
+// line is paragraph continuation in CommonMark, so the regex
+// matches it but goldmark never registers a def for that label;
+// the helper must drop it while still emitting the real
+// `[accepted]: url` def.
+func TestValidRefDefMatchesSkipsRegexHitGoldmarkRefused(t *testing.T) {
+	t.Parallel()
+	body := []byte("para line\n[unaccepted]: url\n\n[accepted]: url\n")
+	matches := validRefDefMatches(body)
+	require.Len(t, matches, 1)
+	assert.Equal(t, "accepted", matches[0].rawLabel)
+}
+
+// TestAppendAnchorEditsForHeadingDropsUnresolvableEdge plants a
+// synthetic edge in the index that points at a file the server
+// can't read, then verifies appendAnchorEditsForHeading skips it
+// rather than producing a phantom edit. This drives the
+// `if !ok { continue }` arm that the rename's natural flow
+// rarely reaches.
+func TestAppendAnchorEditsForHeadingDropsUnresolvableEdge(t *testing.T) {
+	t.Parallel()
+	h, _, _ := rootedHarness(t, map[string]string{
+		"present.md": "# Real\n",
+	})
+	idx := h.srv.ensureIndex()
+	// `ghost.md` has no on-disk file and no open buffer, so
+	// resolveURIAndSource will fail; but the index entry below
+	// makes IncomingEdges return an edge for (ghost.md, sec).
+	idx.UpdateWithKinds("ghost.md", []byte("# Sec\n[t](#sec)\n"), nil)
+	changes := map[string][]textEdit{}
+	h.srv.appendAnchorEditsForHeading(changes, idx, "ghost.md", "sec", "newsec")
+	assert.Empty(t, changes)
 }
 
 // TestBracketPairsHandlesNestedBrackets verifies that the
