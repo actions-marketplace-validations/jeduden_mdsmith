@@ -5,7 +5,8 @@ settings:
     sections:
       - heading: "Overview"
         required: true
-      - "..."
+      - heading:
+          unlisted: true
       - heading: "References"
         required: true
 ---

@@ -72,6 +72,16 @@ func walkScopes(
 	visit func(sc schema.Scope, startLine, endLine int),
 ) {
 	for _, sc := range scopes {
+		if sc.Preamble {
+			// Preamble range: [parentStart, first heading at this
+			// level in the window). Empty if the very first doc
+			// node is already a heading; visit() with an empty
+			// range is still useful — `rules:` on a preamble of an
+			// empty preamble simply has nothing to check.
+			end := firstHeadingLine(heads, expectedLevel, parentStart, parentEnd)
+			visit(sc, parentStart, end)
+			continue
+		}
 		if sc.Wildcard {
 			continue
 		}
@@ -156,6 +166,25 @@ func scopeEndLine(
 		}
 		if heads[j].Level <= boundaryLevel {
 			return heads[j].Line
+		}
+	}
+	return parentEnd
+}
+
+// firstHeadingLine returns the line of the first heading at level
+// expectedLevel inside the parent window, or parentEnd when no
+// such heading exists. Used to size the preamble range: from the
+// parent's start line up to (but not including) the first listed
+// heading at this level.
+func firstHeadingLine(
+	heads []schema.DocHeading, expectedLevel, parentStart, parentEnd int,
+) int {
+	for _, h := range heads {
+		if h.Line < parentStart || h.Line >= parentEnd {
+			continue
+		}
+		if h.Level == expectedLevel {
+			return h.Line
 		}
 	}
 	return parentEnd

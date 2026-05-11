@@ -149,6 +149,15 @@ func validateScopes(
 	allowExtra := false
 
 	for i, sc := range scopes {
+		if sc.Preamble {
+			// The preamble has no heading to match. Its rules: are
+			// applied by the per-scope walker in MDS020 against the
+			// [parent-start, first-child-heading) line range. The
+			// validator itself only needs to mark the entry as
+			// processed; plan 149 adds content-shape checks.
+			claimed[i] = true
+			continue
+		}
 		if sc.Wildcard {
 			allowExtra = true
 			continue
@@ -263,7 +272,8 @@ func unclaimedListedScope(
 func buildRequiredByText(scopes []Scope) map[string][]int {
 	out := map[string][]int{}
 	for i, sc := range scopes {
-		if sc.Wildcard {
+		if sc.Wildcard || sc.Preamble {
+			// Preambles have no heading text; wildcards by design.
 			continue
 		}
 		// Skip the "?" wildcard and placeholder patterns — neither
@@ -489,8 +499,10 @@ func MatchesHeading(sc Scope, dh DocHeading) bool {
 }
 
 func scopeMatchesHeading(sc Scope, dh DocHeading) bool {
-	if sc.Wildcard {
-		return false // wildcards never match a specific heading directly.
+	if sc.Wildcard || sc.Preamble {
+		// Wildcards never match a specific heading directly; the
+		// preamble has no heading text to compare against.
+		return false
 	}
 	if sc.Heading == "?" {
 		return true

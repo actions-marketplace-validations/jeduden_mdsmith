@@ -45,11 +45,14 @@ kinds:
         filename: "RFC-[0-9][0-9][0-9][0-9].md"
       closed: true
       sections:
+        - heading: null
+          required: false
         - heading: "Overview"
           required: true
         - heading: "Decision"
           required: true
-        - "..."
+        - heading:
+            unlisted: true
         - heading: "References"
           required: true
 ```
@@ -66,10 +69,28 @@ headings produce a diagnostic. `closed: false` (the
 default) tolerates unlisted headings between listed
 sections.
 
-The `"..."` bare-string entry is a wildcard slot: it
-tolerates any unlisted sections at its position even
-under `closed: true`, while enforcing surrounding
-listed sections' order.
+### The `heading:` field
+
+Every section-array entry sets `heading:`. The value
+takes one of three shapes:
+
+- **string** — literal heading text. Example:
+  `heading: "Overview"`. The doc must have a heading
+  whose text equals that string (or an alias).
+- **`null`** — the preamble: content from line 1 up
+  to the first heading. Only valid as the first entry
+  in a section list. Carries `required:` /
+  `closed:` / `rules:` for that range; cannot carry
+  `aliases:` or nested `sections:`.
+- **mapping** — typed match. Today only
+  `{unlisted: true}` is accepted, declaring a slot
+  that absorbs zero or more sections the schema did
+  not list by name. The slot is positional, but
+  out-of-order detection still claims a heading whose
+  text matches a later listed scope, so the slot only
+  absorbs truly-unlisted sections. Slots cannot carry
+  `aliases:`. Plan 142/149 will extend the mapping
+  form with `{any: true}` and `{pattern: "..."}`.
 
 ### Nested sections
 

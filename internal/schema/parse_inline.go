@@ -173,21 +173,18 @@ func parseInlineScopeList(list []any, path string) ([]Scope, error) {
 		if err != nil {
 			return nil, err
 		}
+		if sc.Preamble && i != 0 {
+			return nil, fmt.Errorf(
+				"%s[%d]: `heading: null` (preamble) must be the first "+
+					"entry in a section list — the preamble's range "+
+					"ends at the first heading", path, i)
+		}
 		scopes = append(scopes, sc)
 	}
 	return scopes, nil
 }
 
 func parseInlineScopeEntry(entry any, path string) (Scope, error) {
-	// A bare "..." string is a wildcard scope.
-	if s, ok := entry.(string); ok {
-		if strings.TrimSpace(s) == SectionWildcard {
-			return Scope{Wildcard: true}, nil
-		}
-		return Scope{}, fmt.Errorf(
-			"%s: scope must be a mapping or the wildcard %q, got string %q",
-			path, SectionWildcard, s)
-	}
 	m, ok := entry.(map[string]any)
 	if !ok {
 		return Scope{}, fmt.Errorf(
@@ -202,42 +199,56 @@ func parseInlineScopeEntry(entry any, path string) (Scope, error) {
 				"does not appear to constrain counts it ignores",
 			path, k)
 	}
+	if _, hasHeading := m["heading"]; !hasHeading {
+		return Scope{}, fmt.Errorf(
+			"%s: scope must set a `heading:` key — use a string "+
+				"(literal heading text), `null` (preamble), or "+
+				"`{unlisted: true}` (slot)", path)
+	}
 	sc := Scope{Required: true}
 	if err := applyScopeFields(m, &sc, path); err != nil {
 		return Scope{}, err
 	}
-	if !sc.Wildcard && strings.TrimSpace(sc.Heading) == "" {
-		return Scope{}, fmt.Errorf(
-			"%s: non-wildcard scope must set a non-empty heading", path)
-	}
-	if err := rejectWildcardLikeText(sc, path); err != nil {
+	if err := validateScopeShape(sc, path); err != nil {
 		return Scope{}, err
 	}
 	return sc, nil
 }
 
-// rejectWildcardLikeText rejects a mapping-form scope whose
-// `heading:` or any alias is the literal `"..."`. The bare string
-// "..." is the wildcard slot at the entry level; using it as a
-// heading text inside a mapping is confusing — it would render in
-// diagnostics as a scope named "...", which is not a helpful way
-// to name a real section.
-func rejectWildcardLikeText(sc Scope, path string) error {
+// validateScopeShape rejects scope combinations that don't make
+// semantic sense after the fields are applied: an empty literal
+// heading, aliases or sub-sections on a preamble or slot scope,
+// the literal text "..." as a heading or alias, and so on. Centralising
+// these checks keeps applyScopeFields itself a plain field-walker.
+func validateScopeShape(sc Scope, path string) error {
+	if !sc.Wildcard && !sc.Preamble && strings.TrimSpace(sc.Heading) == "" {
+		return fmt.Errorf(
+			"%s: literal scope must set a non-empty heading", path)
+	}
+	if (sc.Preamble || sc.Wildcard) && len(sc.Aliases) > 0 {
+		return fmt.Errorf(
+			"%s: aliases are not allowed on a preamble or slot scope "+
+				"(no heading text to alias)", path)
+	}
+	if sc.Preamble && len(sc.Sections) > 0 {
+		return fmt.Errorf(
+			"%s: preamble (`heading: null`) cannot carry `sections:` "+
+				"— the first heading terminates the preamble's range",
+			path)
+	}
 	if strings.TrimSpace(sc.Heading) == SectionWildcard {
 		return fmt.Errorf(
-			"%s: `heading: \"%s\"` is reserved for the bare-string "+
-				"wildcard entry — use `- \"%s\"` as a list item to "+
-				"declare a wildcard slot, not a mapping with heading",
-			path, SectionWildcard, SectionWildcard)
+			"%s: `heading: \"%s\"` is not a valid heading text — "+
+				"use `heading: {unlisted: true}` to declare a slot",
+			path, SectionWildcard)
 	}
 	for _, a := range sc.Aliases {
 		if strings.TrimSpace(a) == SectionWildcard {
 			return fmt.Errorf(
-				"%s: alias %q is reserved for the bare-string "+
-					"wildcard entry — remove it from `aliases:` and "+
-					"add a separate `- \"%s\"` slot if you need a "+
-					"wildcard at that position",
-				path, SectionWildcard, SectionWildcard)
+				"%s: alias %q is not a valid alias text — "+
+					"declare a separate `heading: {unlisted: true}` "+
+					"entry if you need a slot at that position",
+				path, SectionWildcard)
 		}
 	}
 	return nil
@@ -289,12 +300,55 @@ func applyScopeFields(m map[string]any, sc *Scope, path string) error {
 	return nil
 }
 
+// setScopeHeading reads the unified `heading:` field. The value is
+// a string (literal text — the common case), `null` (preamble:
+// content before the first heading), or a mapping that types a
+// non-literal match. Only `{unlisted: true}` is accepted in the
+// mapping form today; plan 142/149 will extend it with shapes such
+// as `{any: true}` and `{pattern: "..."}`.
 func setScopeHeading(sc *Scope, v any, path string) error {
-	s, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("%s.heading must be a string, got %T", path, v)
+	switch x := v.(type) {
+	case nil:
+		sc.Preamble = true
+		return nil
+	case string:
+		sc.Heading = x
+		return nil
+	case map[string]any:
+		return applyHeadingMapping(sc, x, path)
+	default:
+		return fmt.Errorf(
+			"%s.heading must be a string, null, or mapping, got %T",
+			path, v)
 	}
-	sc.Heading = s
+}
+
+func applyHeadingMapping(sc *Scope, m map[string]any, path string) error {
+	if len(m) == 0 {
+		return fmt.Errorf(
+			"%s.heading: empty mapping — use `{unlisted: true}` for a slot",
+			path)
+	}
+	for k, v := range m {
+		switch k {
+		case "unlisted":
+			b, ok := v.(bool)
+			if !ok {
+				return fmt.Errorf(
+					"%s.heading.unlisted must be a boolean, got %T", path, v)
+			}
+			if !b {
+				return fmt.Errorf(
+					"%s.heading.unlisted must be `true` "+
+						"(set the value or omit the entry)", path)
+			}
+			sc.Wildcard = true
+		default:
+			return fmt.Errorf(
+				"%s.heading.%s: unknown heading-kind key (today only "+
+					"`unlisted: true` is accepted)", path, k)
+		}
+	}
 	return nil
 }
 

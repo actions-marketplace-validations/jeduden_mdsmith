@@ -112,6 +112,8 @@ kinds:
         filename: "RFC-[0-9][0-9][0-9][0-9].md"
       closed: true
       sections:
+        - heading: null
+          required: false
         - heading: "Overview"
           required: true
         - heading: "Decision"
@@ -119,33 +121,43 @@ kinds:
           sections:
             - heading: "Outcome"
               required: true
-        - "..."
+        - heading:
+            unlisted: true
         - heading: "References"
           required: true
 ```
 
 Section keys:
 
-- `heading:` — heading text. The level comes from depth
-  in the tree (root sections are H2; nested sections are
-  H3, then H4, …).
-- `required:` — defaults to `true`.
-- `aliases:` — alternate heading texts that match the
-  scope.
+- `heading:` — string (literal text), `null` (the
+  preamble: content before any heading), or mapping
+  (typed match — today only `{unlisted: true}` for a
+  slot). The level for string headings comes from
+  depth in the tree (root sections are H2; nested
+  sections are H3, then H4, …).
+- `required:` — defaults to `true`. Preamble entries
+  typically set `required: false`.
+- `aliases:` — alternate heading texts. Not allowed
+  on preamble or slot entries (no name to alias).
 - `sections:` — nested sections one level deeper.
-- `closed:` — when `true`, unlisted headings inside this
-  scope produce a diagnostic. Default `false`.
-- `rules:` — per-scope rule-config overrides. Each entry
-  maps a rule name to a settings map that applies on
-  top of the rule's defaults inside the scope's
-  subtree. Today's apply is a plain ApplySettings call,
-  not a config-style deep-merge — keys the override
-  sets replace the defaults wholesale.
+  Not allowed on preamble entries (the first heading
+  terminates the preamble's range).
+- `closed:` — when `true`, unlisted headings inside
+  this scope produce a diagnostic. Default `false`.
+- `rules:` — per-scope rule-config overrides. Each
+  entry maps a rule name to a settings map that
+  applies on top of the rule's defaults inside the
+  scope's range. Today's apply is a plain
+  ApplySettings call, not a config-style deep-merge —
+  keys the override sets replace the defaults
+  wholesale.
 
-A bare `"..."` entry is a positional wildcard slot.
-It tolerates unlisted sections at that position even
-under `closed: true`. Listed sections on either side
-still keep their order.
+A slot entry (`heading: {unlisted: true}`) absorbs
+zero or more unlisted sections at that position.
+Surrounding listed sections still keep their order.
+Out-of-order detection still claims a heading whose
+text matches a later listed scope, so the slot only
+absorbs truly-unlisted sections.
 
 The document's H1 is reserved for the title and is
 validated by `first-line-heading`; inline schemas

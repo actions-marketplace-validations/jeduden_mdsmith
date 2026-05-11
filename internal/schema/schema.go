@@ -120,10 +120,22 @@ type Scope struct {
 	// are tolerated between listed sub-sections.
 	Closed bool
 
-	// Wildcard reports whether this scope is a "..." escape hatch:
-	// it does not require any heading and tolerates any unlisted
-	// sections at its position, even under Closed: true.
+	// Wildcard reports whether this scope is a slot that matches
+	// zero or more sections the schema did not list by name. Authors
+	// write it inline as `heading: {unlisted: true}` (or as a `## ...`
+	// row in a file-based proto.md). Out-of-order detection still
+	// claims a heading whose text matches a later listed scope, so
+	// the slot only absorbs truly-unlisted sections.
 	Wildcard bool
+
+	// Preamble reports whether this scope describes the implicit
+	// section before any heading — the document's lead-in content.
+	// Authors write it inline as `heading: null`. A preamble scope
+	// has no heading text to match; its range is [parent-start,
+	// first-child-heading). Plan 146 limits the preamble to
+	// carrying `rules:` overrides for that range; `content:` (plan
+	// 149) extends it to AST-node constraints.
+	Preamble bool
 
 	// Rules carries per-scope rule-config overrides. Each entry maps
 	// a rule name to a settings map. The MDS020 walker re-runs each

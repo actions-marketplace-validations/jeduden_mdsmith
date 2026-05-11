@@ -111,7 +111,9 @@ func TestParseInline_FrontmatterAndSections(t *testing.T) {
 				"sections": []any{map[string]any{"heading": "Outcome"}},
 				"aliases":  []any{"Resolution"},
 			},
-			"...",
+			map[string]any{
+				"heading": map[string]any{"unlisted": true},
+			},
 		},
 	}
 	sch, err := ParseInline(raw, "kind rfc")
@@ -137,7 +139,10 @@ func TestParseInline_UnknownTopKey(t *testing.T) {
 
 func TestParseInline_BadScopeKey(t *testing.T) {
 	raw := map[string]any{
-		"sections": []any{map[string]any{"unknown": true}},
+		"sections": []any{map[string]any{
+			"heading": "Foo",
+			"unknown": true,
+		}},
 	}
 	_, err := ParseInline(raw, "kind x")
 	require.Error(t, err)
@@ -249,7 +254,7 @@ func TestValidate_Inline_WildcardSlotTolerates(t *testing.T) {
 		"closed": true,
 		"sections": []any{
 			map[string]any{"heading": "Overview"},
-			"...",
+			map[string]any{"heading": map[string]any{"unlisted": true}},
 			map[string]any{"heading": "References"},
 		},
 	}

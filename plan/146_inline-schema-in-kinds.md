@@ -112,10 +112,8 @@ schema:
     - heading: "Diagnosis"
       required: true
       sections:
-        - heading: "Step {n}"
-          repeats: true
-          sequential: true
-          min: 1
+        - heading: "Step"
+          required: true
           sections:
             - heading: "Check"
               required: true
@@ -129,22 +127,21 @@ schema:
 
 Section keys:
 
-- `heading:` — the heading text. No `#`
-  markers; the level comes from depth.
-  Placeholders allowed: `{n}` (sequence
-  number), `{slug}` (any identifier),
-  `{title}` (free text).
+- `heading:` — string (literal heading text),
+  `null` (preamble), or `{unlisted: true}`
+  (slot). The level for string headings comes
+  from depth.
 - `required:` — default `true`.
-- `aliases:` — alternate heading texts.
-- `sections:` — nested sections (one level
-  deeper).
-- `repeats:` — when `true`, the heading is a
-  pattern; the document may have zero or more
-  sections matching it.
-- `sequential:` — on a repeating section,
-  enforces no gaps and no duplicates in `{n}`.
-- `min:` / `max:` — bounds on a repeating
-  section's match count.
+- `aliases:` — alternate heading texts. Not
+  allowed on preamble or slot entries.
+- `sections:` — nested sections one level
+  deeper. Not allowed on preamble entries.
+- `closed:` — per-scope strictness toggle.
+- `rules:` — per-scope rule overrides.
+
+The repeating-pattern keys live on the Scope
+struct but the inline parser rejects them
+until plan 142 ships enforcement.
 
 ### Order, openness, unknown sections
 
@@ -159,38 +156,37 @@ sections. `closed: true` makes the scope
 strict; an unlisted heading then produces a
 diagnostic.
 
-```yaml
-schema:
-  closed: true
-  sections:
-    - heading: "Overview"
-    - heading: "Decision"
-```
-
 `closed:` is per-scope. A strict root with
 permissive subsections sets `closed: true` at
 the root and omits it on each child.
 
-A `"..."` entry is a positional escape hatch.
-It does not require any heading. It tolerates
-any unlisted sections at that position even
-under `closed: true`:
+Every section-array entry sets `heading:`. The
+value is a string (literal heading text), `null`
+(the preamble — content before any heading),
+or a mapping (typed match). Today the only
+mapping form is `{unlisted: true}`. The
+`heading: null` preamble is only valid as the
+first entry:
 
 ```yaml
 schema:
   closed: true
   sections:
+    - heading: null
+      required: false
     - heading: "Overview"
-    - "..."
+    - heading: {unlisted: true}
     - heading: "References"
 ```
 
-The schema requires Overview first. References
-last. Anything between. Nothing before
-Overview or after References.
-
-Out-of-order listed sections produce a
-diagnostic naming expected and actual.
+The schema accepts a preamble before any heading.
+Requires Overview first. References last. Other
+unlisted sections may appear between Overview and
+References (the slot absorbs them). A heading
+whose text matches a later listed scope is still
+claimed as out-of-order, not absorbed by the
+slot — so the slot only covers truly-unlisted
+sections.
 
 ### Per-scope rule overrides
 
@@ -209,22 +205,10 @@ schema:
 ```
 
 The override applies only inside that scope.
-The merge stacks on top of the file's
-effective config: defaults → kinds → file
-globs → schema scope. Existing rules need no
-changes — the engine threads the right config
-through the subtree walk. Same
-`paragraph-readability` runs document-wide and
-section-scoped; only the config differs.
-
-### Coexistence with existing rules
-
-Existing rules read the same AST. They accept
-per-section config through the scope tree with
-no code change to any `Configurable` rule. The
-engine emits diagnostics through the existing
-`lint.Diagnostic` shape. The schema is wiring,
-not a parallel system.
+Plan 146 stacks the override on top of the
+rule's defaults; threading the full
+defaults → kinds → file globs → scope merge
+through the engine is a tracked follow-up.
 
 ## Tasks
 
@@ -247,8 +231,10 @@ not a parallel system.
    `{field}` heading/body sync survives; both
    paths share diagnostic text.
 5. ✅ Recursive validator: presence, aliases,
-   nested `sections:`, open-vs-closed, `"..."`
-   slots, level-mismatch detection.
+   nested `sections:`, open-vs-closed,
+   `heading: {unlisted: true}` slots, the
+   `heading: null` preamble, and level-mismatch
+   detection.
 6. ✅ Per-scope rule overrides (minimal): scope
    `rules:` blocks re-run the named rule and
    filter diagnostics to the scope's heading
@@ -291,10 +277,15 @@ not a parallel system.
       passes).
 - [x] `closed: true` flags an unlisted
       heading and names it.
-- [x] A `"..."` wildcard slot tolerates
-      unknown headings at that position even
-      under `closed: true`, while enforcing
-      surrounding listed sections' order.
+- [x] A `heading: {unlisted: true}` slot
+      tolerates unlisted headings at that
+      position even under `closed: true`,
+      while still enforcing surrounding
+      listed sections' order.
+- [x] A `heading: null` preamble entry parses
+      only as the first item in a section
+      list; later positions or duplicates
+      error at load time.
 - [x] Mismatched heading depths flag a
       diagnostic naming expected vs actual
       levels.

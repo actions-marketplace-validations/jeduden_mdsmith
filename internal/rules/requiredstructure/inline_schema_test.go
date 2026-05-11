@@ -136,7 +136,7 @@ func TestCheck_InlineSchema_WildcardSlot(t *testing.T) {
 		"closed": true,
 		"sections": []any{
 			map[string]any{"heading": "Overview"},
-			"...",
+			map[string]any{"heading": map[string]any{"unlisted": true}},
 			map[string]any{"heading": "References"},
 		},
 	})}
@@ -410,6 +410,45 @@ func TestCheck_InlineSchema_ScopeRulesWrongLevelStillPairs(t *testing.T) {
 	}
 	require.NotEmpty(t, lineLength,
 		"level-mismatch fallback should still claim Strict for rule overrides")
+}
+
+// TestCheck_InlineSchema_PreambleRuleOverride exercises the
+// preamble's `rules:` block. A scope with `heading: null` covers
+// the content from line 1 to the first heading; an override on
+// that scope should re-run the named rule only inside that range.
+func TestCheck_InlineSchema_PreambleRuleOverride(t *testing.T) {
+	r := &Rule{InlineSchema: inlineSchema(t, map[string]any{
+		"sections": []any{
+			map[string]any{
+				"heading":  nil,
+				"required": false,
+				"rules": map[string]any{
+					"line-length": map[string]any{
+						"max":     20,
+						"stern":   true,
+						"exclude": []any{},
+					},
+				},
+			},
+			map[string]any{"heading": "Goal"},
+		},
+	})}
+	// Long line in the preamble; identical-length line under Goal.
+	src := "This preamble line is well over twenty chars and should fire.\n\n" +
+		"## Goal\n\n" +
+		"This goal line is well over twenty chars and stays loose.\n"
+	f := newTestFile(t, "doc.md", src)
+	diags := r.Check(f)
+	var lineLength []lint.Diagnostic
+	for _, d := range diags {
+		if d.RuleID == "MDS001" {
+			lineLength = append(lineLength, d)
+		}
+	}
+	require.Len(t, lineLength, 1,
+		"preamble override should fire only on the preamble line")
+	assert.Equal(t, 1, lineLength[0].Line,
+		"diagnostic should land on the preamble line, not under Goal")
 }
 
 // TestCheck_InlineSchema_NestedScopeRuleOverride covers walkScopes'

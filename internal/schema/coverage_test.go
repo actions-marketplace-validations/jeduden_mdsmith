@@ -47,7 +47,7 @@ func TestParseInline_RejectsRepeatingPatternKeys(t *testing.T) {
 	}
 }
 
-func TestParseInline_RejectsEmptyHeading(t *testing.T) {
+func TestParseInline_RejectsMissingHeadingKey(t *testing.T) {
 	raw := map[string]any{
 		"sections": []any{
 			map[string]any{"required": true},
@@ -55,7 +55,7 @@ func TestParseInline_RejectsEmptyHeading(t *testing.T) {
 	}
 	_, err := ParseInline(raw, "kind x")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "non-empty heading")
+	assert.Contains(t, err.Error(), "must set a `heading:` key")
 }
 
 func TestParseInline_RejectsBlankHeading(t *testing.T) {
@@ -107,14 +107,15 @@ func TestParseInline_FrontmatterExprAcceptsScalars(t *testing.T) {
 // ---- ParseInline error paths ----
 
 func TestParseInline_RejectsBadStringEntry(t *testing.T) {
-	// A non-wildcard string in sections is rejected. This exercises
-	// the parseInlineScopeEntry string branch.
+	// Bare strings are no longer accepted as section entries; the
+	// section list is uniformly mappings now. Slots must use
+	// `heading: {unlisted: true}` and preambles use `heading: null`.
 	raw := map[string]any{
-		"sections": []any{"not-a-wildcard"},
+		"sections": []any{"any-string"},
 	}
 	_, err := ParseInline(raw, "kind x")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must be a mapping or the wildcard")
+	assert.Contains(t, err.Error(), "scope must be a mapping")
 }
 
 func TestParseInline_RejectsBadScopeType(t *testing.T) {
@@ -919,9 +920,8 @@ func TestParseInline_RejectsWildcardAsHeadingText(t *testing.T) {
 	}
 	_, err := ParseInline(raw, "kind x")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(),
-		`"..."`)
-	assert.Contains(t, err.Error(), "reserved for the bare-string")
+	assert.Contains(t, err.Error(), `"..."`)
+	assert.Contains(t, err.Error(), "heading: {unlisted: true}")
 }
 
 func TestParseInline_RejectsWildcardAsAlias(t *testing.T) {
@@ -937,6 +937,141 @@ func TestParseInline_RejectsWildcardAsAlias(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(),
 		`alias "..."`)
+}
+
+// ---- Unified heading: grammar (string / null / mapping) ----
+
+func TestParseInline_HeadingString(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{map[string]any{"heading": "Goal"}},
+	}
+	sch, err := ParseInline(raw, "kind x")
+	require.NoError(t, err)
+	require.Len(t, sch.Sections, 1)
+	assert.Equal(t, "Goal", sch.Sections[0].Heading)
+	assert.False(t, sch.Sections[0].Preamble)
+	assert.False(t, sch.Sections[0].Wildcard)
+}
+
+func TestParseInline_HeadingNullIsPreamble(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{"heading": nil, "required": false},
+			map[string]any{"heading": "Goal"},
+		},
+	}
+	sch, err := ParseInline(raw, "kind x")
+	require.NoError(t, err)
+	require.Len(t, sch.Sections, 2)
+	assert.True(t, sch.Sections[0].Preamble)
+	assert.Equal(t, "Goal", sch.Sections[1].Heading)
+}
+
+func TestParseInline_HeadingMappingUnlisted(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{"heading": "Overview"},
+			map[string]any{"heading": map[string]any{"unlisted": true}},
+		},
+	}
+	sch, err := ParseInline(raw, "kind x")
+	require.NoError(t, err)
+	require.Len(t, sch.Sections, 2)
+	assert.True(t, sch.Sections[1].Wildcard)
+}
+
+func TestParseInline_RejectsPreambleAfterFirst(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{"heading": "Goal"},
+			map[string]any{"heading": nil},
+		},
+	}
+	_, err := ParseInline(raw, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be the first entry")
+}
+
+func TestParseInline_RejectsAliasesOnPreamble(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{"heading": nil, "aliases": []any{"Intro"}},
+		},
+	}
+	_, err := ParseInline(raw, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "aliases are not allowed")
+}
+
+func TestParseInline_RejectsSectionsOnPreamble(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{
+				"heading":  nil,
+				"sections": []any{map[string]any{"heading": "Sub"}},
+			},
+		},
+	}
+	_, err := ParseInline(raw, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "preamble")
+	assert.Contains(t, err.Error(), "sections")
+}
+
+func TestParseInline_RejectsAliasesOnSlot(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{
+				"heading": map[string]any{"unlisted": true},
+				"aliases": []any{"Anything"},
+			},
+		},
+	}
+	_, err := ParseInline(raw, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "aliases are not allowed")
+}
+
+func TestParseInline_RejectsEmptyHeadingMapping(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{map[string]any{"heading": map[string]any{}}},
+	}
+	_, err := ParseInline(raw, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty mapping")
+}
+
+func TestParseInline_RejectsUnknownHeadingKind(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{"heading": map[string]any{"frobnicate": true}},
+		},
+	}
+	_, err := ParseInline(raw, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown heading-kind key")
+}
+
+func TestParseInline_RejectsUnlistedFalse(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{"heading": map[string]any{"unlisted": false}},
+		},
+	}
+	_, err := ParseInline(raw, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be `true`")
+}
+
+func TestParseInline_RejectsUnlistedNonBool(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{
+			map[string]any{"heading": map[string]any{"unlisted": "yes"}},
+		},
+	}
+	_, err := ParseInline(raw, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be a boolean")
 }
 
 // TestHeadingLine_FallbackTo1 covers the empty-Lines path of
