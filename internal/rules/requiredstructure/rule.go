@@ -17,6 +17,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/placeholders"
 	"github.com/jeduden/mdsmith/internal/rule"
 	rulesettings "github.com/jeduden/mdsmith/internal/rules/settings"
+	"github.com/jeduden/mdsmith/internal/schema"
 	"github.com/jeduden/mdsmith/internal/yamlutil"
 	"github.com/yuin/goldmark/ast"
 	"gopkg.in/yaml.v3"
@@ -27,9 +28,17 @@ func init() {
 }
 
 // Rule checks that a document's heading structure matches a schema.
+//
+// A rule instance holds at most one schema source: a path to a
+// proto.md file (Schema) or an already-parsed inline schema
+// (InlineSchema). The kind-level loader rejects configurations that
+// set both on the same kind; the merge logic in internal/config
+// clears the other source whenever a later layer installs a new one,
+// so the rule never has to disambiguate at runtime.
 type Rule struct {
-	Schema       string   // path to schema file
-	Placeholders []string // placeholder tokens to treat as opaque
+	Schema       string         // path to schema file
+	InlineSchema *schema.Schema // parsed inline schema (when set)
+	Placeholders []string       // placeholder tokens to treat as opaque
 }
 
 // ID implements rule.Rule.
@@ -43,6 +52,9 @@ func (r *Rule) Category() string { return "meta" }
 
 // ApplySettings implements rule.Configurable.
 func (r *Rule) ApplySettings(settings map[string]any) error {
+	if err := rejectDualSchemaSettings(settings); err != nil {
+		return err
+	}
 	for k, v := range settings {
 		switch k {
 		case "schema":
@@ -58,6 +70,17 @@ func (r *Rule) ApplySettings(settings map[string]any) error {
 						"kind under `kinds:` — see docs/guides/file-kinds.md", s, s)
 			}
 			r.Schema = s
+		case "inline-schema":
+			m, ok := v.(map[string]any)
+			if !ok {
+				return fmt.Errorf(
+					"required-structure: inline-schema must be a mapping, got %T", v)
+			}
+			sch, err := schema.ParseInline(m, "inline kind schema")
+			if err != nil {
+				return fmt.Errorf("required-structure: invalid inline-schema: %w", err)
+			}
+			r.InlineSchema = sch
 		case "placeholders":
 			toks, ok := rulesettings.ToStringSlice(v)
 			if !ok {
@@ -81,12 +104,42 @@ func (r *Rule) ApplySettings(settings map[string]any) error {
 	return nil
 }
 
+// rejectDualSchemaSettings refuses a settings map that supplies both
+// `schema` (file path) and `inline-schema` (inline map). The merge
+// layer clears the prior source when a later layer installs a new
+// one, so the rule normally sees only one — this guard catches the
+// case where a single config layer lists both.
+func rejectDualSchemaSettings(settings map[string]any) error {
+	pathV, hasPath := settings["schema"]
+	mapV, hasInline := settings["inline-schema"]
+	if !hasPath || !hasInline {
+		return nil
+	}
+	path, _ := pathV.(string)
+	inline, _ := mapV.(map[string]any)
+	if path == "" || len(inline) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"required-structure: cannot set both `schema` (%q) and "+
+			"`inline-schema` on the same layer — pick one source",
+		path)
+}
+
 // DefaultSettings implements rule.Configurable.
 func (r *Rule) DefaultSettings() map[string]any {
 	return map[string]any{
 		"schema":       "",
 		"placeholders": []string{},
 	}
+}
+
+// hasInlineSchema reports whether the rule has a non-empty inline
+// schema attached. The inline source takes precedence over the file
+// source — the kind validator and the effective-config merge prevent
+// them from coexisting, but this is the runtime safeguard.
+func (r *Rule) hasInlineSchema() bool {
+	return r.InlineSchema != nil && !r.InlineSchema.IsEmpty()
 }
 
 // isLikelyArchetypeName reports whether s looks like a bare archetype
@@ -125,9 +178,37 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 		}
 	}
 
+	if r.hasInlineSchema() {
+		return append(diags, r.checkInlineSchema(f)...)
+	}
+
 	if r.Schema == "" {
 		return diags
 	}
+
+	return append(diags, r.checkFileSchema(f)...)
+}
+
+// checkInlineSchema runs the validator against the rule's parsed
+// inline schema. Inline schemas do not support frontmatter-body
+// {field} sync (no source body content) so the legacy syncPoints
+// code path is skipped.
+func (r *Rule) checkInlineSchema(f *lint.File) []lint.Diagnostic {
+	var diags []lint.Diagnostic
+	docFMRaw, fmDiags := readDocFrontMatterRaw(f)
+	diags = append(diags, fmDiags...)
+	fmIsCUE := placeholders.HasCUEFrontmatter(r.Placeholders)
+	diags = append(diags, schema.Validate(f, r.InlineSchema, docFMRaw, fmIsCUE, makeDiag)...)
+	diags = append(diags, r.applyScopeRules(f, r.InlineSchema)...)
+	return diags
+}
+
+// checkFileSchema retains the legacy proto.md heading-template
+// validation path. It supports {field} sync points in headings and
+// body content; these features are tied to the source body of the
+// schema markdown and have no inline counterpart.
+func (r *Rule) checkFileSchema(f *lint.File) []lint.Diagnostic {
+	var diags []lint.Diagnostic
 
 	schData, schPath, err := r.loadSchema(f)
 	if err != nil {

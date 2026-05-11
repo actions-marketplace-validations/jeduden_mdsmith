@@ -49,6 +49,7 @@ row: "- [{summary}]({filename})"
 - [User guides for mdsmith directives, structure enforcement, and migration.](docs/guides/index.md)
 - [Every channel that ships the mdsmith binary, the VS Code extension, or the Claude Code plugin — npm, PyPI, asdf, mise, the GitHub release, the Visual Studio Marketplace plus Open VSX, and the in-repository Claude Code marketplace — and which channel to pick for which workflow.](docs/guides/install.md)
 - [Trade-offs and threshold guidance for readability, structure, length, and token budgets.](docs/guides/metrics-tradeoffs.md)
+- [Declare a document-structure schema inline on a kind or in a proto.md file, validate headings and front matter, and tighten rule config per section.](docs/guides/schemas.md)
 - [CLI commands, flags, exit codes, and output format.](docs/reference/cli.md)
 - [Lint Markdown files for style issues.](docs/reference/cli/check.md)
 - [Auto-fix lint issues in Markdown files in place.](docs/reference/cli/fix.md)

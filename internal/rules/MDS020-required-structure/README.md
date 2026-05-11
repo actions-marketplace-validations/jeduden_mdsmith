@@ -11,17 +11,23 @@ schema.
 
 ## Settings
 
-| Setting        | Type   | Default | Description                                                                                                                |
-|----------------|--------|---------|----------------------------------------------------------------------------------------------------------------------------|
-| `schema`       | string | `""`    | Path to a schema file                                                                                                      |
-| `placeholders` | list   | `[]`    | Placeholder tokens to treat as opaque; see [placeholder grammar](../../../docs/background/concepts/placeholder-grammar.md) |
+| Setting         | Type   | Default | Description                                                                                                                |
+|-----------------|--------|---------|----------------------------------------------------------------------------------------------------------------------------|
+| `schema`        | string | `""`    | Path to a schema file (a `proto.md`)                                                                                       |
+| `inline-schema` | map    | (unset) | Inline schema injected by `kinds.<name>.schema:`; not usually written by hand on a rule. DefaultSettings does not list it. |
+| `placeholders`  | list   | `[]`    | Placeholder tokens to treat as opaque; see [placeholder grammar](../../../docs/background/concepts/placeholder-grammar.md) |
 
 Useful tokens: `cue-frontmatter`.
 
-When `schema` is empty the rule skips structure and
-front matter validation, but still warns on misplaced
-`<?require?>` directives. Use overrides or `kinds:` to
-apply schemas to specific file groups.
+When neither `schema` nor `inline-schema` is set the
+rule skips structure and front matter validation, but
+still warns on misplaced `<?require?>` directives. Use
+overrides or `kinds:` to apply schemas to specific file
+groups.
+
+A kind may declare its schema in either form. The
+config loader rejects a kind that sets both — see
+[file kinds](../../../docs/guides/file-kinds.md).
 
 Schema front matter may embed a CUE schema that
 validates document front matter:
@@ -86,6 +92,83 @@ Schema body controls section strictness:
 - Add a heading with text `...` (for example `## ...`) to
   allow extra headings in that position until the next
   required heading anchor.
+
+### Inline schemas on kinds
+
+A kind body may declare its schema directly in
+`.mdsmith.yml` rather than referencing a `proto.md`
+file. The two forms are equivalent — both parse to the
+same in-memory scope tree — and a kind may use only one.
+
+```yaml
+kinds:
+  rfc:
+    schema:
+      frontmatter:
+        id: '=~"^RFC-[0-9]{4}$"'
+        status: '"draft" | "ratified" | "deprecated"'
+        authors: '[...string] & len(authors) >= 1'
+      require:
+        filename: "RFC-[0-9][0-9][0-9][0-9].md"
+      closed: true
+      sections:
+        - heading: null
+          required: false
+        - heading: "Overview"
+          required: true
+        - heading: "Decision"
+          required: true
+          sections:
+            - heading: "Outcome"
+              required: true
+        - heading:
+            unlisted: true
+        - heading: "References"
+          required: true
+```
+
+Section keys:
+
+- `heading:` — string (literal text), `null` (the
+  preamble: content before any heading), or mapping
+  (typed match — today only `{unlisted: true}` for a
+  slot). The level for string headings comes from
+  depth in the tree (root sections are H2; nested
+  sections are H3, then H4, …).
+- `required:` — defaults to `true`. Preamble entries
+  typically set `required: false`.
+- `aliases:` — alternate heading texts. Not allowed
+  on preamble or slot entries (no name to alias).
+- `sections:` — nested sections one level deeper.
+  Not allowed on preamble entries (the first heading
+  terminates the preamble's range).
+- `closed:` — when `true`, unlisted headings inside
+  this scope produce a diagnostic. Default `false`.
+- `rules:` — per-scope rule-config overrides. Each
+  entry maps a rule name to a settings map that
+  applies on top of the rule's defaults inside the
+  scope's range. Today's apply is a plain
+  ApplySettings call, not a config-style deep-merge —
+  keys the override sets replace the defaults
+  wholesale.
+
+A slot entry (`heading: {unlisted: true}`) absorbs
+zero or more unlisted sections at that position.
+Surrounding listed sections still keep their order.
+Out-of-order detection still claims a heading whose
+text matches a later listed scope, so the slot only
+absorbs truly-unlisted sections.
+
+Slots are positional-only: the parser rejects
+`aliases:`, `sections:`, `rules:`, `closed:`, and
+`required:` on a slot scope. The preamble
+(`heading: null`) accepts `required:`, `closed:`,
+and `rules:` for its line range; it rejects
+`aliases:` and `sections:`.
+
+The document's H1 is reserved for the title and is
+validated by `first-line-heading`; inline schemas
+constrain H2 and below.
 
 ## Config
 

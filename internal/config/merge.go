@@ -158,6 +158,7 @@ func copyKinds(kinds map[string]KindBody) map[string]KindBody {
 		result[name] = KindBody{
 			Rules:      rules,
 			Categories: copyCategories(body.Categories),
+			Schema:     cloneSettings(body.Schema),
 		}
 	}
 	return result
@@ -357,18 +358,104 @@ func effectiveRules(cfg *Config, filePath string, kinds []string) map[string]Rul
 		if !ok {
 			continue
 		}
+		// When a kind sets either schema source, treat it as a
+		// fresh schema declaration: clear any prior schema state
+		// on required-structure so the last source wins
+		// unambiguously across mixed kinds.
+		if kindDeclaresSchema(body) {
+			clearSchemaState(result)
+		}
+		if len(body.Schema) > 0 {
+			applyInlineSchema(result, body.Schema)
+		}
 		for k, v := range body.Rules {
 			apply(k, v)
 		}
 	}
 	for _, o := range cfg.Overrides {
 		if matchesAny(o.Patterns(), filePath) {
+			if overrideDeclaresSchema(o) {
+				clearSchemaState(result)
+			}
 			for k, v := range o.Rules {
 				apply(k, v)
 			}
 		}
 	}
 	return result
+}
+
+// kindDeclaresSchema reports whether a kind body declares a schema
+// source — either inline (KindBody.Schema) or via the
+// rules.required-structure.{schema,inline-schema} settings.
+func kindDeclaresSchema(body KindBody) bool {
+	if len(body.Schema) > 0 {
+		return true
+	}
+	return rulesDeclareSchema(body.Rules)
+}
+
+// overrideDeclaresSchema reports whether a glob override sets a
+// schema source on required-structure. Both schema sources count —
+// without this, an inline schema installed by an override would
+// leave a prior file-schema path intact and "last source wins"
+// could yield ambiguous configs.
+func overrideDeclaresSchema(o Override) bool {
+	return rulesDeclareSchema(o.Rules)
+}
+
+// rulesDeclareSchema reports whether a per-layer rules map sets
+// either schema source on required-structure. A bool-only entry
+// (`required-structure: true/false`) leaves Settings nil; bail
+// before the lookups to keep the contract explicit.
+func rulesDeclareSchema(rules map[string]RuleCfg) bool {
+	rs, ok := rules["required-structure"]
+	if !ok {
+		return false
+	}
+	if rs.Settings == nil {
+		return false
+	}
+	if path, ok := rs.Settings["schema"].(string); ok && path != "" {
+		return true
+	}
+	if m, ok := rs.Settings["inline-schema"].(map[string]any); ok && len(m) > 0 {
+		return true
+	}
+	return false
+}
+
+// clearSchemaState removes any prior schema source from the
+// accumulated effective config for required-structure. Both the
+// inline-schema map and the file-schema path are cleared so the
+// incoming layer can install its own source unambiguously.
+func clearSchemaState(result map[string]RuleCfg) {
+	rs, ok := result["required-structure"]
+	if !ok {
+		return
+	}
+	if rs.Settings == nil {
+		return
+	}
+	delete(rs.Settings, "schema")
+	delete(rs.Settings, "inline-schema")
+	result["required-structure"] = rs
+}
+
+// applyInlineSchema installs an inline schema (a YAML map) as the
+// `inline-schema` setting on required-structure, creating the rule
+// entry if missing.
+func applyInlineSchema(result map[string]RuleCfg, schema map[string]any) {
+	rs, ok := result["required-structure"]
+	if !ok {
+		rs = RuleCfg{Enabled: true}
+	}
+	if rs.Settings == nil {
+		rs.Settings = map[string]any{}
+	}
+	rs.Settings["inline-schema"] = cloneSettings(schema)
+	rs.Enabled = true
+	result["required-structure"] = rs
 }
 
 func effectiveExplicit(cfg *Config, filePath string, kinds []string) map[string]bool {
@@ -383,6 +470,15 @@ func effectiveExplicit(cfg *Config, filePath string, kinds []string) map[string]
 		}
 		for k := range body.Rules {
 			result[k] = true
+		}
+		// An inline `schema:` block on the kind is an explicit
+		// configuration of required-structure even though it lives
+		// outside body.Rules. Without this, a `meta` category
+		// disable would silently wipe an inline-schema kind's
+		// effect — inconsistent with the file-source path that
+		// lives under body.Rules.
+		if len(body.Schema) > 0 {
+			result["required-structure"] = true
 		}
 	}
 	for _, o := range cfg.Overrides {

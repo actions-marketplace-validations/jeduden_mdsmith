@@ -124,9 +124,16 @@ func (o Override) Patterns() []string {
 // KindBody is a named bundle of rule settings. It has the same shape as
 // Override minus the Files field; files are bound to kinds separately via
 // front-matter kinds: or kind-assignment:.
+//
+// Schema, when set, declares the document-structure schema for files
+// of this kind inline (rather than referencing a proto.md file via
+// rules.required-structure.schema:). A kind that sets both Schema
+// and rules.required-structure.schema: is a config error; see
+// ValidateKinds.
 type KindBody struct {
 	Rules      map[string]RuleCfg `yaml:"rules"`
 	Categories map[string]bool    `yaml:"categories"`
+	Schema     map[string]any     `yaml:"schema,omitempty"`
 }
 
 // KindAssignmentEntry assigns one or more kinds to files matching glob
