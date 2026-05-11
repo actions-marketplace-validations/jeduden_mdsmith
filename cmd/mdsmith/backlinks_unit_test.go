@@ -208,7 +208,7 @@ func TestCollectBacklinks_End2End(t *testing.T) {
 	root, files := setupCollectBacklinksFixture(t)
 
 	t.Run("three sources, no anchor", func(t *testing.T) {
-		got, errs := collectBacklinks(files, root, "docs/api.md", "", nil, 0, true)
+		got, errs := collectBacklinks(files, root, "docs/api.md", "", nil, nil, 0, true)
 		require.Empty(t, errs)
 		require.Len(t, got, 3)
 		assert.Equal(t, "docs/index.md", got[0].Source)
@@ -217,20 +217,20 @@ func TestCollectBacklinks_End2End(t *testing.T) {
 	})
 
 	t.Run("anchor scopes to one source", func(t *testing.T) {
-		got, errs := collectBacklinks(files, root, "docs/api.md", "authentication", nil, 0, true)
+		got, errs := collectBacklinks(files, root, "docs/api.md", "authentication", nil, nil, 0, true)
 		require.Empty(t, errs)
 		require.Len(t, got, 1)
 		assert.Equal(t, "docs/sub/guide.md", got[0].Source)
 	})
 
 	t.Run("anchor with no hits returns empty", func(t *testing.T) {
-		got, errs := collectBacklinks(files, root, "docs/api.md", "no-such-section", nil, 0, true)
+		got, errs := collectBacklinks(files, root, "docs/api.md", "no-such-section", nil, nil, 0, true)
 		assert.Empty(t, errs)
 		assert.Empty(t, got)
 	})
 
 	t.Run("include filter excludes plan/", func(t *testing.T) {
-		got, errs := collectBacklinks(files, root, "docs/api.md", "", []string{"docs/**"}, 0, true)
+		got, errs := collectBacklinks(files, root, "docs/api.md", "", []string{"docs/**"}, nil, 0, true)
 		require.Empty(t, errs)
 		require.Len(t, got, 2)
 		assert.Equal(t, "docs/index.md", got[0].Source)
@@ -242,28 +242,44 @@ func TestCollectBacklinks_End2End(t *testing.T) {
 		// collectBacklinks captures the error rather than swallowing.
 		bad := filepath.Join(root, "does-not-exist.md")
 		filesWithBad := append([]string{bad}, files...)
-		got, errs := collectBacklinks(filesWithBad, root, "docs/api.md", "", nil, 0, true)
+		got, errs := collectBacklinks(filesWithBad, root, "docs/api.md", "", nil, nil, 0, true)
 		// The other files still contribute results.
 		assert.NotEmpty(t, got)
 		require.Len(t, errs, 1)
 		assert.Contains(t, errs[0].Error(), "does-not-exist.md")
 	})
 
-	t.Run("local-anchor links are skipped", func(t *testing.T) {
-		// Source contains only a same-file anchor link, no cross-file
-		// reference to the target. linkgraph yields a LocalAnchor=true
-		// link; collectBacklinks must skip it without trying to
-		// resolve a path target.
-		anchorOnly := filepath.Join(root, "anchor-only.md")
-		require.NoError(t, os.WriteFile(anchorOnly,
-			[]byte("# Intro\n\nJump to [section](#section).\n\n## Section\n"), 0o644))
-		filesWithAnchor := append([]string{anchorOnly}, files...)
-		got, errs := collectBacklinks(filesWithAnchor, root, "docs/api.md", "", nil, 0, true)
-		assert.Empty(t, errs)
-		// Same three matches as before; anchor-only.md contributes nothing.
-		assert.Len(t, got, 3)
-	})
+}
 
+func TestCollectBacklinks_LocalAnchorSkipped(t *testing.T) {
+	// Source contains only a same-file anchor link, no cross-file
+	// reference to the target. linkgraph yields a LocalAnchor=true
+	// link; collectBacklinks must skip it without trying to resolve a
+	// path target.
+	root, files := setupCollectBacklinksFixture(t)
+	anchorOnly := filepath.Join(root, "anchor-only.md")
+	require.NoError(t, os.WriteFile(anchorOnly,
+		[]byte("# Intro\n\nJump to [section](#section).\n\n## Section\n"), 0o644))
+	filesWithAnchor := append([]string{anchorOnly}, files...)
+	got, errs := collectBacklinks(filesWithAnchor, root, "docs/api.md", "", nil, nil, 0, true)
+	assert.Empty(t, errs)
+	// Same three matches as before; anchor-only.md contributes nothing.
+	assert.Len(t, got, 3)
+}
+
+func TestCollectBacklinks_IgnorePatternsExclude(t *testing.T) {
+	// `plan/**` ignores the plan/* source that links to api.md;
+	// the other two sources still produce records.
+	root, files := setupCollectBacklinksFixture(t)
+	got, errs := collectBacklinks(
+		files, root, "docs/api.md", "",
+		nil, []string{"plan/**"}, 0, true,
+	)
+	require.Empty(t, errs)
+	require.Len(t, got, 2)
+	for _, r := range got {
+		assert.NotContains(t, r.Source, "plan/")
+	}
 }
 
 // TestCollectBacklinks_FrontMatterStrippingDisabled verifies the
@@ -277,7 +293,7 @@ func TestCollectBacklinks_FrontMatterStrippingDisabled(t *testing.T) {
 	require.NoError(t, os.WriteFile(fmSrc,
 		[]byte("---\ntitle: x\n---\n# H\n\nSee [api](docs/api.md).\n"), 0o644))
 	filesWithFM := append([]string{fmSrc}, files...)
-	got, errs := collectBacklinks(filesWithFM, root, "docs/api.md", "", nil, 0, false)
+	got, errs := collectBacklinks(filesWithFM, root, "docs/api.md", "", nil, nil, 0, false)
 	require.Empty(t, errs)
 	var fmRec *backlinkRecord
 	for i := range got {
@@ -320,7 +336,7 @@ func TestCollectBacklinks_SortStable(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "src.md"), []byte(body), 0o644))
 
 	files := []string{filepath.Join(root, "src.md"), filepath.Join(root, "target.md")}
-	got, errs := collectBacklinks(files, root, "target.md", "", nil, 0, true)
+	got, errs := collectBacklinks(files, root, "target.md", "", nil, nil, 0, true)
 	require.Empty(t, errs)
 	require.Len(t, got, 2)
 	assert.Equal(t, "src.md", got[0].Source)

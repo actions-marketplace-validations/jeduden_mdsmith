@@ -15,7 +15,8 @@ mdsmith backlinks [flags] <target>
 
 `<target>` is workspace-relative. Append `#anchor` to
 restrict matches to links whose anchor resolves to the
-named heading.
+named heading. Absolute paths and parent-traversal
+entries (`../foo.md`) are rejected with exit code 2.
 
 ## Flags
 

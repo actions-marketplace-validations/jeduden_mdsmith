@@ -14,6 +14,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	flag "github.com/spf13/pflag"
 
+	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/globpath"
 	"github.com/jeduden/mdsmith/internal/linkgraph"
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -112,7 +113,7 @@ func runBacklinks(args []string) int {
 
 	records, errs := collectBacklinks(
 		files, rootDir, wantTarget, targetAnchor,
-		opts.includePatterns, maxBytes, frontMatterEnabled(cfg),
+		opts.includePatterns, cfg.Ignore, maxBytes, frontMatterEnabled(cfg),
 	)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", e)
@@ -145,6 +146,15 @@ func validateBacklinksArgs(opts backlinksOptions, posArgs []string) (targetPath,
 	targetPath, targetAnchor = splitTarget(posArgs[0])
 	if targetPath == "" {
 		fmt.Fprint(os.Stderr, "mdsmith: backlinks target must include a file path\n")
+		return "", "", 2
+	}
+	// `<target>` is workspace-relative by contract. An absolute path
+	// or a parent-traversal entry normalises to something outside the
+	// workspace and would silently match nothing — which a caller
+	// cannot distinguish from a genuine empty result. Reject upfront
+	// so the failure is loud.
+	if !isWorkspaceRelativeTarget(targetPath) {
+		fmt.Fprintf(os.Stderr, "mdsmith: target %q must be workspace-relative\n", targetPath)
 		return "", "", 2
 	}
 	if err := validateIncludePatterns(opts.includePatterns); err != nil {
@@ -217,6 +227,8 @@ func normalizeWorkspacePath(target, rootDir string) string {
 // resolved workspace-relative target equals wantTarget. When anchor
 // is non-empty, the link's anchor must also match (after slugifying).
 // includePatterns, when non-empty, filters source paths.
+// ignorePatterns are config `ignore:` globs; matched sources are
+// skipped so backlinks output respects the same scope as check/fix.
 //
 // stripFrontMatter must mirror the config's frontMatter setting so
 // reported line numbers match MDS027 / the engine for the same file.
@@ -227,7 +239,7 @@ func normalizeWorkspacePath(target, rootDir string) string {
 func collectBacklinks(
 	files []string,
 	rootDir, wantTarget, wantAnchor string,
-	includePatterns []string,
+	includePatterns, ignorePatterns []string,
 	maxBytes int64,
 	stripFrontMatter bool,
 ) ([]backlinkRecord, []error) {
@@ -240,55 +252,20 @@ func collectBacklinks(
 	var errs []error
 	for _, src := range files {
 		srcRel := workspaceRelativePath(src, rootDir)
-		if !sourceMatches(srcRel, includePatterns) {
+		if !sourceMatches(srcRel, includePatterns) ||
+			config.IsIgnored(ignorePatterns, srcRel) ||
+			srcRel == wantTarget {
 			continue
 		}
-		// A file never lists itself in its own backlinks.
-		if srcRel == wantTarget {
-			continue
-		}
-		data, err := lint.ReadFileLimited(src, maxBytes)
+		rs, err := extractBacklinksFromSource(
+			src, srcRel, wantTarget, wantAnchorSlug,
+			maxBytes, stripFrontMatter,
+		)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("reading %s: %w", srcRel, err))
+			errs = append(errs, err)
 			continue
 		}
-		// Reuse the lint pipeline's front-matter handling so line
-		// numbers in records match what users see in editors. Mirror
-		// the config's frontMatter setting so backlinks stays aligned
-		// with MDS027 when stripping is turned off.
-		f, err := lint.NewFileFromSource(src, data, stripFrontMatter)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("parsing %s: %w", srcRel, err))
-			continue
-		}
-		for _, link := range linkgraph.ExtractLinks(f) {
-			t := link.Target
-			// Skip same-file anchor refs: backlinks only surfaces
-			// cross-file edges. linkgraph guarantees a non-empty
-			// Path whenever LocalAnchor is false.
-			if t.LocalAnchor {
-				continue
-			}
-			resolved := resolveLinkTarget(srcRel, t.Path)
-			if resolved == "" || resolved != wantTarget {
-				continue
-			}
-			if wantAnchorSlug != "" {
-				if linkgraph.NormalizeAnchor(t.Anchor) != wantAnchorSlug {
-					continue
-				}
-			}
-			records = append(records, backlinkRecord{
-				Source: srcRel,
-				// ExtractLinks returns body-relative lines (rules need
-				// that for the engine's offset-adjustment); the CLI
-				// shows file-relative line numbers, so add f.LineOffset
-				// back in.
-				Line:   link.Line + f.LineOffset,
-				Text:   link.Text,
-				Target: t.Raw,
-			})
-		}
+		records = append(records, rs...)
 	}
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].Source != records[j].Source {
@@ -297,6 +274,55 @@ func collectBacklinks(
 		return records[i].Line < records[j].Line
 	})
 	return records, errs
+}
+
+// extractBacklinksFromSource reads one source file, parses it, and
+// returns the backlink records (and any read/parse error) for links
+// that resolve to wantTarget. wantAnchorSlug is the already-slugified
+// anchor query, or "" to match any anchor.
+func extractBacklinksFromSource(
+	src, srcRel, wantTarget, wantAnchorSlug string,
+	maxBytes int64, stripFrontMatter bool,
+) ([]backlinkRecord, error) {
+	data, err := lint.ReadFileLimited(src, maxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", srcRel, err)
+	}
+	// Reuse the lint pipeline's front-matter handling so line numbers
+	// in records match what users see in editors. Mirror the config's
+	// frontMatter setting so backlinks stays aligned with MDS027 when
+	// stripping is turned off.
+	f, err := lint.NewFileFromSource(src, data, stripFrontMatter)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", srcRel, err)
+	}
+	var out []backlinkRecord
+	for _, link := range linkgraph.ExtractLinks(f) {
+		t := link.Target
+		// Skip same-file anchor refs: backlinks only surfaces cross-
+		// file edges. linkgraph guarantees a non-empty Path whenever
+		// LocalAnchor is false.
+		if t.LocalAnchor {
+			continue
+		}
+		resolved := resolveLinkTarget(srcRel, t.Path)
+		if resolved == "" || resolved != wantTarget {
+			continue
+		}
+		if wantAnchorSlug != "" && linkgraph.NormalizeAnchor(t.Anchor) != wantAnchorSlug {
+			continue
+		}
+		out = append(out, backlinkRecord{
+			Source: srcRel,
+			// ExtractLinks returns body-relative lines (rules need
+			// that for the engine's offset-adjustment); the CLI shows
+			// file-relative line numbers, so add f.LineOffset back in.
+			Line:   link.Line + f.LineOffset,
+			Text:   link.Text,
+			Target: t.Raw,
+		})
+	}
+	return out, nil
 }
 
 // workspaceRelativePath returns p relative to rootDir using forward
@@ -356,6 +382,19 @@ func isAbsOrDriveOrUNC(p string) bool {
 		}
 	}
 	return strings.HasPrefix(p, "//")
+}
+
+// isWorkspaceRelativeTarget reports whether target is a usable
+// workspace-relative path. Absolute paths (POSIX / Windows / UNC)
+// and parent-traversal entries are rejected so the caller can fail
+// loudly instead of silently producing an empty result set.
+func isWorkspaceRelativeTarget(target string) bool {
+	t := filepath.ToSlash(target)
+	if isAbsOrDriveOrUNC(t) {
+		return false
+	}
+	cleaned := path.Clean(t)
+	return cleaned != ".." && !strings.HasPrefix(cleaned, "../")
 }
 
 // sourceMatches reports whether src should be considered, given the

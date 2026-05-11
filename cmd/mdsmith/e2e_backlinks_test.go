@@ -223,6 +223,47 @@ func TestE2E_Backlinks_DiscoveryEmpty_ExitsOne(t *testing.T) {
 	require.Equal(t, 1, exitCode)
 }
 
+func TestE2E_Backlinks_AbsoluteTarget_ExitsTwo(t *testing.T) {
+	// `<target>` is documented as workspace-relative. An absolute path
+	// would otherwise normalize to a path outside the workspace and
+	// silently match nothing, indistinguishable from a real empty
+	// result. Reject upfront.
+	dir := setupBacklinksWorkspace(t)
+	_, stderr, exitCode := runBinaryInDir(t, dir, "", "backlinks", "/etc/passwd")
+	require.Equal(t, 2, exitCode)
+	assert.Contains(t, stderr, "must be workspace-relative")
+}
+
+func TestE2E_Backlinks_ParentTraversalTarget_ExitsTwo(t *testing.T) {
+	// Same justification: `../foo.md` resolves outside the workspace
+	// and would silently match nothing.
+	dir := setupBacklinksWorkspace(t)
+	_, stderr, exitCode := runBinaryInDir(t, dir, "", "backlinks", "../foo.md")
+	require.Equal(t, 2, exitCode)
+	assert.Contains(t, stderr, "must be workspace-relative")
+}
+
+func TestE2E_Backlinks_RespectsIgnore(t *testing.T) {
+	// Sources matched by `ignore:` patterns must not contribute
+	// backlinks, mirroring `check` / `fix` behavior.
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "vendor"), 0o755))
+	cfg := "files:\n  - \"**/*.md\"\nignore:\n  - \"vendor/**\"\n" +
+		"rules:\n  cross-file-reference-integrity: false\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"), []byte(cfg), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "target.md"), []byte("# Target\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.md"),
+		[]byte("# Src\n\n[ok](target.md)\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "vendor", "lib.md"),
+		[]byte("# Vendor\n\n[skip](../target.md)\n"), 0o644))
+
+	stdout, _, exitCode := runBinaryInDir(t, dir, "", "backlinks", "target.md")
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "src.md:")
+	assert.NotContains(t, stdout, "vendor/", "ignored sources must not appear in backlinks output")
+}
+
 func TestE2E_Backlinks_FrontMatterLines_FileRelative(t *testing.T) {
 	// Regression for the body-vs-file-relative line bug: when the
 	// source file has front matter, the backlinks CLI must show the
