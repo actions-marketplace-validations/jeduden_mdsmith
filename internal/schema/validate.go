@@ -45,18 +45,28 @@ func ExtractDocHeadings(f *lint.File) []DocHeading {
 
 // headingLine returns the 1-based line number of h. Goldmark
 // occasionally produces ATX headings with an empty Lines() slice;
-// when that happens we fall back to the first child Text segment's
-// offset, matching the defensive pattern in linelength.go.
+// when that happens we walk inline descendants for the first Text
+// segment, matching the fallback in internal/rules/astutil. A
+// truly empty heading (no Lines, no Text descendants) reports line
+// 1 so callers that filter by line windows never lose the
+// heading.
 func headingLine(h *ast.Heading, f *lint.File) int {
 	if h.Lines().Len() > 0 {
 		return f.LineOfOffset(h.Lines().At(0).Start)
 	}
-	for c := h.FirstChild(); c != nil; c = c.NextSibling() {
-		if t, ok := c.(*ast.Text); ok {
-			return f.LineOfOffset(t.Segment.Start)
+	line := 1
+	_ = ast.Walk(h, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering || n == h {
+			return ast.WalkContinue, nil
 		}
-	}
-	return 0
+		t, ok := n.(*ast.Text)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		line = f.LineOfOffset(t.Segment.Start)
+		return ast.WalkStop, nil
+	})
+	return line
 }
 
 // MakeDiag is the diagnostic constructor the validator uses. Callers
