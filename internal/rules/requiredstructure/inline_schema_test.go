@@ -254,6 +254,40 @@ func TestCheck_InlineSchema_FrontmatterCUE(t *testing.T) {
 		"front matter does not satisfy schema CUE constraints")
 }
 
+// TestCheck_InlineSchema_ScopeRulesUnderFieldHeading exercises
+// matchesScopeText against a placeholder-bearing heading — the
+// walker should still pair the scope with the matching doc heading
+// so its `rules:` block applies inside the right line range.
+func TestCheck_InlineSchema_ScopeRulesUnderFieldHeading(t *testing.T) {
+	r := &Rule{InlineSchema: inlineSchema(t, map[string]any{
+		"sections": []any{
+			map[string]any{
+				"heading": "Step {n}",
+				"rules": map[string]any{
+					"line-length": map[string]any{
+						"max":     20,
+						"stern":   true,
+						"exclude": []any{},
+					},
+				},
+			},
+		},
+	})}
+	src := "# Runbook\n\n" +
+		"## Step 1\n\n" +
+		"This step body has a deliberately long line that exceeds twenty.\n"
+	f := newTestFile(t, "doc.md", src)
+	diags := r.Check(f)
+	var lineLength []lint.Diagnostic
+	for _, d := range diags {
+		if d.RuleID == "MDS001" {
+			lineLength = append(lineLength, d)
+		}
+	}
+	require.NotEmpty(t, lineLength,
+		"field-interpolated scope heading should still claim its match for rule overrides")
+}
+
 func TestCheck_InlineSchema_ScopeRuleUnknownName(t *testing.T) {
 	r := &Rule{InlineSchema: inlineSchema(t, map[string]any{
 		"sections": []any{
