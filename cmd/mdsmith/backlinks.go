@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -143,21 +142,29 @@ func validateBacklinksArgs(opts backlinksOptions, posArgs []string) (targetPath,
 		fmt.Fprintf(os.Stderr, "mdsmith: backlinks takes one target argument, got %d\n", len(posArgs))
 		return "", "", 2
 	}
-	targetPath, targetAnchor = splitTarget(posArgs[0])
-	if targetPath == "" {
+	// Route the target through the same parser the link walker uses
+	// (linkgraph.ParseTarget) so the CLI accepts exactly the shapes
+	// that can ever appear as a link destination. This rejects
+	// malformed percent escapes, query-only inputs, schemed URLs, and
+	// other forms with no corresponding link target — all of which
+	// would otherwise pass and produce a silent empty result.
+	parsed, ok := linkgraph.ParseTarget(posArgs[0])
+	if !ok {
+		fmt.Fprintf(os.Stderr, "mdsmith: invalid target %q\n", posArgs[0])
+		return "", "", 2
+	}
+	if parsed.LocalAnchor {
 		fmt.Fprint(os.Stderr, "mdsmith: backlinks target must include a file path\n")
 		return "", "", 2
 	}
+	targetPath, targetAnchor = parsed.Path, parsed.Anchor
 	// `<target>` is workspace-relative by contract. An absolute path
 	// or a parent-traversal entry normalises to something outside the
 	// workspace and would silently match nothing — which a caller
 	// cannot distinguish from a genuine empty result. Reject upfront
-	// so the failure is loud. Decode percent-escapes first so an
-	// encoded `%2Fetc%2Fpasswd` or `%2e%2e/foo.md` can't slip past the
-	// absolute / `..` checks.
-	if decoded, err := url.PathUnescape(targetPath); err == nil {
-		targetPath = decoded
-	}
+	// so the failure is loud. ParseTarget already percent-decoded the
+	// path, so `%2Fetc...` and `%2e%2e/...` are checked here in their
+	// decoded form.
 	if !isWorkspaceRelativeTarget(targetPath) {
 		fmt.Fprintf(os.Stderr, "mdsmith: target %q must be workspace-relative\n", targetPath)
 		return "", "", 2
@@ -186,32 +193,13 @@ func validateIncludePatterns(patterns []string) error {
 	return nil
 }
 
-// splitTarget separates `path#anchor` into (path, anchor). A bare
-// path returns ("path", ""). A leading `#` (anchor-only) returns
-// ("", "anchor") — that is rejected by the caller because backlinks
-// always operate on a file target.
-func splitTarget(arg string) (path, anchor string) {
-	if i := strings.IndexByte(arg, '#'); i >= 0 {
-		return arg[:i], arg[i+1:]
-	}
-	return arg, ""
-}
-
 // normalizeWorkspacePath returns the cleaned workspace-relative form
 // of target. validateBacklinksArgs already rejects absolute paths
-// and `..` traversals (including percent-encoded forms), so this
-// helper only has to handle a relative, decoded path: strip a
-// leading `./`, normalize separators, and clean the result.
-//
-// Percent-decoding is also done here so the CLI target aligns with
-// linkgraph.ParseTarget, which decodes the destinations it extracts
-// from Markdown links. Without this step, a query like
-// `backlinks docs/my%20file.md` would never match `[X](my%20file.md)`
-// (which resolves to `docs/my file.md` under the workspace root).
+// and `..` traversals and routes the input through
+// linkgraph.ParseTarget (which percent-decodes), so this helper only
+// has to handle a relative, decoded path: strip a leading `./`,
+// normalize separators, and clean the result.
 func normalizeWorkspacePath(target string) string {
-	if decoded, err := url.PathUnescape(target); err == nil {
-		target = decoded
-	}
 	t := filepath.ToSlash(target)
 	t = strings.TrimPrefix(t, "./")
 	return path.Clean(t)

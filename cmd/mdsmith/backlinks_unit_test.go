@@ -13,26 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSplitTarget(t *testing.T) {
-	cases := []struct {
-		input      string
-		wantPath   string
-		wantAnchor string
-	}{
-		{"docs/api.md", "docs/api.md", ""},
-		{"docs/api.md#section", "docs/api.md", "section"},
-		{"docs/api.md#with-dashes", "docs/api.md", "with-dashes"},
-		{"#anchor-only", "", "anchor-only"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.input, func(t *testing.T) {
-			p, a := splitTarget(tc.input)
-			assert.Equal(t, tc.wantPath, p)
-			assert.Equal(t, tc.wantAnchor, a)
-		})
-	}
-}
-
 func TestResolveLinkTarget(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -64,17 +44,6 @@ func TestResolveLinkTarget(t *testing.T) {
 func TestNormalizeWorkspacePath(t *testing.T) {
 	assert.Equal(t, "docs/api.md", normalizeWorkspacePath("docs/api.md"))
 	assert.Equal(t, "docs/api.md", normalizeWorkspacePath("./docs/api.md"))
-}
-
-// TestNormalizeWorkspacePath_PercentEncoded verifies that the CLI
-// target accepts percent-encoded path components and decodes them
-// to match link paths. linkgraph.ParseTarget decodes link
-// destinations (e.g. `my%20file.md` → `my file.md`), so the user-
-// supplied query must do the same or `mdsmith backlinks
-// docs/my%20file.md` would silently match nothing.
-func TestNormalizeWorkspacePath_PercentEncoded(t *testing.T) {
-	assert.Equal(t, "docs/my file.md",
-		normalizeWorkspacePath("docs/my%20file.md"))
 }
 
 func TestSourceMatches(t *testing.T) {

@@ -262,6 +262,26 @@ func TestE2E_Backlinks_EncodedEscapeRejected(t *testing.T) {
 	}
 }
 
+// TestE2E_Backlinks_MalformedTargetRejected ensures inputs the link
+// parser cannot decode (malformed percent escapes, query-only URLs,
+// schemed URLs) fail loudly with exit 2 instead of silently producing
+// an empty result.
+func TestE2E_Backlinks_MalformedTargetRejected(t *testing.T) {
+	dir := setupBacklinksWorkspace(t)
+	cases := []string{
+		"docs/my%ZZfile.md", // %ZZ is not a valid percent-escape
+		"?q=1",              // query-only, no path
+		"https://example.com/x.md",
+	}
+	for _, target := range cases {
+		t.Run(target, func(t *testing.T) {
+			_, stderr, exitCode := runBinaryInDir(t, dir, "", "backlinks", target)
+			require.Equal(t, 2, exitCode)
+			assert.Contains(t, stderr, "invalid target")
+		})
+	}
+}
+
 func TestE2E_Backlinks_RespectsIgnore(t *testing.T) {
 	// Sources matched by `ignore:` patterns must not contribute
 	// backlinks, mirroring `check` / `fix` behavior.
