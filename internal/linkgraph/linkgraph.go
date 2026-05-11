@@ -44,10 +44,10 @@ func ParseTarget(dest string) (Target, bool) {
 		return Target{}, false
 	}
 
+	// u.Opaque is non-empty only on URLs with a scheme; the scheme
+	// check above already short-circuits that case, so we can read
+	// the path component directly.
 	path := u.Path
-	if path == "" && u.Opaque != "" {
-		path = u.Opaque
-	}
 
 	if path == "" && u.Fragment != "" {
 		return Target{
@@ -206,8 +206,8 @@ func linkText(link *ast.Link, source []byte) string {
 }
 
 // linkPosition returns the 1-based source line and column of a link
-// node. The returned line does NOT include f.LineOffset; ExtractLinks
-// applies the offset before returning.
+// node, in body-relative coordinates (no f.LineOffset applied — see
+// the Link doc for why).
 func linkPosition(f *lint.File, n ast.Node) (int, int) {
 	offset := firstTextOffset(n)
 	if offset < 0 {

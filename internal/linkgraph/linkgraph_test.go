@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/yuin/goldmark/ast"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 )
@@ -135,4 +136,49 @@ func TestExtractLinks_AgreesWithMDS027(t *testing.T) {
 	require.Len(t, links, 3)
 	texts := []string{links[0].Text, links[1].Text, links[2].Text}
 	assert.Equal(t, []string{"one", "two", "three"}, texts)
+}
+
+// TestParseTarget_MalformedURL exercises the url.Parse error branch.
+// A control character in the URL is invalid per RFC 3986 and makes
+// url.Parse return an error.
+func TestParseTarget_MalformedURL(t *testing.T) {
+	// %ZZ is an invalid percent-encoded escape; url.Parse rejects it.
+	_, ok := ParseTarget("guide.md%ZZ")
+	assert.False(t, ok)
+}
+
+// TestCollectAnchors_AstStringNode constructs a heading whose body is
+// an ast.String node (created by some inline transforms, but not by
+// the default parser). The headingText walker must read the value of
+// such nodes to compute the slug; without coverage of this branch,
+// any future parser extension that emits ast.String would silently
+// produce an empty slug.
+func TestCollectAnchors_AstStringNode(t *testing.T) {
+	heading := ast.NewHeading(2)
+	heading.AppendChild(heading, ast.NewString([]byte("hello world")))
+	root := ast.NewDocument()
+	root.AppendChild(root, heading)
+	f := &lint.File{AST: root, Source: nil}
+
+	anchors := CollectAnchors(f)
+	assert.True(t, anchors["hello-world"], "ast.String value should drive the slug")
+}
+
+// TestExtractLinks_LinkWithNoTextChildren covers the linkPosition
+// `offset < 0` fallback. A link node without any text children yields
+// firstTextOffset = -1, so linkPosition returns (1, 1).
+func TestExtractLinks_LinkWithNoTextChildren(t *testing.T) {
+	// Construct an AST with one bare ast.Link and no text under it.
+	root := ast.NewDocument()
+	para := ast.NewParagraph()
+	link := ast.NewLink()
+	link.Destination = []byte("a.md")
+	para.AppendChild(para, link)
+	root.AppendChild(root, para)
+	f := &lint.File{AST: root, Source: nil}
+
+	links := ExtractLinks(f)
+	require.Len(t, links, 1)
+	assert.Equal(t, 1, links[0].Line, "no-text link → linkPosition falls back to (1, 1)")
+	assert.Equal(t, 1, links[0].Column)
 }
