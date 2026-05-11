@@ -2,6 +2,7 @@ package requiredstructure
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -158,14 +159,24 @@ func scopeEndLine(
 // config-style deep-merge for scope overrides is part of the
 // follow-up tracked on plan 146.
 //
+// Rule names are sorted before execution so emitted diagnostics
+// land in a stable order regardless of map iteration randomness;
+// fixture assertions in the integration harness compare by index.
+//
 // Misconfigurations (unknown rule name, ApplySettings error) surface
 // as MDS020 diagnostics at the scope's heading line so users see the
 // problem instead of the override silently no-op'ing.
 func runScopeRules(
 	f *lint.File, sc schema.Scope, startLine, endLine int,
 ) []lint.Diagnostic {
+	names := make([]string, 0, len(sc.Rules))
+	for name := range sc.Rules {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	var diags []lint.Diagnostic
-	for name, override := range sc.Rules {
+	for _, name := range names {
+		override := sc.Rules[name]
 		base := rule.ByName(name)
 		if base == nil {
 			diags = append(diags, makeDiag(f.Path, startLine,

@@ -111,13 +111,14 @@ func parseFileFrontmatter(prefix []byte, sch *Schema) error {
 	return nil
 }
 
+// stripDelimiters returns the YAML body between a front-matter
+// block's "---\n" delimiters. The caller (parseFileFrontmatter)
+// receives prefix bytes produced by lint.StripFrontMatter, which
+// only matches blocks bracketed by "---\n" on both ends, so the
+// helper only has to look for that exact closing fence.
 func stripDelimiters(fm []byte) []byte {
-	s := string(fm)
-	s = strings.TrimPrefix(s, "---\n")
+	s := strings.TrimPrefix(string(fm), "---\n")
 	if idx := strings.Index(s, "---\n"); idx >= 0 {
-		return []byte(s[:idx])
-	}
-	if idx := strings.Index(s, "---"); idx >= 0 {
 		return []byte(s[:idx])
 	}
 	return []byte(s)

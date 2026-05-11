@@ -397,9 +397,10 @@ func TestParseFile_RequireMalformedYAML(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid <?require?>")
 }
 
-func TestParseFile_FrontmatterWithoutTrailingNewline(t *testing.T) {
-	// Exercises stripDelimiters fallback when the closing "---" has
-	// no trailing newline.
+func TestParseFile_FrontmatterPropagatesToSchema(t *testing.T) {
+	// Frontmatter CUE constraints declared in the proto.md surface
+	// on the parsed Schema. lint.StripFrontMatter consumes the
+	// "---\n…---\n" delimiters before stripDelimiters runs.
 	dir := t.TempDir()
 	p := writeFile(t, dir, "proto.md",
 		"---\nid: 'string'\n---\n# ?\n")
@@ -791,19 +792,10 @@ func TestParseFile_IncludeMalformedYAMLDirective(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid include directive YAML")
 }
 
-func TestStripDelimiters_NoTrailingNewline(t *testing.T) {
-	// White-box test: the fallback branch only fires when the
-	// closing `---` has no trailing newline (a malformed but
-	// permissive case).
-	got := stripDelimiters([]byte("---\nfoo: 1\n---"))
-	assert.Equal(t, "foo: 1\n", string(got))
-}
-
-func TestStripDelimiters_OnlyLeadingFence(t *testing.T) {
-	// Truly malformed input with no closing fence; the function
-	// returns whatever follows the leading `---\n` so the YAML
-	// parser surfaces the real diagnostic downstream.
-	got := stripDelimiters([]byte("---\nfoo: 1\n"))
+func TestStripDelimiters_HappyPath(t *testing.T) {
+	// stripDelimiters matches the exact "---\n…---\n" shape that
+	// lint.StripFrontMatter feeds it.
+	got := stripDelimiters([]byte("---\nfoo: 1\n---\n"))
 	assert.Equal(t, "foo: 1\n", string(got))
 }
 

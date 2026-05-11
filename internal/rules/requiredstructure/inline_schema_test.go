@@ -1,6 +1,7 @@
 package requiredstructure
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -252,6 +253,48 @@ func TestCheck_InlineSchema_FrontmatterCUE(t *testing.T) {
 	require.NotEmpty(t, diags)
 	expectDiagMsg(t, diags,
 		"front matter does not satisfy schema CUE constraints")
+}
+
+// TestCheck_InlineSchema_ScopeRuleDeterministicOrdering exercises
+// the sorted iteration over sc.Rules so unknown-rule and invalid-
+// settings diagnostics emit in a stable order regardless of Go map
+// iteration randomness. The fixture deliberately provides two
+// misconfigured rules so we can observe the order of their
+// diagnostics.
+func TestCheck_InlineSchema_ScopeRuleDeterministicOrdering(t *testing.T) {
+	r := &Rule{InlineSchema: inlineSchema(t, map[string]any{
+		"sections": []any{
+			map[string]any{
+				"heading": "Section",
+				"rules": map[string]any{
+					"zzz-not-a-rule": map[string]any{},
+					"aaa-not-a-rule": map[string]any{},
+					"mmm-not-a-rule": map[string]any{},
+				},
+			},
+		},
+	})}
+	f := newTestFile(t, "doc.md", "# T\n\n## Section\n\nx\n")
+	// Run many times; the order of the three unknown-rule messages
+	// must be the same on every run.
+	var first []string
+	for i := 0; i < 20; i++ {
+		diags := r.Check(f)
+		var names []string
+		for _, d := range diags {
+			if strings.Contains(d.Message, "unknown rule") {
+				names = append(names, d.Message)
+			}
+		}
+		if i == 0 {
+			first = names
+			require.Equal(t, 3, len(first),
+				"expected three unknown-rule diagnostics")
+		} else {
+			require.Equal(t, first, names,
+				"scope rule iteration must be deterministic")
+		}
+	}
 }
 
 // TestApplyScopeRules_NilSchemaShortCircuits covers the defensive
