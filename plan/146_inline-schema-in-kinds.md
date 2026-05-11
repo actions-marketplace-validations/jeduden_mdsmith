@@ -1,7 +1,7 @@
 ---
 id: 146
 title: Schema engine — sources, scope tree, per-scope rules
-status: "🔳"
+status: "✅"
 model: opus
 summary: >-
   Replace MDS020's heading-template engine with
