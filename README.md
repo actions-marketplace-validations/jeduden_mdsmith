@@ -89,40 +89,38 @@ row: "- [{summary}]({filename})"
 
 ## 📦 Installation
 
+CLI:
+
 ```bash
 go install github.com/jeduden/mdsmith/cmd/mdsmith@latest
 npm install -g @mdsmith/cli    # or: npx @mdsmith/cli
 pip install mdsmith            # or: uvx mdsmith / pipx install mdsmith
 ```
 
-More options live in
-[docs/guides/install.md](docs/guides/install.md). It covers direct
-downloads, the VS Code extension on the Marketplace and Open VSX,
-and asdf and mise once their registry entries land.
-
-## ✏️ Editor integration
-
-The mdsmith VS Code extension renders diagnostics inline.
-Each fixable rule contributes a quick fix. A
-`source.fixAll.mdsmith` action runs `mdsmith fix` on the
-buffer.
+Editor extension (LSP-backed; runs `mdsmith lsp`):
 
 ```bash
-# stock VS Code, GitHub Codespaces, GitHub.dev (Marketplace)
-code --install-extension jeduden.mdsmith
-# Cursor, VSCodium, Theia, Gitpod (Open VSX)
-codium --install-extension jeduden.mdsmith
+code --install-extension jeduden.mdsmith     # VS Code, Codespaces (Marketplace)
+codium --install-extension jeduden.mdsmith   # Cursor, VSCodium, Theia, Gitpod (Open VSX)
 ```
 
-The extension is a thin LSP client. The lint pipeline runs
-in the Go binary, so any LSP-aware editor (Neovim, Helix,
-JetBrains via the LSP plugin) gets the same diagnostics by
-pointing at `mdsmith lsp`.
+Any LSP-aware editor (Neovim, Helix, JetBrains via the LSP
+plugin) works by pointing at `mdsmith lsp`.
 
-See [VS Code Integration](docs/guides/editors/vscode.md)
-for settings (`mdsmith.path`, `mdsmith.run`,
-`mdsmith.fixOnSave`, `mdsmith.trace.server`), code actions,
-and troubleshooting.
+Claude Code plugin (inline diagnostics plus definition,
+references, symbol search, and call-hierarchy queries
+across your docs):
+
+```text
+/plugin marketplace add jeduden/mdsmith
+/plugin install mdsmith-lsp@mdsmith
+/reload-plugins
+```
+
+More: the [install guide](docs/guides/install.md) covers
+direct downloads and mise (asdf pending).
+[VS Code integration](docs/guides/editors/vscode.md) covers
+settings, code actions, and troubleshooting.
 
 ## 🚀 Usage
 
