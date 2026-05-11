@@ -26,8 +26,15 @@ named heading.
 | `--include GLOB`    | none    | Restrict sources to paths matching glob; repeatable |
 | `--limit N`         | `0`     | Cap output at N rows (`0` = no cap)                 |
 | `--no-gitignore`    | false   | Disable `.gitignore` filtering during walk          |
-| `--follow-symlinks` | false   | Follow symlinks to regular files                    |
+| `--follow-symlinks` | config  | Follow symlinks; tri-state — see below              |
 | `--max-input-size`  | `2MB`   | Max file size (e.g. `2MB`, `0`=none)                |
+
+`--follow-symlinks` semantics match
+[`mdsmith check`](check.md#flags). Omit the flag to
+defer to the `follow-symlinks:` config key (default
+skip). `--follow-symlinks` (or `=true`) opts in for
+this run. `=false` forces skip even when config opts
+in.
 
 File discovery follows the `files:` patterns in
 `.mdsmith.yml` and the same `ignore:` rules `check` and
