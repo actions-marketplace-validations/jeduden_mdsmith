@@ -91,9 +91,10 @@ takes one of three shapes:
   absorbs truly-unlisted sections. Slots are
   positional-only — they cannot carry `aliases:`,
   `sections:`, `rules:`, `closed:`, or `required:`;
-  the parser rejects those keys. Plan 142/149 will
-  extend the mapping form with `{any: true}` and
-  `{pattern: "..."}`.
+  the parser rejects those keys. Future work can
+  extend the mapping form with shapes like
+  `{any: true}` (match any heading text) or
+  `{pattern: "..."}` (match a placeholder pattern).
 
 ### Nested sections
 

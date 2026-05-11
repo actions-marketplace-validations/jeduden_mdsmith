@@ -140,8 +140,10 @@ Section keys:
 - `rules:` — per-scope rule overrides.
 
 The repeating-pattern keys live on the Scope
-struct but the inline parser rejects them
-until plan 142 ships enforcement.
+struct. The inline parser rejects them at
+parse time. A future plan will lift the
+rejection once repeating-section enforcement
+ships.
 
 ### Order, openness, unknown sections
 
@@ -221,8 +223,9 @@ through the engine is a tracked follow-up.
    `proto.md` file. Repeating-pattern keys
    (`repeats` / `sequential` / `min` / `max`)
    live on the Scope struct but the inline
-   parser rejects them at parse time with a
-   message pointing at plan 142.
+   parser rejects them at parse time; the
+   rejection waits on a future plan that
+   ships repeating-section enforcement.
 3. ✅ Reject configs that set both sources on
    one kind (see
    `internal/config/validate.go`).

@@ -42,7 +42,7 @@ func TestParseInline_RejectsRepeatingPatternKeys(t *testing.T) {
 			_, err := ParseInline(raw, "kind x")
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "repeating-pattern keys")
-			assert.Contains(t, err.Error(), "plan 142")
+			assert.Contains(t, err.Error(), "not enforced")
 		})
 	}
 }

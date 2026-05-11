@@ -193,10 +193,11 @@ func parseInlineScopeEntry(entry any, path string) (Scope, error) {
 	if k, found := firstRepeatingPatternKey(m); found {
 		return Scope{}, fmt.Errorf(
 			"%s: scope sets %q, but the repeating-pattern keys "+
-				"(`repeats`, `sequential`, `min`, `max`) are not yet "+
-				"enforced (tracked on plan 142); remove them until "+
-				"repeating-pattern validation lands so the schema "+
-				"does not appear to constrain counts it ignores",
+				"(`repeats`, `sequential`, `min`, `max`) are parsed "+
+				"into the Scope struct yet not enforced by any "+
+				"validator today; remove them until a future plan "+
+				"lifts the rejection so the schema does not appear "+
+				"to constrain counts it ignores",
 			path, k)
 	}
 	if _, hasHeading := m["heading"]; !hasHeading {
@@ -301,7 +302,8 @@ func firstRepeatingPatternKey(m map[string]any) (string, bool) {
 // repeating-pattern keys (repeats, sequential, min, max) are
 // intentionally absent here: parseInlineScopeEntry rejects them
 // upfront via firstRepeatingPatternKey, so this loop never sees
-// them. Plan 142 will lift the rejection and restore the cases.
+// them. A future plan that ships repeating-pattern enforcement
+// will lift the rejection and restore the cases.
 func applyScopeFields(m map[string]any, sc *Scope, path string) error {
 	for k, vv := range m {
 		var err error
@@ -332,7 +334,7 @@ func applyScopeFields(m map[string]any, sc *Scope, path string) error {
 // a string (literal text — the common case), `null` (preamble:
 // content before the first heading), or a mapping that types a
 // non-literal match. Only `{unlisted: true}` is accepted in the
-// mapping form today; plan 142/149 will extend it with shapes such
+// mapping form today; future work can extend it with shapes such
 // as `{any: true}` and `{pattern: "..."}`.
 func setScopeHeading(sc *Scope, v any, path string) error {
 	switch x := v.(type) {
