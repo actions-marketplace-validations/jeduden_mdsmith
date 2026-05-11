@@ -36,11 +36,27 @@ func ExtractDocHeadings(f *lint.File) []DocHeading {
 			return ast.WalkContinue, nil
 		}
 		text := headingText(h, f.Source)
-		line := f.LineOfOffset(h.Lines().At(0).Start)
+		line := headingLine(h, f)
 		out = append(out, DocHeading{Level: h.Level, Text: text, Line: line})
 		return ast.WalkContinue, nil
 	})
 	return out
+}
+
+// headingLine returns the 1-based line number of h. Goldmark
+// occasionally produces ATX headings with an empty Lines() slice;
+// when that happens we fall back to the first child Text segment's
+// offset, matching the defensive pattern in linelength.go.
+func headingLine(h *ast.Heading, f *lint.File) int {
+	if h.Lines().Len() > 0 {
+		return f.LineOfOffset(h.Lines().At(0).Start)
+	}
+	for c := h.FirstChild(); c != nil; c = c.NextSibling() {
+		if t, ok := c.(*ast.Text); ok {
+			return f.LineOfOffset(t.Segment.Start)
+		}
+	}
+	return 0
 }
 
 // MakeDiag is the diagnostic constructor the validator uses. Callers
