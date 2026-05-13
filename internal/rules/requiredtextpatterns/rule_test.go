@@ -205,3 +205,49 @@ func TestApplyDefaultSettings_ClearsPatterns(t *testing.T) {
 	require.NoError(t, r.ApplySettings(r.DefaultSettings()))
 	assert.Empty(t, r.Patterns)
 }
+
+func TestCheck_TableParagraphSkipped(t *testing.T) {
+	// Goldmark parses tables as paragraphs when the table extension is
+	// absent; the rule should not consider them part of the body.
+	src := "# Title\n\n| foo |\n| --- |\n| bar |\n"
+	r := &Rule{
+		Patterns: []Pattern{
+			{Source: "foo", Regex: regexp.MustCompile("foo")},
+		},
+	}
+	diags := r.Check(mustFile(t, src))
+	require.Len(t, diags, 1)
+	assert.Equal(t, 1, diags[0].Line)
+}
+
+func TestApplySettings_PatternsFromInterfaceKeyedMap(t *testing.T) {
+	// YAML decoded into `any` can produce map[any]any for nested maps.
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"patterns": []any{
+			map[any]any{"pattern": "foo", "message": "must mention foo"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, r.Patterns, 1)
+	assert.Equal(t, "foo", r.Patterns[0].Source)
+	assert.Equal(t, "must mention foo", r.Patterns[0].Message)
+}
+
+func TestApplySettings_PatternsEntryNotMap(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"patterns": []any{"not a map"},
+	})
+	assert.Error(t, err)
+}
+
+func TestApplySettings_SkipIndicesNonIntegerEntry(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"patterns": []any{
+			map[string]any{"pattern": "foo", "skip-indices": []any{"x"}},
+		},
+	})
+	assert.Error(t, err)
+}

@@ -463,9 +463,27 @@ func TestApplySettings_NegativeMaxWords(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestApplySettings_NegativeMinWords(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{"min-words": -1})
+	assert.Error(t, err)
+}
+
+func TestApplySettings_NegativeMaxParagraphs(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{"max-paragraphs": -1})
+	assert.Error(t, err)
+}
+
 func TestApplySettings_NonIntegerMinWords(t *testing.T) {
 	r := &Rule{}
 	err := r.ApplySettings(map[string]any{"min-words": "ten"})
+	assert.Error(t, err)
+}
+
+func TestApplySettings_NonIntegerMaxParagraphs(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{"max-paragraphs": "three"})
 	assert.Error(t, err)
 }
 
@@ -475,4 +493,20 @@ func TestApplyDefaultSettings_ClearsWordAndParagraphCaps(t *testing.T) {
 	assert.Equal(t, 0, r.MaxWords)
 	assert.Equal(t, 0, r.MinWords)
 	assert.Equal(t, 0, r.MaxParagraphs)
+}
+
+func TestCheck_TableNotCountedAsParagraph(t *testing.T) {
+	// Goldmark parses tables as paragraphs when the table extension
+	// is absent. Without filtering, each row would inflate the
+	// paragraph count and the cell text would inflate word counts.
+	src := "# Title\n\nfirst.\n\n| col |\n| --- |\n| val |\n"
+	r := &Rule{MaxParagraphs: 1}
+	assert.Empty(t, r.Check(mustFile(t, src)))
+}
+
+func TestCheck_TableWordsNotCounted(t *testing.T) {
+	// Table cell contents should not contribute to the word count.
+	src := "# Title\n\n| a | b | c | d | e | f |\n| - | - | - | - | - | - |\n| 1 | 2 | 3 | 4 | 5 | 6 |\n"
+	r := &Rule{MaxWords: 5}
+	assert.Empty(t, r.Check(mustFile(t, src)))
 }

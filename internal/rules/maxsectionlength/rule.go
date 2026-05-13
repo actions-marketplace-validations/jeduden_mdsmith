@@ -10,6 +10,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/mdtext"
 	"github.com/jeduden/mdsmith/internal/rule"
+	"github.com/jeduden/mdsmith/internal/rules/astutil"
 	"github.com/yuin/goldmark/ast"
 )
 
@@ -297,22 +298,17 @@ func collectParagraphs(f *lint.File) []paragraph {
 		if !ok {
 			return ast.WalkContinue, nil
 		}
-		line := paragraphLine(p, f)
+		if astutil.IsTable(p, f) {
+			return ast.WalkContinue, nil
+		}
 		text := mdtext.ExtractPlainText(p, f.Source)
 		out = append(out, paragraph{
-			line:  line,
+			line:  astutil.ParagraphLine(p, f),
 			words: mdtext.CountWords(text),
 		})
 		return ast.WalkContinue, nil
 	})
 	return out
-}
-
-func paragraphLine(p *ast.Paragraph, f *lint.File) int {
-	if lines := p.Lines(); lines.Len() > 0 {
-		return f.LineOfOffset(lines.At(0).Start)
-	}
-	return 1
 }
 
 // countSection sums words and paragraphs for paragraphs whose start
