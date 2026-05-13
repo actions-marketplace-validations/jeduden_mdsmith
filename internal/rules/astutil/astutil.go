@@ -27,8 +27,8 @@ type SectionParagraph struct {
 }
 
 // CollectSectionHeadings returns every heading in the document
-// ordered by source line. Tied for use by content-rules
-// (MDS057/MDS058) that need to walk heading-bounded sections.
+// ordered by source line. Used by content rules (MDS057, MDS058)
+// that need to walk heading-bounded sections.
 func CollectSectionHeadings(f *lint.File) []SectionHeading {
 	var out []SectionHeading
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
