@@ -58,7 +58,7 @@ func addFencedCodeBlockLines(f *File, fcb *ast.FencedCodeBlock, set map[int]bool
 	// the first content line. The opening fence is always the line before
 	// the first content line (or, when there are no content lines, we find
 	// it via the Info segment).
-	openLine := findFencedOpenLine(f, fcb)
+	openLine := FindFencedOpenLine(f, fcb)
 	if openLine > 0 {
 		set[openLine] = true
 	}
@@ -89,8 +89,11 @@ func addFencedCodeBlockLines(f *File, fcb *ast.FencedCodeBlock, set map[int]bool
 	}
 }
 
-// findFencedOpenLine returns the 1-based line number of the opening fence.
-func findFencedOpenLine(f *File, fcb *ast.FencedCodeBlock) int {
+// FindFencedOpenLine returns the 1-based line number of the opening
+// fence. Returns 0 when the block has neither an info string nor any
+// content lines — callers that anchor diagnostics on the result must
+// clamp to >= 1 to avoid emitting a line-0 location.
+func FindFencedOpenLine(f *File, fcb *ast.FencedCodeBlock) int {
 	// If the code block has an info string, walk backwards from it to find
 	// the start of the line.
 	if fcb.Info != nil {

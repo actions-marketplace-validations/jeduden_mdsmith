@@ -125,23 +125,20 @@ type contentBlock struct {
 }
 
 // blockLine returns the 1-based source line of the first visible
-// token of a block-level AST node. Fenced code blocks report their
-// opening fence (via the info-string segment) rather than the first
-// content line goldmark stores in Lines(); without that adjustment a
-// `lang` mismatch on a `kind: code-block` entry would point one line
-// past the fence. Other block kinds fall back to the first Lines()
-// segment, and finally to a descendant scan for empty containers.
+// token of a block-level AST node. Fenced code blocks route through
+// lint.FindFencedOpenLine so the result anchors at the opening
+// fence — info string when present, first-content-line-minus-one
+// otherwise — matching the line numbers the rest of the engine
+// reports for the same nodes. Other block kinds fall back to the
+// first Lines() segment, then to a descendant scan for empty
+// containers. The result is always clamped to >= 1 so diagnostics
+// and blocksInRange filtering never encounter a line-0 anchor.
 func blockLine(f *lint.File, n ast.Node) int {
-	if fcb, ok := n.(*ast.FencedCodeBlock); ok && fcb.Info != nil {
-		// The info-string segment sits on the opening fence line, so
-		// converting its byte offset to a 1-based line resolves to
-		// the fence itself rather than the first content line goldmark
-		// stores in Lines(). Only the line matters here; the column
-		// is discarded.
-		return f.LineOfOffset(fcb.Info.Segment.Start)
+	if fcb, ok := n.(*ast.FencedCodeBlock); ok {
+		return clampToOne(lint.FindFencedOpenLine(f, fcb))
 	}
 	if n.Lines().Len() > 0 {
-		return f.LineOfOffset(n.Lines().At(0).Start)
+		return clampToOne(f.LineOfOffset(n.Lines().At(0).Start))
 	}
 	line := 0
 	_ = ast.Walk(n, func(c ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -154,6 +151,18 @@ func blockLine(f *lint.File, n ast.Node) int {
 		}
 		return ast.WalkContinue, nil
 	})
+	return clampToOne(line)
+}
+
+// clampToOne replaces a non-positive line number with 1. blockLine's
+// callers anchor diagnostics on the return value; a line-0
+// diagnostic has no source location and confuses editor jump-to-
+// line, and blocksInRange's `>= startLine` filter would silently
+// drop a block whose computed line is 0.
+func clampToOne(line int) int {
+	if line < 1 {
+		return 1
+	}
 	return line
 }
 

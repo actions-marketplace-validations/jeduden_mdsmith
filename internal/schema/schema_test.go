@@ -1259,6 +1259,63 @@ func TestValidate_Content_ClosedScopeMidstreamUnexpected(t *testing.T) {
 		"closed scope must flag a non-matching node between two listed entries")
 }
 
+// TestValidate_Content_FencedBlockNoInfoString regresses a Copilot
+// review on PR #285: blockLine() must anchor a fenced block whose
+// info string is absent at the opening fence line, not at the first
+// content line. Lint.FindFencedOpenLine does the right thing — this
+// test pins blockLine to that contract by relying on blocksInRange
+// filtering, which would drop the block if the line landed inside
+// the section body but past the section's end (or before its
+// start).
+func TestValidate_Content_FencedBlockNoInfoString(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{map[string]any{
+			"heading": "Body",
+			"content": []any{map[string]any{"kind": "code-block"}},
+		}},
+	}
+	sch, err := ParseInline(raw, "kind x")
+	require.NoError(t, err)
+	// Code block has no info string. The opening fence sits on line
+	// 5; the first content line is line 6. If blockLine returned
+	// line 6, blocksInRange would still include the block, but the
+	// diagnostic for an unexpected-content-style mismatch would
+	// anchor one line off. We assert no diagnostic fires here — the
+	// block is recognised at its real position inside Body.
+	doc := newDocFile(t, "doc.md",
+		"# T\n\n## Body\n\n```\nbody\n```\n")
+	diags := Validate(doc, sch, nil, false, makeDiagForTest)
+	assert.Empty(t, diags,
+		"a fenced block without info string must still be recognised inside the section")
+}
+
+// TestValidate_Content_NoLineZeroDiagnostics regresses the
+// clamp-to-1 contract: blockLine must never return 0, so no content
+// diagnostic anchors at a non-existent line. We exercise a few
+// pathological shapes (empty fenced block, paragraph with only
+// soft-line breaks) and assert every diagnostic line is >= 1.
+func TestValidate_Content_NoLineZeroDiagnostics(t *testing.T) {
+	raw := map[string]any{
+		"sections": []any{map[string]any{
+			"heading": "Body",
+			"closed":  true,
+			"content": []any{map[string]any{"kind": "list"}},
+		}},
+	}
+	sch, err := ParseInline(raw, "kind x")
+	require.NoError(t, err)
+	// Empty fenced block + trailing paragraph under a closed scope
+	// expecting a list. Several diagnostics will fire; every one
+	// must anchor on a real source line.
+	doc := newDocFile(t, "doc.md",
+		"# T\n\n## Body\n\n```\n```\n\nTrailing.\n")
+	diags := Validate(doc, sch, nil, false, makeDiagForTest)
+	for _, d := range diags {
+		assert.GreaterOrEqual(t, d.Line, 1,
+			"diagnostic %q must not anchor at line 0", d.Message)
+	}
+}
+
 // TestValidate_Content_DescribeNodeFallback covers describeNode's
 // default branch: a top-level block node we don't enumerate (e.g.
 // a Blockquote) renders via n.Kind().String() rather than matching
