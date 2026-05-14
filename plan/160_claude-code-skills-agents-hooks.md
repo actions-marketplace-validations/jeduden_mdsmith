@@ -51,11 +51,10 @@ cover the three component types missing so far
 
 ## Non-Goals
 
-- MCP server. The LSP covers what agents need.
-- Bundling binaries (plan 130).
-- A monolithic `mdsmith-tools` plugin.
-- Publishing local contributor skills in
-  `.claude/skills/` to the marketplace.
+- MCP server (LSP covers what agents need),
+  bundling binaries (plan 130), a monolithic
+  `mdsmith-tools` plugin, or publishing
+  `.claude/skills/` contributor skills.
 
 ## Design
 
@@ -74,6 +73,7 @@ editors/
   claude-code-reviewer/
     .claude-plugin/plugin.json
     agents/markdown-reviewer.md
+    agents/patterns.md
     README.md
   claude-code-autofix/
     .claude-plugin/plugin.json
@@ -137,23 +137,26 @@ pattern; bodies are command-specific (no
 
 ### `mdsmith-reviewer`
 
-One subagent in `agents/markdown-reviewer.md`.
-Rule-backed patterns load in bulk via
+One subagent in `agents/markdown-reviewer.md`
+plus a sibling `agents/patterns.md` carrying
+the three config-level checks (no
+`.mdsmith.yml`, similar files without a kind,
+kind without `path-pattern`); the reviewer
+plugin ships its own copy so installed users
+don't need the source-tree audit skill.
+Rule-backed patterns load via
 `mdsmith help patterns -f json` or LSP
 `mdsmith/rulePatterns` (see [plan 161][p161]).
-Config-level patterns load from the audit
-skill's [patterns.md][audit-patterns]. The
-agent proposes the rule, directive, or kind
-config to **adopt** so the pattern stops
-drifting — not a diagnostic the rule already
-catches (`catalog` validates declared
-directives, not hand-maintained indexes).
-Content nits stay with `mdsmith check`.
-Tools: Read, Grep, Bash (`mdsmith help`,
-`mdsmith check -f json`, `mdsmith kinds
-resolve`), GitHub MCP. No auto-fix.
-
-[audit-patterns]: ../.claude/skills/markdown-audit/patterns.md
+The agent proposes the rule, directive, or
+kind config to **adopt** so the pattern stops
+drifting — not a diagnostic the rule
+already catches; e.g. `catalog` validates
+declared directives, not hand-maintained
+indexes, and content nits stay with
+`mdsmith check`. Tools: Read, Grep, Bash
+(`mdsmith help`, `mdsmith check -f json`,
+`mdsmith kinds resolve`), GitHub MCP.
+No auto-fix.
 
 [p161]: ./161_rule-pattern-metadata.md
 
@@ -223,10 +226,9 @@ times. Look in the `skill` kind, in
 `editors/claude-code-audit/skills/*/SKILL.md`
 glob for `editors/claude-code-*/skills/*/SKILL.md`.
 Surface the diff per [CLAUDE.md][claude-md].
-
-Existing plugins are unchanged; new ones show
-up in `/plugin marketplace update` without
-auto-installing.
+Existing plugins are unchanged; new ones
+appear in `/plugin marketplace update`
+without auto-installing.
 
 ## Tasks
 
@@ -307,8 +309,6 @@ auto-installing.
 
 - **Bundle vs split.** Revisit if install count
   becomes painful.
-- **Hook scope.** Auto-`fix` is opt-in; revisit
-  if users want a per-directory guard.
 - **Agent vs. skill.** A `/mdsmith-review`
   skill might cover most cases more cheaply.
 

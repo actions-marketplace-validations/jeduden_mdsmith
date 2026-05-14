@@ -218,8 +218,8 @@ automatically.
 2. Populate `maintainability` on every existing
    rule README. Reuse content from the audit
    skill's [patterns.md][audit-patterns] where
-   it overlaps. Content-only rules set
-   `maintainability: null`.
+   it overlaps. Rules with no maintainability
+   pattern set `maintainability: null`.
 3. Extend `mdsmith help rule <name>` to render
    the `maintainability` block as a
    "Maintainability pattern" section appended
@@ -261,10 +261,10 @@ automatically.
 
 - [ ] Every rule README declares a
       `maintainability` block (either
-      `{signal, fix}` or the literal `null`) in
-      front matter; `mdsmith check
-      internal/rules/` passes via the
-      `rule-readme` kind.
+      `{signal, fix}` or `null`);
+      `mdsmith check internal/rules/` passes
+      via the `rule-readme` and
+      `directive-rule-readme` kinds.
 - [ ] Absence of the field, or a partial block
       (e.g. `signal` without `fix`), fails
       `mdsmith check` with a schema error.
@@ -303,13 +303,13 @@ automatically.
       and
       [`docs/reference/cli/lsp.md`](../docs/reference/cli/lsp.md)
       document the new topic and LSP method.
-- [ ] The `markdown-audit` skill (both local
-      `.claude/skills/` copy and the installed
-      `mdsmith-audit` plugin) surfaces all five
-      rule-backed patterns from `mdsmith help
-      patterns` *and* the three trimmed
-      config-level checks from `patterns.md`
-      when run on a fixture repo.
+- [ ] Both the local `markdown-audit` skill
+      and the installed `mdsmith-audit` plugin
+      surface all five rule-backed patterns
+      (from `mdsmith help patterns`) plus the
+      three trimmed config-level checks (from
+      whichever install-time source the
+      implementation chose) on a fixture repo.
 - [ ] `go test ./...` passes.
 - [ ] `mdsmith check .` passes.
 
