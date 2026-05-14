@@ -116,6 +116,30 @@ fix recipe. When a sibling `patterns.md` is
 present (project install), read it once at the
 start for deeper heuristics and false positives.
 
+For each `<?directive?>` fix, read the rule's
+`pattern/bad/` and `pattern/good/` folders. They
+hold the canonical before/after pair. The list
+below is generated from every rule whose front
+matter declares `nature: directive`, so it stays
+in sync with the rule catalog automatically:
+
+<?catalog
+glob: "../../../internal/rules/MDS*/README.md"
+where: 'nature: "directive"'
+sort: id
+row: "- `internal/rules/{id}-{name}/pattern/` ({name})"
+?>
+- `internal/rules/MDS019-catalog/pattern/` (catalog)
+- `internal/rules/MDS021-include/pattern/` (include)
+- `internal/rules/MDS038-toc/pattern/` (toc)
+- `internal/rules/MDS039-build/pattern/` (build)
+<?/catalog?>
+
+Do not paraphrase directive syntax from memory.
+The integration test
+`TestDirectiveRulesHaveExamples` enforces that
+each pattern folder pair is present.
+
 Do not run `mdsmith check .` from this skill.
 That is the content-lint surface and runs
 separately.

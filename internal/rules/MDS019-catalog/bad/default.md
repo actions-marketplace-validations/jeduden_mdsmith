@@ -8,6 +8,7 @@ diagnostics:
 
 <?catalog
 glob: "data/*.md"
+row: "[{filename}]({filename})"
 ?>
-- [alpha.md](data/alpha.md)
+[data/alpha.md](data/alpha.md)
 <?/catalog?>

@@ -3,6 +3,7 @@ id: MDS021
 name: include
 status: ready
 description: Include section content must match the referenced file.
+nature: directive
 ---
 # MDS021: include
 
@@ -195,6 +196,68 @@ Outdated content
 | invalid heading-level | include directive "heading-level" must be "absolute"               |
 | cyclic include        | cyclic include: a.md -> b.md -> a.md                               |
 | depth exceeded        | include depth exceeds maximum (10)                                 |
+
+## Pattern
+
+The bad pattern is a section duplicated across
+two files. The good pattern is one canonical
+source plus `<?include?>` references. The
+canonical source files live in
+[pattern/bad/](pattern/bad/) and
+[pattern/good/](pattern/good/); the snippets
+below mirror those files for quick reference.
+The markdown-audit skill reads the folders
+directly.
+
+### Without the directive
+
+`README.md`:
+
+```markdown
+# Project
+
+## Build
+
+Run `make build` to compile the project. The
+binary lands in `dist/`.
+```
+
+`INSTALL.md`:
+
+```markdown
+# Install
+
+## Build
+
+Run `make build` to compile the project. The
+binary lands in `dist/`.
+```
+
+### With the directive
+
+`snippets/build.md`:
+
+```markdown
+Run `make build` to compile the project. The
+binary lands in `dist/`.
+```
+
+`README.md`:
+
+```markdown
+# Project
+
+## Build
+
+<?include
+file: snippets/build.md
+?>
+Run `make build` to compile the project. The
+binary lands in `dist/`.
+<?/include?>
+```
+
+`INSTALL.md` follows the same shape.
 
 ## Meta-Information
 

@@ -56,17 +56,17 @@ False positives:
 
 Severity: tax.
 
-Fix: replace the block with a `<?catalog?>`
-directive targeting the shared directory.
+Fix: use a `<?catalog?>` directive on the shared
+directory. Read the canonical before/after pair
+from the rule's own pattern folders:
 
-```markdown
-<?catalog
-glob: "plan/*.md"
-sort: id
-row: "- [{title}](plan/{filename})"
-?>
-<?/catalog?>
-```
+- before (hand-maintained list): `internal/rules/MDS019-catalog/pattern/bad/`
+- after (catalog directive): `internal/rules/MDS019-catalog/pattern/good/`
+
+These folders are the single source of truth. The
+rule's README `## Pattern` section pulls from
+them. A directive-rule integration test fails
+when they go missing.
 
 Run `mdsmith fix <file>` and confirm the same
 items reappear in the regenerated body.
@@ -143,17 +143,14 @@ False positives:
 Severity: tax.
 
 Fix: extract the shared body into one canonical
-file under `docs/`. Replace each copy with
-`<?include?>`.
+snippet. Replace each copy with `<?include?>`.
+Read the canonical before/after pair from the
+rule's own pattern folders:
 
-```markdown
-<?include
-file: docs/development/index.md
-strip-frontmatter: "true"
-heading-level: "absolute"
-?>
-<?/include?>
-```
+- before: `internal/rules/MDS021-include/pattern/bad/`
+  (section duplicated across two files)
+- after: `internal/rules/MDS021-include/pattern/good/`
+  (one snippet plus include directives)
 
 Use `heading-level: "absolute"` when the host file
 needs the included headings to nest under an
@@ -211,27 +208,66 @@ in.
 
 Severity: nice-to-have.
 
-Fix:
+Fix: pick the schema flavor that fits the kind,
+then wire it in `.mdsmith.yml`.
 
-1. Create `proto.md` in the kind's primary
-   directory. Copy the shape from an existing
-   `proto.md` in the repo.
-2. Fill the front matter section with required
-   keys and CUE types.
-3. Add a `## <heading>` line per required section.
-4. Wire the schema in `.mdsmith.yml`:
+Inline schema vs `proto.md` — when to use which:
 
-   ```yaml
-   kinds:
-     plan:
-       rules:
-         required-structure:
-           schema: plan/proto.md
-   ```
+- Inline schema in `.mdsmith.yml` when the shape
+  is small (one or two required sections, no
+  nested headings) or the kind exists only in
+  this repo. One source file holds everything.
+- A `proto.md` file when the schema runs more
+  than a screen, the required sections nest, the
+  schema is shared across kinds via
+  `<?include?>`, or the prose around each
+  required field is itself useful documentation.
+  The proto file is itself a lintable Markdown
+  document.
 
-5. Run `mdsmith check .` and confirm every
-   existing file passes. When a file fails, relax
-   the schema — do not break the files.
+Both flavors satisfy `required-structure`. Do not
+mix the two for a single kind — pick one.
+
+The rule's example folder holds canonical samples
+of each flavor under
+`internal/rules/MDS020-required-structure/good/`.
+Read them before authoring:
+
+- `inline-flat.md` — inline schema with flat
+  required sections.
+- `inline-runbook.md` — inline schema with nested
+  sections and heading aliases.
+- `default.md` plus `data/tmpl.md` — proto file
+  referenced via the `schema:` setting.
+- `schema-compose.md` — proto file composed from
+  shared fragments via `<?include?>`.
+
+Wire-up for inline schema:
+
+```yaml
+kinds:
+  plan:
+    schema:
+      sections:
+        - heading: "Goal"
+          required: true
+        - heading: "Tasks"
+          required: true
+```
+
+Wire-up for proto.md:
+
+```yaml
+kinds:
+  plan:
+    rules:
+      required-structure:
+        schema: plan/proto.md
+```
+
+After wiring, run `mdsmith check .` and confirm
+every existing file passes. When a file fails,
+relax the schema — do not break the files.
 
 ## Check 7 — File placement violation
 

@@ -5,6 +5,7 @@ status: ready
 description: >-
   Validate `<?build?>` directive parameters and keep the section body
   in sync with the recipe's rendered `body-template`.
+nature: directive
 ---
 # MDS039: build
 
@@ -138,6 +139,49 @@ content
 
 MDS039 reports:
 `build directive recipe "render": missing required parameter "source"`
+
+## Pattern
+
+The bad pattern is a hand-maintained snippet
+describing where a generated artifact lives. The
+good pattern is the same content produced by a
+`<?build?>` directive. The canonical source
+files live in [pattern/bad/](pattern/bad/) and
+[pattern/good/](pattern/good/); the snippets
+below mirror those files for quick reference.
+The markdown-audit skill reads the folders
+directly.
+
+### Without the directive
+
+````markdown
+# Demo
+
+The recorded demo lives at `demo.gif`. Re-record
+the GIF with:
+
+```sh
+vhs demo.tape
+```
+
+Embedded inline:
+
+![demo](demo.gif)
+````
+
+### With the directive
+
+```markdown
+# Demo
+
+<?build
+recipe: vhs
+source: demo.tape
+output: demo.gif
+?>
+![demo](demo.gif)
+<?/build?>
+```
 
 ## Meta-Information
 
