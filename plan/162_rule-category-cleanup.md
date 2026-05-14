@@ -25,12 +25,18 @@ help-text grouping built on the category.
 
 Plan 142 added MDS055–MDS058 and put them in
 `prose`. They sit next to `proper-names` (MDS050).
+Many other `meta` rules belong elsewhere too — some
+are directive validators, others enforce
+project-level invariants. The mapping table below
+assigns each rule to its narrowest fit.
 
-The move highlighted a pattern. Many `meta` rules
-are prose rules in disguise. Some are directive
-validators. Others enforce project-level
-invariants. The mapping table below assigns each
-rule to its narrowest fit.
+`nature:` (introduced on main in #274) classifies
+each rule README as one of `directive | generator |
+content | style | structure`. That axis is
+orthogonal to `Category()`. `nature:` describes the
+kind of check. `Category()` describes the document
+target (line, heading, list, …). The mapping below
+keeps the two axes distinct.
 
 ## Non-Goals
 

@@ -3,6 +3,7 @@ id: MDS055
 name: forbidden-paragraph-starts
 status: ready
 description: Paragraphs must not begin with any configured prefix.
+nature: content
 ---
 # MDS055: forbidden-paragraph-starts
 

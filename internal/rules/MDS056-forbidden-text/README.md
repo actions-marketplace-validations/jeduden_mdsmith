@@ -3,6 +3,7 @@ id: MDS056
 name: forbidden-text
 status: ready
 description: Paragraphs must not contain any configured substring.
+nature: content
 ---
 # MDS056: forbidden-text
 

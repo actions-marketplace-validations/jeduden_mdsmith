@@ -3,6 +3,7 @@ id: MDS058
 name: required-mentions
 status: ready
 description: Heading-bounded sections must contain every configured substring.
+nature: content
 ---
 # MDS058: required-mentions
 
