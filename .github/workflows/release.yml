@@ -4,22 +4,67 @@ on:
   push:
     tags:
       - "v*"
+  create:
 
 permissions:
   contents: read
 
-# Serialize every release run so two publish jobs cannot mint OIDC
-# tokens against the same registry at the same time. The group is
-# tag-agnostic — different tags pushed close together queue rather
-# than overlap. `cancel-in-progress: false` keeps the first run
-# going (cancelling mid-publish would leave the scoped platform
-# packages out of sync with the root package).
+env:
+  VERSION: ${{ github.event_name == 'create' && github.event.ref || github.ref_name }}
+
+# Serialize only release-intent runs so two publish jobs cannot mint
+# OIDC tokens against the same registry at the same time. Ordinary
+# branch-creation `create` events get a per-run group and never queue
+# behind a real release. `cancel-in-progress: false` keeps the first
+# release going (cancelling mid-publish would leave the scoped
+# platform packages out of sync with the root package).
 concurrency:
-  group: release
+  group: >-
+    ${{
+      (github.event_name != 'create' ||
+      (github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v'))) &&
+      'release' ||
+      format('release-nonrelease-{0}-{1}', github.run_id, github.run_attempt)
+    }}
   cancel-in-progress: false
 
 jobs:
+  trigger-guard:
+    # `on: create` also fires for branch creation. Skip the whole job
+    # (checkout + setup-go + go run) for create events that are not a
+    # v* tag; downstream jobs gate on should_run and skip in turn.
+    if: >-
+      github.event_name != 'create' ||
+      (github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v'))
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+      create_release_is_draft: ${{ steps.decide.outputs.create_release_is_draft }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Decide whether this trigger should publish
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CREATE_REF_TYPE: ${{ github.event.ref_type }}
+          RELEASE_TAG: ${{ env.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # The runtime logic lives in mdsmith-release per
+        # docs/development/release-tooling.md. The step itself stays a
+        # fixed one-liner so no event payload is interpolated into an
+        # inline shell script (zizmor template-injection finding).
+        run: go run ./cmd/mdsmith-release check-release-trigger
+
   build:
+    needs: [trigger-guard]
+    if: &release_trigger_ok >-
+      needs.trigger-guard.outputs.should_run == 'true'
     strategy:
       matrix:
         include:
@@ -57,7 +102,7 @@ jobs:
           # (libSystem, kernel32) — this knob is about avoiding
           # glibc on Linux, not achieving full static linkage.
           CGO_ENABLED: "0"
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.VERSION }}
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
@@ -70,12 +115,15 @@ jobs:
           path: ${{ env.bin }}
 
   vscode:
+    needs: [trigger-guard]
     runs-on: ubuntu-latest
     # VSCE_PAT and OVSX_PAT are long-lived publisher tokens — see
     # docs/development/release.md for why the `release` environment
     # gates them and what reviewer rules the maintainer should set
     # on it.
-    if: github.repository == 'jeduden/mdsmith'
+    if: &release_repo_trigger_ok >-
+      github.repository == 'jeduden/mdsmith' &&
+      needs.trigger-guard.outputs.should_run == 'true'
     environment: release
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -93,7 +141,7 @@ jobs:
           cache: false
       - name: Stamp tracked manifests with the tag
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.VERSION }}
         run: go run ./cmd/mdsmith-release stamp "${VERSION#v}"
       - name: Install extension dependencies
         working-directory: editors/vscode
@@ -114,7 +162,7 @@ jobs:
         run: bun run build.ts --production
       - name: Package .vsix
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.VERSION }}
         working-directory: editors/vscode
         run: |
           ver="${VERSION#v}"
@@ -146,7 +194,7 @@ jobs:
         # registry errors.
         continue-on-error: true
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.VERSION }}
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         working-directory: editors/vscode
         # Reuse the exact .vsix the artifact upload below ships, so
@@ -165,7 +213,7 @@ jobs:
       - name: Publish to Open VSX
         continue-on-error: true
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.VERSION }}
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         working-directory: editors/vscode
         # Open VSX is the registry VSCodium, Cursor, Theia, and
@@ -183,14 +231,14 @@ jobs:
           path: editors/vscode/mdsmith-*.vsix
 
   npm:
-    needs: [build]
+    needs: [trigger-guard, build]
     runs-on: ubuntu-latest
     # See docs/development/release.md for the canonical description
     # of `if:`, `environment:`, OIDC Trusted Publishing scope, and
     # the operational checklist for npmjs.com / pypi.org / GitHub
     # environment configuration. Workflow comments here only record
     # the local intent of each setting.
-    if: github.repository == 'jeduden/mdsmith'
+    if: *release_repo_trigger_ok
     environment: release
     # `id-token: write` lets `npm publish --provenance` mint an OIDC
     # token so the npm registry stamps each tarball with verifiable
@@ -236,7 +284,7 @@ jobs:
           ' "$actual"
       - name: Stamp tracked manifests with the tag
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.VERSION }}
         run: go run ./cmd/mdsmith-release stamp "${VERSION#v}"
       - name: Download release artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -261,12 +309,12 @@ jobs:
         run: npm publish --access public --provenance
 
   pypi:
-    needs: [build]
+    needs: [trigger-guard, build]
     runs-on: ubuntu-latest
     # See docs/development/release.md for the canonical PyPI Trusted
     # Publisher config (workflow + environment scope) and the
     # operational checklist.
-    if: github.repository == 'jeduden/mdsmith'
+    if: *release_repo_trigger_ok
     environment: release
     permissions:
       contents: read
@@ -284,7 +332,7 @@ jobs:
           python-version: "3.12"
       - name: Stamp tracked manifests with the tag
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.VERSION }}
         run: go run ./cmd/mdsmith-release stamp "${VERSION#v}"
       - name: Install build tooling
         # `python -m build` and `python -m wheel` orchestrate the
@@ -304,11 +352,11 @@ jobs:
           packages-dir: python/dist
 
   release:
-    needs: [build, vscode]
+    needs: [trigger-guard, build, vscode]
     runs-on: ubuntu-latest
     # See docs/development/release.md for the rationale on `if:`,
     # `environment:`, and the OIDC + attestations permission set.
-    if: github.repository == 'jeduden/mdsmith'
+    if: *release_repo_trigger_ok
     environment: release
     permissions:
       contents: write
@@ -369,6 +417,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
+          draft: ${{ needs.trigger-guard.outputs.create_release_is_draft == 'true' }}
           generate_release_notes: true
           files: |
             mdsmith-*
@@ -380,7 +429,8 @@ jobs:
     # — the npm and PyPI registries can take ~60s to surface a fresh
     # publish, so the channel-specific install commands re-run if the
     # registry briefly returns the previous version.
-    needs: [npm, pypi, release]
+    needs: [trigger-guard, npm, pypi, release]
+    if: needs.trigger-guard.outputs.should_run == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -451,7 +501,7 @@ jobs:
     runs-on: ubuntu-latest
     container: ${{ matrix.container }}
     env:
-      VERSION: ${{ github.ref_name }}
+      VERSION: ${{ env.VERSION }}
     steps:
       - name: Install
         run: ${{ matrix.install }}
@@ -476,8 +526,8 @@ jobs:
     # boundary for Pages; the per-repo Pages settings choose
     # GitHub Actions as the source.
     name: Deploy mdsmith.dev to GitHub Pages
-    needs: [build]
-    if: github.repository == 'jeduden/mdsmith'
+    needs: [trigger-guard, build]
+    if: *release_repo_trigger_ok
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -498,7 +548,7 @@ jobs:
       # ``.Site.Params.version`` and the on-disk pin in
       # website/hugo.toml. Stamp validates that the value has
       # no leading "v" before rewriting, so strip it here.
-      VERSION: ${{ github.ref_name }}
+      VERSION: ${{ env.VERSION }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

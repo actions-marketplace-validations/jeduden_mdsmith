@@ -45,15 +45,39 @@ git tag v0.13.0
 git push origin v0.13.0
 ```
 
-A `v*` tag push is the only trigger. `release.yml`
-omits `workflow_dispatch`, `pull_request_target`,
-and `workflow_run`. Those triggers could mint OIDC
-tokens or reach the PATs from a non-tag context.
+A `v*` tag push still triggers the published-release
+path. `release.yml` also listens to the repo's
+`create` event. That covers the GitHub UI path where
+a draft release creates a new `v*` tag. GitHub does
+not fire `release` workflows for draft creation. On
+`create` runs, a preflight job checks
+`github.event.ref_type == 'tag'`, `github.event.ref`
+starting with `v`, and — via
+`mdsmith-release check-release-trigger` — the GitHub
+Releases API for an existing draft release on that
+tag. A normal
+`git push origin vX.Y.Z` still fires both `create`
+and `push`, but only the `push` run proceeds because
+the `create` preflight sees no draft release yet.
+
+`release.yml` still omits `workflow_dispatch`,
+`pull_request_target`, `workflow_run`, and
+`release`. Those triggers can mint OIDC tokens or
+reach the PATs from a non-tag context. The `release`
+event would also still miss draft creation. When
+the run started from `create`, the final GitHub
+Release upload keeps the release in draft state. A
+normal tag push keeps the current
+published-release behavior.
+
 `concurrency: { group: release, cancel-in-progress: false }`
-serializes every run tag-agnostically. A second
-push queues. The flag lets the in-flight publish
-finish; cancelling mid-publish would desync the
-platform packages from the root.
+still serializes real releases tag-agnostically.
+Non-release `create` events get a per-run concurrency
+group, so they do not queue behind the release lock.
+
+The flag lets the in-flight publish finish. Cancelling
+mid-publish would desync the platform packages from
+the root.
 
 ## Job Topology
 
