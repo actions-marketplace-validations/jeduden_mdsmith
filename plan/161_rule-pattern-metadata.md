@@ -1,7 +1,7 @@
 ---
 id: 161
 title: Expose rule maintainability patterns via CLI help and LSP
-status: "🔲"
+status: "🔳"
 model: sonnet
 depends-on: []
 summary: >-
@@ -259,39 +259,39 @@ automatically.
 
 ## Acceptance Criteria
 
-- [ ] Every rule README declares a
+- [x] Every rule README declares a
       `maintainability` block (either
       `{signal, fix}` or `null`);
       `mdsmith check internal/rules/` passes
       via the `rule-readme` and
       `directive-rule-readme` kinds.
-- [ ] Absence of the field, or a partial block
+- [x] Absence of the field, or a partial block
       (e.g. `signal` without `fix`), fails
       `mdsmith check` with a schema error.
-- [ ] For a rule with a non-null
+- [x] For a rule with a non-null
       `maintainability` block,
       `mdsmith help rule <name>` renders it as a
       "Maintainability pattern" section.
-- [ ] For a rule with `maintainability: null`,
+- [x] For a rule with `maintainability: null`,
       `mdsmith help rule <name>` does not render
       a "Maintainability pattern" section
       (neither empty nor literal `null`).
-- [ ] `mdsmith help patterns` (default text)
+- [x] `mdsmith help patterns` (default text)
       lists every rule's pattern in a readable
       form; covered by a new test asserting the
       output includes each rule's `signal` and
       `fix` lines for non-null rules.
-- [ ] `mdsmith help patterns -f json` emits a
+- [x] `mdsmith help patterns -f json` emits a
       JSON array of
       `{id, name, signal, fix, for-diagnostic}`
       entries (with `id` matching diagnostic
       codes like `MDS001`), omitting
       rules with `maintainability: null`.
       Covered by a new unit test.
-- [ ] `mdsmith/rulePatterns` returns the same
+- [x] `mdsmith/rulePatterns` returns the same
       payload over LSP. Covered by a new LSP
       end-to-end test.
-- [ ] `textDocument/hover` on a diagnostic
+- [x] `textDocument/hover` on a diagnostic
       from a `for-diagnostic: true` rule
       (duplicated-content, directory-structure)
       appends the fix sketch. Hover on the
@@ -299,7 +299,7 @@ automatically.
       include, required-structure) and on
       `maintainability: null` rules is
       unchanged. Covered by a new hover test.
-- [ ] [`docs/reference/cli/help.md`](../docs/reference/cli/help.md)
+- [x] [`docs/reference/cli/help.md`](../docs/reference/cli/help.md)
       and
       [`docs/reference/cli/lsp.md`](../docs/reference/cli/lsp.md)
       document the new topic and LSP method.
@@ -307,11 +307,11 @@ automatically.
       and the installed `mdsmith-audit` plugin
       surface all five rule-backed patterns
       (from `mdsmith help patterns`) plus the
-      three trimmed config-level checks (from
-      whichever install-time source the
-      implementation chose) on a fixture repo.
-- [ ] `go test ./...` passes.
-- [ ] `mdsmith check .` passes.
+      three trimmed config-level checks. Deferred
+      to a follow-up; this PR ships the data
+      source the skill consumes.
+- [x] `go test ./...` passes.
+- [x] `mdsmith check .` passes.
 
 ## ...
 

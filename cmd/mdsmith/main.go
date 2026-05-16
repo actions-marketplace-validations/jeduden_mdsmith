@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1037,6 +1038,7 @@ Topics:
   kinds                 Show concept page for file kinds
   kinds-cli             Summarize the 'kinds' subcommand surface
   placeholder-grammar   Show placeholder vocabulary reference
+  patterns              Show maintainability patterns across rules
 `
 
 // runHelp implements the "help" subcommand.
@@ -1057,10 +1059,91 @@ func runHelp(args []string) int {
 		return runHelpKindsCLI()
 	case "placeholder-grammar":
 		return runHelpConcept("placeholder-grammar")
+	case "patterns":
+		return runHelpPatterns(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "mdsmith: help: unknown topic %q\n", args[0])
 		return 2
 	}
+}
+
+// listRulesForHelp is the ruledocs.ListRules dependency, indirected through
+// a package var so tests can substitute a fault-injecting lister and exercise
+// the error-handling branches in the help subcommands.
+var listRulesForHelp = ruledocs.ListRules
+
+type patternRec struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Signal        string `json:"signal"`
+	Fix           string `json:"fix"`
+	ForDiagnostic bool   `json:"for-diagnostic"`
+}
+
+func runHelpPatterns(args []string) int {
+	format, code, ok := parsePatternsFormat(args)
+	if !ok {
+		return code
+	}
+	rules, err := listRulesForHelp()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return 2
+	}
+	items := make([]patternRec, 0)
+	for _, r := range rules {
+		if r.Maintainability == nil {
+			continue
+		}
+		items = append(items, patternRec{
+			ID:            r.ID,
+			Name:          r.Name,
+			Signal:        r.Maintainability.Signal,
+			Fix:           r.Maintainability.Fix,
+			ForDiagnostic: r.Maintainability.ForDiagnostic,
+		})
+	}
+	if format == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(items); err != nil {
+			fmt.Fprintf(os.Stderr, "mdsmith: writing json: %v\n", err)
+			return 2
+		}
+		return 0
+	}
+	for _, it := range items {
+		fmt.Printf("%s %s\n  signal: %s\n  fix: %s\n  for-diagnostic: %t\n\n",
+			it.ID, it.Name, it.Signal, it.Fix, it.ForDiagnostic)
+	}
+	return 0
+}
+
+// parsePatternsFormat extracts the --format value from runHelpPatterns args.
+// Returns (format, exitCode, ok); when ok is false the caller should return
+// exitCode immediately. Accepts: no args (text), `-f|--format <text|json>`.
+func parsePatternsFormat(args []string) (string, int, bool) {
+	if len(args) == 0 {
+		return "text", 0, true
+	}
+	if args[0] != "-f" && args[0] != "--format" {
+		fmt.Fprintf(os.Stderr, "mdsmith: help patterns: unexpected argument %q\n", args[0])
+		return "", 2, false
+	}
+	if len(args) < 2 {
+		fmt.Fprintf(os.Stderr, "mdsmith: help patterns: %s requires a value (text or json)\n", args[0])
+		return "", 2, false
+	}
+	if len(args) > 2 {
+		fmt.Fprintf(os.Stderr, "mdsmith: help patterns: unexpected trailing argument %q\n", args[2])
+		return "", 2, false
+	}
+	format := args[1]
+	if format != "text" && format != "json" {
+		fmt.Fprintf(os.Stderr, "mdsmith: help patterns: unknown format %q (valid: text, json)\n", format)
+		return "", 2, false
+	}
+	return format, 0, true
 }
 
 const helpKindsText = `File Kinds
@@ -1192,10 +1275,16 @@ func listAllRules() int {
 }
 
 func showRule(query string) int {
-	content, err := ruledocs.LookupRule(query)
+	info, err := ruledocs.LookupRuleInfo(query)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
 		return 2
+	}
+	content := ruledocs.StripFrontMatter(info.Content)
+	if m := info.Maintainability; m != nil {
+		content += "\n\n## Maintainability pattern\n\n"
+		content += fmt.Sprintf("- Signal: %s\n- Fix: %s\n- For diagnostic: %t\n",
+			m.Signal, m.Fix, m.ForDiagnostic)
 	}
 	fmt.Print(content)
 	return 0

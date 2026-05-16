@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/query"
+	ruledocs "github.com/jeduden/mdsmith/internal/rules"
 )
 
 // captureStderr temporarily redirects os.Stderr and returns the written content.
@@ -658,6 +660,223 @@ func TestShowRule_UnknownRule_ExitsTwo(t *testing.T) {
 			assert.Equal(t, 2, code)
 		})
 	})
+}
+
+func TestRunHelpPatterns_JSON(t *testing.T) {
+	out := captureStdout(func() {
+		code := runHelpPatterns([]string{"-f", "json"})
+		assert.Equal(t, 0, code)
+	})
+	var got []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	require.NotEmpty(t, got, "expected at least one rule with maintainability")
+	for _, item := range got {
+		assert.NotEmpty(t, item["id"], "id must be non-empty")
+		assert.NotEmpty(t, item["name"], "name must be non-empty")
+		assert.NotEmpty(t, item["signal"], "signal must be non-empty")
+		assert.NotEmpty(t, item["fix"], "fix must be non-empty")
+		_, hasFlag := item["for-diagnostic"]
+		assert.True(t, hasFlag, "for-diagnostic key must be present")
+	}
+}
+
+func TestRunHelpPatterns_JSON_OmitsNullMaintainability(t *testing.T) {
+	out := captureStdout(func() {
+		code := runHelpPatterns([]string{"-f", "json"})
+		assert.Equal(t, 0, code)
+	})
+	var got []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	for _, item := range got {
+		// line-length has maintainability: null and must be omitted.
+		assert.NotEqual(t, "line-length", item["name"])
+		assert.NotEqual(t, "MDS001", item["id"])
+	}
+}
+
+func TestRunHelpPatterns_JSON_FlagLongForm(t *testing.T) {
+	out := captureStdout(func() {
+		code := runHelpPatterns([]string{"--format", "json"})
+		assert.Equal(t, 0, code)
+	})
+	assert.True(t, strings.HasPrefix(strings.TrimSpace(out), "["),
+		"--format json must produce a JSON array")
+}
+
+func TestRunHelpPatterns_TextDefault(t *testing.T) {
+	out := captureStdout(func() {
+		code := runHelpPatterns(nil)
+		assert.Equal(t, 0, code)
+	})
+	assert.Contains(t, out, "signal:")
+	assert.Contains(t, out, "fix:")
+	assert.Contains(t, out, "for-diagnostic:")
+}
+
+// TestRunHelpPatterns_TextIncludesAllNonNullRules covers the closed set of
+// rules expected to ship a non-null maintainability block and asserts that
+// a rule with `maintainability: null` (MDS001) is absent from the text
+// output. Adjust the expected set when adding new patterns.
+func TestRunHelpPatterns_TextIncludesAllNonNullRules(t *testing.T) {
+	out := captureStdout(func() {
+		code := runHelpPatterns(nil)
+		assert.Equal(t, 0, code)
+	})
+	expected := []string{
+		"MDS019", "catalog",
+		"MDS020", "required-structure",
+		"MDS021", "include",
+		"MDS033", "directory-structure",
+		"MDS037", "duplicated-content",
+	}
+	for _, want := range expected {
+		assert.Contains(t, out, want,
+			"text output must include %q for the maintainability catalog", want)
+	}
+	assert.NotContains(t, out, "MDS001",
+		"text output must omit MDS001 (maintainability: null)")
+	assert.NotContains(t, out, "line-length",
+		"text output must omit the line-length rule (maintainability: null)")
+}
+
+func TestRunHelpPatterns_TextIncludesKnownRule(t *testing.T) {
+	out := captureStdout(func() {
+		code := runHelpPatterns(nil)
+		assert.Equal(t, 0, code)
+	})
+	// catalog (MDS019) carries a non-null maintainability block.
+	assert.Contains(t, out, "MDS019")
+	assert.Contains(t, out, "catalog")
+}
+
+func TestRunHelpPatterns_UnknownFormat_ExitsTwo(t *testing.T) {
+	var stderr string
+	captureStdout(func() {
+		stderr = captureStderr(func() {
+			code := runHelpPatterns([]string{"-f", "jsno"})
+			assert.Equal(t, 2, code)
+		})
+	})
+	assert.Contains(t, stderr, "unknown format")
+	assert.Contains(t, stderr, "jsno")
+}
+
+func TestRunHelpPatterns_FormatFlagWithoutValue_ExitsTwo(t *testing.T) {
+	var stderr string
+	captureStdout(func() {
+		stderr = captureStderr(func() {
+			code := runHelpPatterns([]string{"-f"})
+			assert.Equal(t, 2, code)
+		})
+	})
+	assert.Contains(t, stderr, "requires a value")
+}
+
+func TestRunHelpPatterns_UnexpectedArg_ExitsTwo(t *testing.T) {
+	var stderr string
+	captureStdout(func() {
+		stderr = captureStderr(func() {
+			code := runHelpPatterns([]string{"garbage"})
+			assert.Equal(t, 2, code)
+		})
+	})
+	assert.Contains(t, stderr, "unexpected argument")
+}
+
+func TestRunHelpPatterns_TrailingArg_ExitsTwo(t *testing.T) {
+	var stderr string
+	captureStdout(func() {
+		stderr = captureStderr(func() {
+			code := runHelpPatterns([]string{"-f", "json", "extra"})
+			assert.Equal(t, 2, code)
+		})
+	})
+	assert.Contains(t, stderr, "unexpected trailing argument")
+	assert.Contains(t, stderr, "extra")
+}
+
+// TestRunHelpPatterns_ListRulesError_ExitsTwo swaps the rule lister for a
+// fault injection so the otherwise-unreachable ListRules error path is
+// exercised — keeping behavior consistent with listAllRules, which also
+// surfaces the same error and exits 2.
+func TestRunHelpPatterns_ListRulesError_ExitsTwo(t *testing.T) {
+	prev := listRulesForHelp
+	listRulesForHelp = func() ([]ruledocs.RuleInfo, error) {
+		return nil, fmt.Errorf("forced list failure")
+	}
+	defer func() { listRulesForHelp = prev }()
+
+	var stderr string
+	captureStdout(func() {
+		stderr = captureStderr(func() {
+			code := runHelpPatterns(nil)
+			assert.Equal(t, 2, code)
+		})
+	})
+	assert.Contains(t, stderr, "forced list failure")
+}
+
+// TestRunHelpPatterns_JSON_WriteError_ExitsTwo verifies that a stdout write
+// failure during json encoding (e.g. broken pipe when the consumer hung up)
+// surfaces as exit 2 with a clear error rather than a silent exit 0.
+func TestRunHelpPatterns_JSON_WriteError_ExitsTwo(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	require.NoError(t, r.Close()) // close read end so subsequent writes get EPIPE
+	require.NoError(t, w.Close()) // close write end so encoder hits "file already closed"
+
+	stderr := captureStderr(func() {
+		oldStdout := os.Stdout
+		os.Stdout = w
+		defer func() { os.Stdout = oldStdout }()
+		code := runHelpPatterns([]string{"-f", "json"})
+		assert.Equal(t, 2, code)
+	})
+	assert.Contains(t, stderr, "writing json")
+}
+
+func TestRunHelp_PatternsTopicDispatches(t *testing.T) {
+	out := captureStdout(func() {
+		code := runHelp([]string{"patterns", "-f", "json"})
+		assert.Equal(t, 0, code)
+	})
+	assert.True(t, strings.HasPrefix(strings.TrimSpace(out), "["),
+		"runHelp must dispatch 'patterns' topic to runHelpPatterns")
+}
+
+func TestHelpUsageText_ListsPatternsTopic(t *testing.T) {
+	assert.Contains(t, helpUsageText, "patterns",
+		"help usage must advertise the patterns topic")
+}
+
+func TestShowRule_NullMaintainability_NoSection(t *testing.T) {
+	out := captureStdout(func() {
+		code := showRule("line-length")
+		assert.Equal(t, 0, code)
+	})
+	assert.NotContains(t, out, "Maintainability pattern")
+}
+
+func TestShowRule_NonNullMaintainability_RendersSection(t *testing.T) {
+	out := captureStdout(func() {
+		// catalog (MDS019) declares a non-null maintainability block.
+		code := showRule("catalog")
+		assert.Equal(t, 0, code)
+	})
+	assert.Contains(t, out, "## Maintainability pattern")
+	assert.Contains(t, out, "- Signal:")
+	assert.Contains(t, out, "- Fix:")
+	assert.Contains(t, out, "- For diagnostic:")
+}
+
+func TestShowRule_NonNullMaintainability_ByID(t *testing.T) {
+	out := captureStdout(func() {
+		code := showRule("MDS037")
+		assert.Equal(t, 0, code)
+	})
+	assert.Contains(t, out, "## Maintainability pattern")
+	// MDS037 (duplicated-content) is for-diagnostic: true.
+	assert.Contains(t, out, "- For diagnostic: true")
 }
 
 // --- printDeprecations ---
