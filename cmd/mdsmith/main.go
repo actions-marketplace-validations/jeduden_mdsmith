@@ -43,6 +43,7 @@ Commands:
   check             Lint Markdown files (default when given file arguments)
   fix               Auto-fix lint issues in place
   export            Write a portable, directive-free copy of a Markdown file
+  extract           Emit a kind-conformant file as a JSON/YAML/msgpack data tree
   list              Walk the workspace and emit matches (files or link records)
   help              Show help for rules and topics
   metrics           Show and rank shared Markdown metrics
@@ -68,22 +69,14 @@ func run() int {
 		debug.SetMemoryLimit(512 * 1024 * 1024)
 	}
 
-	// Handle no arguments: print usage, exit 0.
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usageText)
-		return 0
-	}
-
-	// Handle global flags before subcommand dispatch.
-	first := os.Args[1]
-
-	switch first {
-	case "--help", "-h":
+	// No arguments or a global help flag: print usage and exit 0.
+	if len(os.Args) < 2 || os.Args[1] == "--help" || os.Args[1] == "-h" {
 		fmt.Fprint(os.Stderr, usageText)
 		return 0
 	}
 
 	// Dispatch to subcommand.
+	first := os.Args[1]
 	switch first {
 	case "check":
 		return runCheck(os.Args[2:])
@@ -91,6 +84,8 @@ func run() int {
 		return runFix(os.Args[2:])
 	case "export":
 		return runExport(os.Args[2:])
+	case "extract":
+		return runExtract(os.Args[2:])
 	case "list":
 		return runList(os.Args[2:])
 	case "help":
