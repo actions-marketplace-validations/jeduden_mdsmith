@@ -59,6 +59,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	detectFilesKeyDeprecations(&cfg)
+	detectMetaCategoryDeprecations(&cfg)
 
 	if err := ValidateKinds(&cfg); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
@@ -225,6 +226,37 @@ func detectFilesKeyDeprecations(cfg *Config) {
 					"rename it to `glob:` — see docs/reference/globs.md", i))
 		}
 	}
+}
+
+// hasMetaCategory reports whether a meta key exists in any categories block
+// in the config (top-level, kinds, or overrides).
+func hasMetaCategory(cfg *Config) bool {
+	if _, ok := cfg.Categories["meta"]; ok {
+		return true
+	}
+	for _, kind := range cfg.Kinds {
+		if _, ok := kind.Categories["meta"]; ok {
+			return true
+		}
+	}
+	for _, o := range cfg.Overrides {
+		if _, ok := o.Categories["meta"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func detectMetaCategoryDeprecations(cfg *Config) {
+	if !hasMetaCategory(cfg) {
+		return
+	}
+	cfg.Deprecations = append(cfg.Deprecations,
+		"category `meta` no longer exists; rules previously in `meta` now use "+
+			"`directive`, `structural`, or `prose` — update your `categories:` block. "+
+			"Rules that moved to `prose` (paragraph-readability, paragraph-structure, "+
+			"token-budget, conciseness-scoring, duplicated-content, emphasis-style, "+
+			"ambiguous-emphasis) must be disabled by rule name, not by category.")
 }
 
 func enabledByDefault(r rule.Rule) bool {

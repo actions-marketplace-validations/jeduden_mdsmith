@@ -3,6 +3,7 @@ id: MDS035
 name: toc-directive
 status: ready
 description: Flag renderer-specific TOC directives that render as literal text on CommonMark and goldmark.
+category: directive
 nature: generator
 maintainability: null
 ---
@@ -137,4 +138,4 @@ text on CommonMark and goldmark renderers.
 - **Fixable**: yes
 - **Implementation**:
   [source](./)
-- **Category**: meta
+- **Category**: directive

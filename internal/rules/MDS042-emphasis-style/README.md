@@ -6,6 +6,7 @@ description: >-
   Enforces a single delimiter character for bold
   and italic emphasis, and optionally forbids
   cross-delimiter nesting.
+category: prose
 nature: style
 maintainability: null
 ---
@@ -123,4 +124,4 @@ The following cases emit diagnostics but are
 - **Fixable**: yes (with exceptions; see Auto-fix)
 - **Implementation**:
   [source](./)
-- **Category**: meta
+- **Category**: prose

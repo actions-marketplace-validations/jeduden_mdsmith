@@ -1375,6 +1375,89 @@ func TestLoad_ArchetypesKeyEmitsDeprecation(t *testing.T) {
 	assert.True(t, found, "deprecation must mention 'archetypes'")
 }
 
+func assertMetaDeprecation(t *testing.T, cfg *Config) {
+	t.Helper()
+	for _, d := range cfg.Deprecations {
+		if strings.Contains(d, "meta") {
+			assert.Contains(t, d, "directive")
+			assert.Contains(t, d, "structural")
+			assert.Contains(t, d, "prose")
+			return
+		}
+	}
+	t.Error("expected a deprecation mentioning meta, directive, structural, and prose")
+}
+
+func TestLoad_MetaCategoryTopLevelEmitsDeprecation(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, ".mdsmith.yml")
+	require.NoError(t, os.WriteFile(cfgPath,
+		[]byte("categories:\n  meta: false\n"), 0o644))
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assertMetaDeprecation(t, cfg)
+	// Config is left as-is: meta key stays and no per-rule inserts are made.
+	// (meta is inert since no rule returns "meta", but the user must fix it.)
+	assert.False(t, cfg.Categories["meta"])
+}
+
+func TestLoad_MetaCategoryKindEmitsDeprecation(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, ".mdsmith.yml")
+	require.NoError(t, os.WriteFile(cfgPath,
+		[]byte("kinds:\n  docs:\n    categories:\n      meta: false\n"), 0o644))
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assertMetaDeprecation(t, cfg)
+	assert.False(t, cfg.Kinds["docs"].Categories["meta"])
+}
+
+func TestLoad_MetaCategoryOverrideEmitsDeprecation(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, ".mdsmith.yml")
+	require.NoError(t, os.WriteFile(cfgPath,
+		[]byte("overrides:\n  - glob:\n      - \"**/*.md\"\n    categories:\n      meta: false\n"), 0o644))
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assertMetaDeprecation(t, cfg)
+	assert.False(t, cfg.Overrides[0].Categories["meta"])
+}
+
+func TestLoad_MetaCategoryTrueEmitsDeprecation(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, ".mdsmith.yml")
+	require.NoError(t, os.WriteFile(cfgPath,
+		[]byte("categories:\n  meta: true\n"), 0o644))
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assertMetaDeprecation(t, cfg)
+	// No rules are inserted — meta: true must not activate opt-in prose rules.
+	for _, ruleName := range []string{
+		"conciseness-scoring", "duplicated-content", "emphasis-style", "ambiguous-emphasis",
+	} {
+		_, present := cfg.Rules[ruleName]
+		assert.False(t, present, "opt-in rule %q must not be inserted when meta: true", ruleName)
+	}
+}
+
+func TestLoad_MetaCategoryMultipleLocationsEmitDeprecationOnce(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, ".mdsmith.yml")
+	yaml := "categories:\n  meta: false\n" +
+		"kinds:\n  docs:\n    categories:\n      meta: false\n" +
+		"overrides:\n  - glob:\n      - \"docs/**\"\n    categories:\n      meta: false\n"
+	require.NoError(t, os.WriteFile(cfgPath, []byte(yaml), 0o644))
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	count := 0
+	for _, d := range cfg.Deprecations {
+		if strings.Contains(d, "meta") {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "deprecation should appear exactly once regardless of how many locations use meta")
+}
+
 func TestMergeMaxInputSize_FromLoaded(t *testing.T) {
 	defaults := &Config{
 		Rules: map[string]RuleCfg{"a": {Enabled: true}},

@@ -3,6 +3,7 @@ id: MDS023
 name: paragraph-readability
 status: ready
 description: Paragraph readability index must not exceed a threshold.
+category: prose
 nature: content
 maintainability: null
 ---
@@ -91,7 +92,7 @@ The implementation of concurrent distributed systems requires sophisticated unde
 - **Fixable**: no
 - **Implementation**:
   [source](./)
-- **Category**: meta
+- **Category**: prose
 
 ## See also
 

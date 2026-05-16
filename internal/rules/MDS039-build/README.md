@@ -5,6 +5,7 @@ status: ready
 description: >-
   Validate `<?build?>` directive parameters and keep the section body
   in sync with the recipe's rendered `body-template`.
+category: directive
 nature: directive
 maintainability: null
 ---
@@ -193,4 +194,4 @@ output: demo.gif
 - **Fixable**: yes (body only)
 - **Implementation**:
   [source](./)
-- **Category**: meta
+- **Category**: directive

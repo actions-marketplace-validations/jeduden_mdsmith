@@ -3,6 +3,7 @@ id: MDS020
 name: required-structure
 status: ready
 description: Document structure and front matter must match its schema.
+category: structural
 nature: structure
 maintainability:
   signal: files of a kind that lack an explicit section schema
@@ -352,7 +353,7 @@ Other shapes get no hint.
 - **Implementation**: [source](./)
 - **Guide**:
   [directive guide](../../../docs/guides/directives/enforcing-structure.md)
-- **Category**: meta
+- **Category**: structural
 
 ## See also
 

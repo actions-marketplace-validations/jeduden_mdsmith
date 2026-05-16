@@ -8,15 +8,17 @@ import (
 
 // ValidCategories lists the recognized rule category names.
 var ValidCategories = []string{
-	"heading",
-	"whitespace",
+	"accessibility",
 	"code",
-	"list",
+	"directive",
+	"heading",
 	"line",
 	"link",
-	"meta",
+	"list",
 	"prose",
+	"structural",
 	"table",
+	"whitespace",
 }
 
 // DefaultFiles is the built-in list of glob patterns used for file

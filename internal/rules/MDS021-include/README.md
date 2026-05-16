@@ -3,6 +3,7 @@ id: MDS021
 name: include
 status: ready
 description: Include section content must match the referenced file.
+category: directive
 nature: directive
 maintainability:
   signal: near-duplicate sections that drift across files
@@ -272,7 +273,7 @@ binary lands in `dist/`.
 - **Fixable**: yes
 - **Implementation**:
   [source](./)
-- **Category**: meta
+- **Category**: directive
 - **Concept**:
   [generated-section](../../../docs/background/concepts/generated-section.md)
 - **Guide**:

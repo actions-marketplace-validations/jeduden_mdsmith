@@ -3,6 +3,7 @@ id: MDS024
 name: paragraph-structure
 status: ready
 description: Paragraphs must not exceed sentence and word limits.
+category: prose
 nature: content
 maintainability: null
 ---
@@ -87,7 +88,7 @@ Dogs bark. Cats meow. Birds sing. Fish swim. Frogs croak. Snakes hiss. Bees buzz
 - **Fixable**: no
 - **Implementation**:
   [source](./)
-- **Category**: meta
+- **Category**: prose
 
 ## See also
 

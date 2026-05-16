@@ -3,6 +3,7 @@ id: MDS037
 name: duplicated-content
 status: ready
 description: Paragraphs should not repeat verbatim across Markdown files.
+category: prose
 nature: content
 maintainability:
   signal: repeated paragraphs or sections with the same content
@@ -147,4 +148,4 @@ suite.
 - **Fixable**: no
 - **Implementation**:
   [source](./)
-- **Category**: meta
+- **Category**: prose

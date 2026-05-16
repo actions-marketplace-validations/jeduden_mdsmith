@@ -3,6 +3,7 @@ id: MDS047
 name: ambiguous-emphasis
 status: ready
 description: Forbid emphasis sequences whose meaning a human cannot predict at a glance.
+category: prose
 nature: style
 maintainability: null
 ---
@@ -212,4 +213,4 @@ __a__b__
 - **Fixable**: no
 - **Implementation**:
   [source](./)
-- **Category**: meta
+- **Category**: prose
