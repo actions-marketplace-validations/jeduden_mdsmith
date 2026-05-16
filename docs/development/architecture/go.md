@@ -213,24 +213,194 @@ handler in `cmd/mdsmith` longer than
 
 ## Tests
 
-- Unit tests next to the package
-  (`xxx_test.go`).
-- Cross-package tests in
-  `internal/integration/`.
+<?include
+file: tests.md
+strip-frontmatter: "true"
+heading-level: "absolute"
+?>
+### Test pyramid
+
+mdsmith follows a four-layer test
+pyramid. Each layer answers a
+different question and sits in a
+different place in the tree:
+
+- **Unit** — one function or method
+  per test. Lives next to source.
+  No file I/O beyond inline string
+  fixtures. Runs in milliseconds.
+- **Contract** — locks a port-package
+  interface or external surface
+  shape. A contract test must fail
+  loudly when the shape it pins
+  drifts.
+- **Integration** — multiple packages
+  composed together against real
+  Markdown fixtures.
+- **E2E** — the built binary (or the
+  packaged extension) against a
+  fixture workspace.
+
+The pyramid shape — many unit, fewer
+contract, fewer integration, fewest
+e2e — keeps the suite fast and the
+feedback loop tight.
+
+#### Every function has a dedicated unit test
+
+A new function lands together with
+its dedicated unit test by name.
+Sub-behaviours of the same function
+go in subtests under that parent.
+The rule applies to exported and
+unexported functions alike — in
+production code. Test files
+(`*_test.go`, `*.test.ts`) and
+test-only helpers are out of scope:
+the audit walks production sources
+only and never asks for "tests for
+tests". The audit flags every
+production function in the touched
+set that lacks a matching test.
+
+The language-specific page binds
+this rule to concrete file and
+symbol patterns. For Go, that is
+`TestFunctionName` for package
+functions and `TestReceiver_Method`
+for methods. For TypeScript, that
+is a `describe("name")` block with
+one or more `test("case")` cases
+imported from `bun:test`.
+
+#### Exemptions
+
+A production function may skip its
+dedicated test only if one of these
+holds:
+
+- It is generated code (file begins
+  with a `// Code generated…` header,
+  matches a generator file pattern
+  such as `*_gen.go`, is a `*.d.ts`
+  declaration, or is emitted under
+  `dist/`). The file-level marker is
+  sufficient — no per-function
+  comment is required.
+- It is a trivial accessor with no
+  branch — a one-line getter or a
+  `String()`-style format method.
+  Add a one-line comment on the
+  function so the audit can
+  distinguish "no test by design"
+  from "no test, forgotten".
+
+#### Push down by default
+
+A unit test on the same behaviour
+is faster than the equivalent
+integration test. It stays focused
+on one function. It also survives
+refactors better. The audit pushes
+back on inverted pyramids:
+
+- An integration test that exercises
+  one function should move down to
+  that function's own package as a
+  unit test.
+- An e2e test that exercises
+  behaviour reachable through the
+  integration layer should move down
+  to integration.
+
+Save e2e for the full process
+boundary. Use it for exit codes.
+Use it for signals. Use it for
+subprocess lifecycle. Use it for
+packaged-artifact tests.
+<?/include?>
+
+### Go-specific bindings
+
+- **Unit tests** in `xxx_test.go`
+  next to `xxx.go`. The dedicated
+  test for a package function
+  `func Foo` is `TestFoo`; for a
+  method `func (r *Receiver) Foo`
+  it is `TestReceiver_Foo`.
+  Sub-behaviours may live as
+  `t.Run("case", …)` subtests
+  under that parent (e.g.
+  `TestParseFrontMatterFields` in
+  `internal/lint/frontmatter_test.go`)
+  or as additional top-level
+  functions
+  `TestReceiver_Foo_Variant` (e.g.
+  the `TestEngine_Check_*` family
+  in
+  `internal/archetype/gensection/engine_test.go`).
+  Either form satisfies the
+  dedicated-test rule — subtests
+  when behaviours share setup,
+  separate top-level when each
+  variant stands alone.
+- **Contract tests** in this repo:
+  `internal/integration/rule_boundaries_test.go`
+  pins the rule import graph;
+  `internal/integration/directive_examples_test.go`
+  pins the example-folder contract
+  every directive rule must ship
+  (good/bad/fixed and pattern/
+  pairs, plus the registered rule
+  ID surfaced by the directive).
+  Add a new contract test whenever
+  a new interface in
+  `internal/rule/` or a new
+  external surface shape lands.
+- **Integration tests** live under
+  `internal/integration/`. The rule
+  fixture runner (`rules_test.go`)
+  is the canonical example.
+- **E2E tests** live under
+  `cmd/mdsmith/` and are defined
+  by behaviour — the test spawns
+  the built `mdsmith` binary and
+  drives it over stdio, exit
+  code, or signals. Audit by what
+  the test does, not the
+  filename; three name shapes
+  appear in the repo: `e2e_`
+  prefix (`e2e_test.go`,
+  `e2e_backlinks_test.go`),
+  `_e2e_` suffix
+  (`kinds_e2e_test.go`,
+  `list_e2e_test.go`), and
+  topic-named LSP subprocess
+  tests (`lsp_test.go`,
+  `lsp_hover_test.go`, …). The
+  demo tape harness under `demo/`
+  is also e2e.
 - Rule fixtures live in
   `internal/rules/MDS###-<rule-name>/`:
-  `good/` must lint clean against every
-  default-enabled rule, `bad/` is
-  excluded via `.mdsmith.yml`.
+  `good/` must lint clean against
+  every default-enabled rule, `bad/`
+  is excluded via `.mdsmith.yml`.
 - Use `testify/require` for
   preconditions that abort the test;
   `testify/assert` for soft checks.
 - Use `Same`/`NotSame` for pointer
   identity.
-- Don't mock at the `rule.Rule` boundary
-  — feed real Markdown via fixtures. A
-  mock there is the smell of a too-wide
-  contract.
+- Don't mock at the `rule.Rule`
+  boundary — feed real Markdown via
+  fixtures. A mock there is the
+  smell of a too-wide contract.
+
+Severity for missing unit tests:
+`tax` by default. Promote to
+`blocker` if the function sits on
+a public surface — a `rule.Rule`
+method, an LSP capability handler,
+or a CLI subcommand entry.
 
 ## Common violations to flag
 
@@ -274,6 +444,36 @@ checklist can pattern-match.
 - **A `Helper`, `Util`, or `Misc` symbol
   anywhere.** The name is the problem;
   rename until it answers a question.
+- **A Go function with no matching
+  test symbol in a sibling
+  `*_test.go`** — `TestFoo` for a
+  package function `func Foo`,
+  `TestReceiver_Foo` (or
+  `TestReceiver_Foo_Variant`) for a
+  method on `Receiver`. Test debt.
+  Severity `tax` by default,
+  `blocker` if the function is on a
+  public surface (a `rule.Rule`
+  method, an LSP capability handler,
+  a CLI subcommand entry). Generated
+  files and trivial getters are
+  exempt; see §"Tests / Exemptions".
+- **A test under
+  `internal/integration/` that
+  exercises a single function.**
+  Pyramid is inverted; push the
+  assertion down to a unit test in
+  the function's own package.
+- **A test that spawns the
+  `mdsmith` binary as a
+  subprocess to assert behaviour
+  reachable without it.** Pyramid
+  is inverted regardless of
+  filename — any of the three
+  e2e shapes above counts.
+  Reserve e2e for behaviour that
+  needs the full process
+  boundary.
 
 ## Refactor moves we have used
 

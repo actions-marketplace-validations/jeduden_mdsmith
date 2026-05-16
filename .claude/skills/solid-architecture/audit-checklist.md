@@ -101,13 +101,15 @@ shape the docs reject.
 - `.go` files → the project's Go
   architecture page (commonly
   `docs/development/architecture/go.md`).
-  Walk every SOLID section and the
-  "Common violations to flag" list.
+  Walk every SOLID section, the
+  "Tests" section, and the "Common
+  violations to flag" list.
 - `.ts` / `.tsx` files → the project's
   TypeScript architecture page. Walk
   every SOLID section, the wiring
-  section, and the "Common violations
-  to flag" list.
+  section, the "Tests" section, and
+  the "Common violations to flag"
+  list.
 - Files touching wire protocols, CLI
   flags, config schemas, generated
   markers, plugin manifests, shims, or
@@ -118,6 +120,65 @@ shape the docs reject.
 
 For every flagged shape, record the
 section that justifies the flag.
+
+### Test pyramid sub-walk
+
+The language pages include a
+canonical "Test pyramid" partial.
+It commonly lives at
+`docs/development/architecture/tests.md`.
+The partial defines four layers:
+unit, contract, integration, and
+e2e. It also sets the rule that
+every function ships with a
+dedicated unit test.
+
+For every production function in the
+touched set — skip `*_test.go`,
+`*.test.ts`, and test-only helper
+files; the audit does not ask for
+"tests for tests":
+
+- Confirm a dedicated unit test
+  exists in the matching test file,
+  named after the function per the
+  language page's binding (e.g.
+  `TestFunctionName` or
+  `TestReceiver_Method` for Go;
+  `describe("name")` containing
+  `test(…)` cases from `bun:test`
+  for TS).
+- If the function lives in a
+  generated file (`*_gen.go`,
+  `*.d.ts`, anything emitted under
+  `dist/`, or any file beginning
+  with a `// Code generated…`
+  header), the file-level marker
+  is enough — do not flag and do
+  not require a per-function
+  exemption comment.
+- If the function is a trivial
+  accessor with no branch (a
+  one-line getter or
+  `String()`-style format method),
+  confirm a one-line exemption
+  comment is present so the audit
+  can distinguish "no test by
+  design" from "no test,
+  forgotten".
+- If a test exists but lives one
+  layer too high (an integration
+  test that drives a single
+  function, an e2e test that
+  duplicates integration), record
+  an inverted-pyramid finding.
+
+Record missing tests as findings.
+Use the severity rule the project
+sets. See its architecture
+audit-checklist page for the
+project's "Severity for missing
+unit test" entry.
 
 ## Step 3: severity rubric
 

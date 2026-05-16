@@ -183,31 +183,202 @@ violations list flags new additions to
 
 ## Tests
 
-- Pure unit tests for each module
-  using the project's configured test
-  runner (see
-  `editors/vscode/package.json` →
-  `scripts.test`).
-- Extract pure functions out of
-  command bodies and unit-test those
-  instead of mocking `vscode`. Mock
-  the `vscode` API only when
-  unavoidable.
-- For the binary boundary, prefer
-  running the real binary against a
-  fixture workspace over mocking
-  subprocess calls.
+<?include
+file: tests.md
+strip-frontmatter: "true"
+heading-level: "absolute"
+?>
+### Test pyramid
+
+mdsmith follows a four-layer test
+pyramid. Each layer answers a
+different question and sits in a
+different place in the tree:
+
+- **Unit** — one function or method
+  per test. Lives next to source.
+  No file I/O beyond inline string
+  fixtures. Runs in milliseconds.
+- **Contract** — locks a port-package
+  interface or external surface
+  shape. A contract test must fail
+  loudly when the shape it pins
+  drifts.
+- **Integration** — multiple packages
+  composed together against real
+  Markdown fixtures.
+- **E2E** — the built binary (or the
+  packaged extension) against a
+  fixture workspace.
+
+The pyramid shape — many unit, fewer
+contract, fewer integration, fewest
+e2e — keeps the suite fast and the
+feedback loop tight.
+
+#### Every function has a dedicated unit test
+
+A new function lands together with
+its dedicated unit test by name.
+Sub-behaviours of the same function
+go in subtests under that parent.
+The rule applies to exported and
+unexported functions alike — in
+production code. Test files
+(`*_test.go`, `*.test.ts`) and
+test-only helpers are out of scope:
+the audit walks production sources
+only and never asks for "tests for
+tests". The audit flags every
+production function in the touched
+set that lacks a matching test.
+
+The language-specific page binds
+this rule to concrete file and
+symbol patterns. For Go, that is
+`TestFunctionName` for package
+functions and `TestReceiver_Method`
+for methods. For TypeScript, that
+is a `describe("name")` block with
+one or more `test("case")` cases
+imported from `bun:test`.
+
+#### Exemptions
+
+A production function may skip its
+dedicated test only if one of these
+holds:
+
+- It is generated code (file begins
+  with a `// Code generated…` header,
+  matches a generator file pattern
+  such as `*_gen.go`, is a `*.d.ts`
+  declaration, or is emitted under
+  `dist/`). The file-level marker is
+  sufficient — no per-function
+  comment is required.
+- It is a trivial accessor with no
+  branch — a one-line getter or a
+  `String()`-style format method.
+  Add a one-line comment on the
+  function so the audit can
+  distinguish "no test by design"
+  from "no test, forgotten".
+
+#### Push down by default
+
+A unit test on the same behaviour
+is faster than the equivalent
+integration test. It stays focused
+on one function. It also survives
+refactors better. The audit pushes
+back on inverted pyramids:
+
+- An integration test that exercises
+  one function should move down to
+  that function's own package as a
+  unit test.
+- An e2e test that exercises
+  behaviour reachable through the
+  integration layer should move down
+  to integration.
+
+Save e2e for the full process
+boundary. Use it for exit codes.
+Use it for signals. Use it for
+subprocess lifecycle. Use it for
+packaged-artifact tests.
+<?/include?>
+
+### TypeScript-specific bindings
+
+- **Unit tests** in `xxx.test.ts`
+  next to `xxx.ts`, importing
+  `describe`, `test`, and `expect`
+  from `bun:test`. The dedicated
+  test for `function foo` (or a
+  method `foo`) is a
+  `describe("foo", () => { … })`
+  block; one or more `test("case",
+  …)` cases enumerate behaviours.
+  Extract pure functions out of
+  command bodies and unit-test
+  those instead of mocking
+  `vscode`.
+- **Contract tests** pin the shape
+  of the binary boundary — the JSON
+  envelopes parsed in
+  `commands/runner.ts` — the
+  `contributes` section of
+  `package.json`, and the LSP
+  capability set the extension opts
+  into. They live next to the
+  module that owns the contract.
+- **Integration tests** drive the
+  real `mdsmith` binary against
+  fixture workspaces rather than
+  mocking subprocess calls. They
+  live next to the command module
+  they exercise.
+- **E2E tests** spin up the VS Code
+  extension host against a fixture
+  workspace. Reserve them for
+  behaviour that cannot be checked
+  at the lower layers (activation
+  order, command palette wiring,
+  `onSave` handlers).
+- Mock the `vscode` API only when
+  unavoidable. If a function is
+  hard to test without `vscode`,
+  the function probably contains
+  pure logic that should be
+  extracted.
 - Place test fixtures under
-  `editors/vscode/test-fixtures/` or
-  alongside the test that uses them.
-  Do not import fixture data across
-  command modules.
+  `editors/vscode/test-fixtures/`
+  or alongside the test that uses
+  them. Do not import fixture data
+  across command modules.
+
+Severity for missing unit tests:
+`tax` by default. Promote to
+`blocker` if the function sits on
+a public surface — an exported
+command registration, a
+`contributes`-backed entry point,
+or a binary-boundary parser.
 
 ## Common violations to flag
 
 These are the mdsmith-specific shapes
 the audit flags:
 
+- **A TypeScript function with no
+  matching `describe("name", () =>
+  { test(…) })` block in a sibling
+  `*.test.ts`.** Test debt.
+  Severity `tax` by default,
+  `blocker` if the function is on a
+  public surface (an exported
+  command registration, a
+  `contributes`-backed entry point,
+  a binary-boundary parser).
+  Test files and test-only helpers
+  are out of scope; see §"Tests /
+  Exemptions".
+- **A `*.test.ts` under
+  `editors/vscode/test-fixtures/`
+  or an integration-style test that
+  drives a single pure function.**
+  Pyramid is inverted; extract the
+  function and push the assertion
+  down to a unit test next to it.
+- **A VS Code extension-host e2e
+  test added where a unit test on
+  an extracted pure function would
+  suffice.** E2E is for activation,
+  command palette wiring, and
+  `onSave` lifecycle — not for
+  logic reachable by direct call.
 - **A command that imports another
   command.** Share state through
   `wiring.ts` instead.
