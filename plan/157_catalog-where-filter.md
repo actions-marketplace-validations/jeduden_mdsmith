@@ -1,7 +1,7 @@
 ---
 id: 157
 title: 'Catalog filter by front matter property'
-status: '🔳'
+status: '✅'
 summary: >-
   Extend the catalog directive with a filter that
   selects matched files by a front matter property
@@ -107,17 +107,22 @@ directive so both surfaces stay consistent.
 - [x] An invalid `where:` expression emits an
   MDS019 diagnostic naming the offending token
   and line.
-- [ ] Every rule README carries a `nature` front
+- [x] Every rule README carries a `nature` front
   matter key matching the documented vocabulary.
-- [ ] [internal/rules/index.md](../internal/rules/index.md)
+- [x] [internal/rules/index.md](../internal/rules/index.md)
   has a "Directive rules" section using
-  `where: 'nature == "directive"'` that lists
-  only the four directive rules.
+  `where: 'nature: "directive"'` that lists
+  only the four directive rules. The plan
+  originally wrote `nature == "directive"`; the
+  CUE grammar reused from `mdsmith list query`
+  uses field-pattern (`:`) form, so the
+  implementation drops in the CLI-compatible
+  expression.
 - [x] The
   [generating-content guide](../docs/guides/directives/generating-content.md)
   documents `where:` with a worked example.
-- [ ] All tests pass: `go test ./...`.
-- [ ] `go tool golangci-lint run` reports no
+- [x] All tests pass: `go test ./...`.
+- [x] `go tool golangci-lint run` reports no
   issues.
 
 ## ...
