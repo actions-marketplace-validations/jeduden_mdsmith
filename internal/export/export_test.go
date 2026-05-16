@@ -182,3 +182,97 @@ func TestExport_NoCheckMode_StaleBody_ExportsAsIs(t *testing.T) {
 	// On-disk body kept verbatim — wrong link survives.
 	assert.Contains(t, got, "- [Wrong](#wrong)")
 }
+
+func TestExport_Catalog_MarkersRemoved_BodyKept(t *testing.T) {
+	// A fresh catalog body is kept as-is once the markers are
+	// stripped. The catalog directive needs an FS to discover files
+	// for its glob, so wire a fake one.
+	src := strings.Join([]string{
+		"# Index",
+		"",
+		"<?catalog",
+		"glob:",
+		"  - \"*.md\"",
+		"  - \"!index.md\"",
+		"sort: filename",
+		"row: \"- [{title}]({filename})\"",
+		"?>",
+		"- [Alpha](alpha.md)",
+		"- [Beta](beta.md)",
+		"<?/catalog?>",
+		"",
+	}, "\n")
+	f := newFile(t, "index.md", src)
+	f.FS = fstest.MapFS{
+		"alpha.md": &fstest.MapFile{Data: []byte("---\ntitle: Alpha\n---\n# Alpha\n")},
+		"beta.md":  &fstest.MapFile{Data: []byte("---\ntitle: Beta\n---\n# Beta\n")},
+	}
+
+	out, diags := export.Export(f, export.Check)
+	require.Empty(t, diags, "fresh catalog should pass Check")
+	got := string(out)
+	assert.NotContains(t, got, "<?catalog")
+	assert.NotContains(t, got, "<?/catalog")
+	assert.Contains(t, got, "- [Alpha](alpha.md)")
+	assert.Contains(t, got, "- [Beta](beta.md)")
+	assert.Contains(t, got, "# Index")
+}
+
+func TestExport_FullSourceIncludesFrontMatter(t *testing.T) {
+	src := "---\ntitle: Doc\n---\n# Title\n\n<?toc?>\n\n- [Section](#section)\n\n<?/toc?>\n\n## Section\n\nbody\n"
+	f, err := lint.NewFileFromSource("doc.md", []byte(src), true)
+	require.NoError(t, err)
+
+	out, diags := export.Export(f, export.Check)
+	require.Empty(t, diags)
+	got := string(out)
+	// Front matter is preserved exactly.
+	assert.True(t, strings.HasPrefix(got, "---\ntitle: Doc\n---\n"),
+		"expected front matter prefix, got: %q", got[:30])
+	assert.NotContains(t, got, "<?toc")
+	assert.Contains(t, got, "- [Section](#section)")
+}
+
+func TestExport_FreshOutputPassesCheck(t *testing.T) {
+	// After Fix-mode export, the bytes should not contain any
+	// directive markers, and the result should be a clean Markdown
+	// document with no MDS003/MDS010 stitching artifacts.
+	src := strings.Join([]string{
+		"# Title",
+		"",
+		"<?toc?>",
+		"",
+		"- [Wrong](#wrong)",
+		"",
+		"<?/toc?>",
+		"",
+		"## Section",
+		"",
+		"body",
+		"",
+	}, "\n")
+	f := newFile(t, "doc.md", src)
+
+	out, diags := export.Export(f, export.Fix)
+	require.Empty(t, diags)
+	got := string(out)
+	// No directive markers.
+	assert.NotContains(t, got, "<?")
+	// No 2+ consecutive blank lines.
+	assert.NotContains(t, got, "\n\n\n",
+		"output should not contain runs of multiple blank lines")
+	// Ends with exactly one newline.
+	assert.True(t, strings.HasSuffix(got, "\n"))
+	assert.False(t, strings.HasSuffix(got, "\n\n"))
+}
+
+func TestExport_NoDirectives_FullSource(t *testing.T) {
+	src := "---\nid: 1\n---\n# Hello\n\nNo directives here.\n"
+	f, err := lint.NewFileFromSource("doc.md", []byte(src), true)
+	require.NoError(t, err)
+
+	out, diags := export.Export(f, export.Check)
+	require.Empty(t, diags)
+	assert.Equal(t, src, string(out),
+		"export of a directive-free file should equal the input")
+}
