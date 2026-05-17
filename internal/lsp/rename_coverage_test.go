@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/yuin/goldmark/ast"
 
-	"github.com/jeduden/mdsmith/internal/lsp/index"
+	"github.com/jeduden/mdsmith/internal/index"
 )
 
 // TestHandlePrepareRenameOnUnknownDocument verifies the

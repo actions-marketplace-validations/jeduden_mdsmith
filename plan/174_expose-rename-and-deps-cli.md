@@ -123,16 +123,17 @@ over discovered files and queries `OutgoingEdges` /
 
 ## Tasks
 
-1. [ ] Create this plan; `mdsmith fix PLAN.md`.
-2. [ ] Relocate `internal/lsp/index` → `internal/index`
+1. [x] Create this plan; `mdsmith fix PLAN.md`.
+2. [x] Relocate `internal/lsp/index` → `internal/index`
    (`git mv`; rewrite import paths in `internal/lsp/*.go` +
    tests + every `*.md` repo-path reference). Layer move
    only; `go build/test` + existing index/lsp tests are the
    regression gate.
-3. [ ] Update architecture docs (`go.md` SRP list + DIP
-   arrows, `index.md` layering map, `cross-system.md`
-   boundaries/versioning) and append the plan-153
-   supersession to the audit log.
+3. [x] Update architecture docs (`go.md` SRP list + DIP
+   arrows, `index.md` layering map) and append the plan-153
+   supersession to the audit log. (`cross-system.md`
+   boundaries/versioning deferred to task 8 with the CLI
+   surface.)
 4. [ ] TDD `internal/rename` core: failing unit test per
    behavior (single-file heading, same-file anchors,
    cross-file anchors, disambiguator shift, link-ref def +
