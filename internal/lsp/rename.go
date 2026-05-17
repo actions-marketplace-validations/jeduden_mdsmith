@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jeduden/mdsmith/internal/index"
 	"github.com/jeduden/mdsmith/internal/linkgraph"
 	"github.com/jeduden/mdsmith/internal/lint"
-	"github.com/jeduden/mdsmith/internal/lsp/index"
 	"github.com/jeduden/mdsmith/internal/mdtext"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
