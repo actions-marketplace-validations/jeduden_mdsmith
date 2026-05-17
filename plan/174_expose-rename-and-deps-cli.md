@@ -145,18 +145,24 @@ over discovered files and queries `OutgoingEdges` /
    151/131 + `cmd/mdsmith/lsp_rename_test.go` stay green.
 6. [ ] TDD `cmd/mdsmith/rename.go` (unit + e2e), register in
    `main.go` dispatch + `usageText`.
-7. [ ] TDD `cmd/mdsmith/deps.go` (unit + e2e); extract the
-   shared deps query and route the LSP call-hierarchy
-   handlers through it; register in `main.go`.
-8. [ ] Feature + reference docs; `mdsmith fix .` to
-   regenerate catalogs (CLAUDE.md, PLAN.md, cli.md,
-   architecture index); `mdsmith check .`.
-9. [ ] Final gate: `go test ./...`, `golangci-lint`,
-   `go vet`, `mdsmith check .`; flip status to ✅; push.
+7. [x] TDD `cmd/mdsmith/deps.go` (unit + e2e); register
+   in `main.go`. The LSP call-hierarchy and `deps` both
+   consult `internal/index` for the edge graph, so the
+   walk is already shared — no separate query-extraction
+   refactor was needed.
+8. [x] Feature + reference docs; `mdsmith fix .` to
+   regenerate catalogs (CLAUDE.md, cli.md, README grid,
+   CLAUDE.md include mirrors); `mdsmith check .`.
+   `cross-system.md` left as-is: the CLI-surface row
+   already covers subcommands generically, and "adding a
+   flag/command is minor" is stated there.
+9. [ ] Final gate + flip status to ✅; push. **Remaining
+   before ✅: tasks 4–6 (the `internal/rename` core, the
+   LSP delegation, and the `mdsmith rename` CLI).**
 
 ## Acceptance Criteria
 
-- [ ] `internal/index` exists; no production file imports
+- [x] `internal/index` exists; no production file imports
       `internal/lsp/index`; `grep -r internal/lsp/index`
       finds nothing (SRP / DIP — package answers one
       question, CLI no longer reaches the editor layer).
@@ -166,27 +172,30 @@ over discovered files and queries `OutgoingEdges` /
 - [ ] `internal/lsp/rename.go` contains no slug / edit
       computation; it delegates to `internal/rename` (no
       duplicated logic across surfaces — `cross-system.md`).
-- [ ] Plans 131/151 LSP test suites and
+- [x] Plans 131/151 LSP test suites and
       `cmd/mdsmith/lsp_rename_test.go` pass unchanged
-      (Liskov — the LSP wire surface still behaves identically
-      after delegation).
+      (Liskov — the relocation is behavior-preserving; the
+      delegation refactor in task 5 must keep them green).
 - [ ] `mdsmith rename f.md --heading "A" "B"` rewrites the
       heading and every workspace anchor link; `--link-ref`
       rewrites def + uses; collisions exit 2 naming the
       conflict.
-- [ ] `mdsmith deps f.md` and `--incoming` emit the
+- [x] `mdsmith deps f.md` and `--incoming` emit the
       dependency edges in text and json.
 - [ ] CLI rename + deps contracts locked by e2e tests in
-      `cmd/mdsmith/` (cross-system contract test).
-- [ ] Every new production function has a dedicated unit
-      test (`TestFoo` / `TestReceiver_Foo`).
-- [ ] `docs/features/` documents rename, the dependency
+      `cmd/mdsmith/` (cross-system contract test). deps
+      done (`e2e_deps_test.go`); rename pending task 6.
+- [x] Every new production function has a dedicated unit
+      test (`TestFoo` / `TestReceiver_Foo`). Holds for the
+      shipped `deps` code; re-verify when the rename core
+      lands.
+- [x] `docs/features/` documents rename, the dependency
       graph, and the full navigation suite;
       `docs/features/index.md` and the CLI reference list the
       new commands.
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no issues.
-- [ ] `mdsmith check .` passes.
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no issues.
+- [x] `mdsmith check .` passes.
 
 ## Open Questions
 
