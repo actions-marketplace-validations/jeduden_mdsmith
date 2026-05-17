@@ -134,12 +134,19 @@ over discovered files and queries `OutgoingEdges` /
    supersession to the audit log. (`cross-system.md`
    boundaries/versioning deferred to task 8 with the CLI
    surface.)
-4. [ ] TDD `internal/rename` core: failing unit test per
-   behavior (single-file heading, same-file anchors,
-   cross-file anchors, disambiguator shift, link-ref def +
-   uses, each typed error), then lift computation from
-   `internal/lsp/rename.go`. Add a contract test pinning the
-   typed-error shape.
+4. [ ] TDD `internal/rename` core. **In progress —**
+   **done:** the
+   link-reference engine plus the shared body/offset
+   helpers are lifted out of `internal/lsp/rename.go` into
+   `internal/rename` (neutral `Edit`/`Position`/`Range`,
+   typed `ErrEmptyLabel` / `InvalidLabelRuneError` /
+   `LabelConflictError`), behavior-tested at **100%**
+   statement coverage, building and linting clean.
+   **Remaining:** the heading engine (`computeSlugRemap`,
+   `assignSlugs`, anchor/ref-def-dest edits) still lives in
+   `internal/lsp/rename.go` because the heading and
+   link-ref paths share helpers now in `internal/rename`;
+   moving it is the next slice of this task.
 5. [ ] Refactor `internal/lsp/rename.go` to delegate to
    `internal/rename`; delete duplicated computation. Plans
    151/131 + `cmd/mdsmith/lsp_rename_test.go` stay green.
