@@ -356,8 +356,8 @@ the broadest set. The full rule-by-rule mapping lives in the
 [markdownlint coverage matrix][mdcov]: every markdownlint
 `MDxxx`, the mdsmith rule that covers it or the plan that
 schedules it, and the mdsmith-only rules. As of 2026-05
-mdsmith implements 34 of 52 active markdownlint rules (1
-partial); the other 17 are scheduled in plans 172 and
+mdsmith implements 35 of 52 active markdownlint rules (1
+partial); the other 16 are scheduled in plans 172 and
 176-182.
 
 ### Rust Markdown linters (rumdl, mado, panache)
@@ -791,12 +791,13 @@ items most relevant to this comparison are:
   lifecycle hooks. This will close part of the gap
   with Hugo: deriving artifacts from Markdown sources
   without leaving the linter.
-- **Closing rule gaps with markdownlint** — plans 176-182
-  schedule the 17 still-unmapped rules (heading, blockquote
-  and list whitespace; reversed/empty links; descriptive
-  link text; table structure; code-block style), and
+- **Closing rule gaps with markdownlint** — plans 176-179
+  and 181-182 schedule the 16 still-unmapped rules (heading,
+  blockquote and list whitespace; reversed/empty links; table
+  structure; code-block style), and
   [plan 172](../../plan/172_link-style-rule-and-config.md)
-  covers MD054. The [coverage matrix][mdcov] tracks each.
+  covers MD054. MDS063 (`descriptive-link-text`) now covers
+  MD059. The [coverage matrix][mdcov] tracks each.
 - **User-defined Markdown conventions**
   ([plan 113][plan113]) — let teams package their own
   rule presets the way the built-in conventions
