@@ -20,8 +20,8 @@ Status legend:
 
 Deprecated markdownlint numbers (MD002, MD006, MD008,
 MD015-MD017) are omitted. As of 2026-05 mdsmith implements
-**35 of the 52** active markdownlint rules (1 partial); the
-remaining **16** are scheduled in plans 172, 176-179, and 181-182.
+**36 of the 52** active markdownlint rules (1 partial); the
+remaining **15** are scheduled in plans 172, 176-179, and 181-182.
 
 ## Headings
 
@@ -44,14 +44,14 @@ remaining **16** are scheduled in plans 172, 176-179, and 181-182.
 
 ## Lists
 
-| markdownlint              | Checks             | mdsmith | Status      |
-|---------------------------|--------------------|---------|-------------|
-| MD004 ul-style            | bullet char        | MDS045  | ✅          |
-| MD005 list-indent         | even indent        | MDS016  | partial     |
-| MD007 ul-indent           | nesting width      | MDS016  | ✅          |
-| MD029 ol-prefix           | ordered numbering  | MDS046  | ✅          |
-| MD030 list-marker-space   | space after marker | —       | 🔲 plan 178 |
-| MD032 blanks-around-lists | blank lines        | MDS014  | ✅          |
+| markdownlint              | Checks             | mdsmith | Status  |
+|---------------------------|--------------------|---------|---------|
+| MD004 ul-style            | bullet char        | MDS045  | ✅      |
+| MD005 list-indent         | even indent        | MDS016  | partial |
+| MD007 ul-indent           | nesting width      | MDS016  | ✅      |
+| MD029 ol-prefix           | ordered numbering  | MDS046  | ✅      |
+| MD030 list-marker-space   | space after marker | MDS061  | ✅      |
+| MD032 blanks-around-lists | blank lines        | MDS014  | ✅      |
 
 ## Whitespace, blank lines, tabs
 

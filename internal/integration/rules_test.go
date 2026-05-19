@@ -41,6 +41,7 @@ import (
 	_ "github.com/jeduden/mdsmith/internal/rules/include"
 	_ "github.com/jeduden/mdsmith/internal/rules/linelength"
 	_ "github.com/jeduden/mdsmith/internal/rules/listindent"
+	_ "github.com/jeduden/mdsmith/internal/rules/listmarkerspace"
 	_ "github.com/jeduden/mdsmith/internal/rules/listmarkerstyle"
 	_ "github.com/jeduden/mdsmith/internal/rules/markdownflavor"
 	_ "github.com/jeduden/mdsmith/internal/rules/maxfilelength"
