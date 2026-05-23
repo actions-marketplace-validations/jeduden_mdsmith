@@ -22,6 +22,12 @@ func TestNewParser(t *testing.T) {
 	assert.Len(t, findPINodes(root), 1)
 }
 
+func TestNewPooledParser_LocatesResetter(t *testing.T) {
+	p, lrp := newPooledParser()
+	require.NotNil(t, p)
+	require.NotNil(t, lrp, "newPooledParser must locate a linkRefResetter in DefaultParagraphTransformers")
+}
+
 // TestParseContext_ConcurrentRaceFree drives the pooled parser from
 // many goroutines at once. Parsing is multi-goroutine — the LSP serves
 // concurrent documents and the check walk fans out across workers — so
@@ -48,4 +54,31 @@ func TestParseContext_ConcurrentRaceFree(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestNewPooledParser_ResetsLinkRefTransformer(t *testing.T) {
+	// NewPooledParser returns a parser plus a Reset closure.  The
+	// closure clears the link-ref transformer's pinned document
+	// source bytes so a pool consumer that calls reset() before
+	// Put doesn't keep the last parsed []byte alive in the idle
+	// pool slot.
+	p, reset := NewPooledParser()
+	require.NotNil(t, p)
+	require.NotNil(t, reset)
+
+	// Parse one doc so the transformer holds source state.
+	src := []byte("[ref][a]\n\n[a]: /url\n")
+	ctx := parser.NewContext()
+	root := p.Parse(text.NewReader(src), parser.WithContext(ctx))
+	require.NotNil(t, root)
+
+	// Reset is safe to call repeatedly and is a no-op the second
+	// time.
+	reset()
+	reset()
+
+	// The same parser still parses correctly after Reset.
+	ctx2 := parser.NewContext()
+	root2 := p.Parse(text.NewReader([]byte("plain text\n")), parser.WithContext(ctx2))
+	require.NotNil(t, root2)
 }

@@ -415,3 +415,31 @@ func TestFile_MemoFile_PanicReleasesMutex(t *testing.T) {
 			"the per-entry mutex was not released")
 	}
 }
+
+func TestNewPooledParser_Forward(t *testing.T) {
+	// internal/lint.NewPooledParser is a thin wrapper around
+	// markdown.NewPooledParser; it exists so callers that already
+	// import the lint package can adopt the pooled API without an
+	// additional import.  Smoke-test that it returns a usable
+	// parser plus a non-nil reset closure.
+	p, reset := NewPooledParser()
+	if p == nil {
+		t.Fatal("NewPooledParser returned nil parser")
+	}
+	if reset == nil {
+		t.Fatal("NewPooledParser returned nil reset closure")
+	}
+	// reset is safe to call repeatedly.
+	reset()
+	reset()
+}
+
+func TestNewParser_Forward(t *testing.T) {
+	// internal/lint.NewParser is a thin wrapper around
+	// markdown.NewParser; the dispatcher uses it for rule
+	// re-parses that don't need pool semantics.
+	p := NewParser()
+	if p == nil {
+		t.Fatal("NewParser returned nil")
+	}
+}

@@ -277,3 +277,15 @@ require (
 	mvdan.cc/gofumpt v0.9.2 // indirect
 	mvdan.cc/unparam v0.0.0-20251027182757-5beb8c8f8f15 // indirect
 )
+
+// Vendor goldmark so we can pool/share the link-reference BlockReader
+// (plan 197) and thread a per-parse arena through the parser to
+// absorb the four structural allocators (NewTextSegment, NewParagraph,
+// Segments backing arrays, FindClosure's NewSegments — plan 198).
+// The fork lives under pkg/ rather than internal/ because the
+// upstream library is a public package; hiding the fork under
+// internal/ would semantically misrepresent the surface. The fork's
+// package layout is identical to upstream so consumer imports
+// (github.com/yuin/goldmark/...) stay unchanged; only the
+// implementation differs.
+replace github.com/yuin/goldmark => ./pkg/goldmark
