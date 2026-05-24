@@ -120,6 +120,21 @@ func composeFrontmatter(out *Schema, schemas []*Schema) {
 			}
 			out.Frontmatter[k] = "(" + existing + ") & (" + expr + ")"
 		}
+		for k, meta := range s.FrontmatterMeta {
+			if out.FrontmatterMeta == nil {
+				out.FrontmatterMeta = map[string]FieldMeta{}
+			}
+			// Later inputs win: a kind composed on top of another
+			// can re-deprecate a field with a fresher message.
+			// ExtractFieldMeta only classifies a mapping as
+			// metadata when `deprecated: true` is the
+			// discriminator, so `{deprecated: false}` never
+			// reaches FrontmatterMeta and cannot undo a parent's
+			// deprecation here. Remove the field from the schema
+			// entirely to complete the migration (plan 136
+			// acceptance criterion 6).
+			out.FrontmatterMeta[k] = meta
+		}
 	}
 }
 

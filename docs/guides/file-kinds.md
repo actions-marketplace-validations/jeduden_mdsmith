@@ -318,6 +318,57 @@ file-schema cycles surface when MDS020 first parses the schema
 during `check` or `fix`. Both forms name the full cycle path in
 the diagnostic.
 
+### Deprecating a frontmatter field
+
+A schema can mark a frontmatter field deprecated so
+tooling can route the warning separately from a hard
+schema violation. The diagnostic surfaces with Warning
+severity (LSP shows it as a warning squiggle, JSON
+output sets `"severity": "warning"`) while a project
+migrates away from the field. `mdsmith check` today
+exits non-zero on any diagnostic regardless of
+severity; a future `--error-on` flag would let CI
+distinguish warnings from errors.
+
+The field's value becomes a mapping carrying `type:`
+plus the metadata:
+
+```yaml
+kinds:
+  plan:
+    schema:
+      frontmatter:
+        legacy_owner:
+          type: string
+          deprecated: true
+          message: 'use "owner" instead'
+        owner:
+          type: string
+```
+
+A document that still carries `legacy_owner:` then
+reports a Warning-severity MDS020 diagnostic naming the
+field and the message. The CUE constraint (`type:`) still
+applies, so a value that violates the type also raises
+the usual Error — the deprecation never silences other
+checks. Use `replaced-by: <name>` in place of `message:`
+for the canonical "deprecated field; replaced by `name`"
+sentence; see the
+[MDS020 README](../../internal/rules/MDS020-required-structure/README.md)
+for the diagnostic shape and the precedence rules when
+both are set.
+
+**Reserved-key limitation.** A mapping with `type:` plus
+the literal `deprecated: true` is always parsed as
+metadata, not as a CUE struct constraint. To constrain
+a frontmatter field whose value is a struct that
+legitimately binds a `type` field, write the constraint
+as a string CUE expression instead — e.g.
+`config: '{type: "production" | "staging"}'`. The
+`message:` and `replaced-by:` keys are reserved the
+same way: setting either without `deprecated: true` is
+treated as a typo and rejected at config load.
+
 ### Auditing the chain
 
 `mdsmith kinds show <name>` prints the parent line and the

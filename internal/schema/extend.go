@@ -352,6 +352,8 @@ func extendFrontmatter(out, parent, child *Schema) error {
 	out.Frontmatter = map[string]string{}
 	out.FrontmatterLines = mergeFrontmatterLines(
 		parent.FrontmatterLines, child.FrontmatterLines)
+	out.FrontmatterMeta = mergeFrontmatterMeta(
+		parent.FrontmatterMeta, child.FrontmatterMeta)
 
 	for k, expr := range parent.Frontmatter {
 		out.Frontmatter[k] = expr
@@ -379,6 +381,32 @@ func extendFrontmatter(out, parent, child *Schema) error {
 		out.Frontmatter[k] = unified
 	}
 	return nil
+}
+
+// mergeFrontmatterMeta merges parent and child deprecation metadata
+// for plan 136. Child-declared metadata wins on key collisions so a
+// kind extending its parent can re-deprecate a field with a fresher
+// message. Undoing a parent's deprecation by setting
+// `deprecated: false` on the child is not supported in this plan:
+// ExtractFieldMeta only classifies a mapping as metadata when the
+// literal `deprecated: true` discriminator is present, so a child
+// meta block with `deprecated: false` flows through to the CUE
+// struct path and never produces a FrontmatterMeta entry the
+// merger could see. Removing the field from the schema entirely
+// (plan 136 acceptance criterion 6) is the supported migration
+// end-state.
+func mergeFrontmatterMeta(parent, child map[string]FieldMeta) map[string]FieldMeta {
+	if len(parent) == 0 && len(child) == 0 {
+		return nil
+	}
+	out := map[string]FieldMeta{}
+	for k, v := range parent {
+		out[k] = v
+	}
+	for k, v := range child {
+		out[k] = v
+	}
+	return out
 }
 
 // mergeFrontmatterLines builds a per-key source-line map giving

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -164,7 +165,14 @@ func validateFrontmatterDiags(
 	merged := schemaVal.Unify(dataVal)
 	verr := merged.Validate(cue.Concrete(true))
 	if verr == nil {
-		return nil
+		// Skip the docFrontmatterKeyLines YAML re-parse when there
+		// is nothing for the deprecation walker to do — the common
+		// success path then pays no per-file overhead.
+		if len(sch.FrontmatterMeta) == 0 || len(docFM) == 0 {
+			return nil
+		}
+		return validateDeprecatedFieldsWithLines(
+			f, sch, docFM, docFrontmatterKeyLines(f), mkDiag)
 	}
 	cueErrs := errors.Errors(verr)
 	if len(cueErrs) == 0 {
@@ -177,14 +185,22 @@ func validateFrontmatterDiags(
 			}.Format())}
 	}
 	keyLines := docFrontmatterKeyLines(f)
-	out := make([]lint.Diagnostic, 0, len(cueErrs))
-	// A struct dedup key avoids accidental collisions when one of
-	// the components (notably the raw-CUE-expression Expected
-	// fallback and a placeholder-bearing Field) legitimately
-	// contains the same delimiter we would have used in a flat
-	// string key.
+	out := dedupedCUEErrorDiags(f, sch, docFM, cueErrs, keyLines, mkDiag)
+	return append(out, validateDeprecatedFieldsWithLines(f, sch, docFM, keyLines, mkDiag)...)
+}
+
+// dedupedCUEErrorDiags maps each unique CUE error to a
+// SchemaDiagnostic. A struct dedup key avoids accidental collisions
+// when one of the components (notably the raw-CUE-expression
+// Expected fallback and a placeholder-bearing Field) legitimately
+// contains the same delimiter a flat string key would have used.
+func dedupedCUEErrorDiags(
+	f *lint.File, sch *Schema, docFM map[string]any,
+	cueErrs []errors.Error, keyLines map[string]int, mkDiag MakeDiag,
+) []lint.Diagnostic {
 	type dedupKey struct{ field, actual, expected string }
 	seen := make(map[dedupKey]bool, len(cueErrs))
+	out := make([]lint.Diagnostic, 0, len(cueErrs))
 	for _, ce := range cueErrs {
 		d := schemaDiagFromCUEError(sch, docFM, ce)
 		key := dedupKey{field: d.Field, actual: d.Actual, expected: d.Expected}
@@ -193,6 +209,57 @@ func validateFrontmatterDiags(
 		}
 		seen[key] = true
 		out = append(out, mkDiag(f.Path, fmDiagLine(f, ce.Path(), keyLines), d.Format()))
+	}
+	return out
+}
+
+// validateDeprecatedFieldsWithLines walks sch.FrontmatterMeta and
+// emits one Warning-severity diagnostic per deprecated field that
+// still appears in docFM. The keyLines argument is reused from the
+// CUE error loop so the deprecation diagnostic anchors at the same
+// source line as a co-occurring type-mismatch error.
+//
+// `replaced-by:` rides on the lint.Diagnostic so LSP clients and CI
+// scripts can route the warning without scanning the message body;
+// the human-facing text honours `message:` first per plan 136. The
+// parser guarantees every FrontmatterMeta entry has Deprecated=true
+// (ExtractFieldMeta accepts the metadata form only when the
+// `deprecated: true` discriminator is present), so the walker does
+// not re-check the flag.
+func validateDeprecatedFieldsWithLines(
+	f *lint.File, sch *Schema, docFM map[string]any,
+	keyLines map[string]int, mkDiag MakeDiag,
+) []lint.Diagnostic {
+	if len(sch.FrontmatterMeta) == 0 || len(docFM) == 0 {
+		return nil
+	}
+	// Walk in sorted key order so a schema with two deprecated
+	// fields and both present in the document emits diagnostics in
+	// a stable order on every run.
+	keys := make([]string, 0, len(sch.FrontmatterMeta))
+	for k := range sch.FrontmatterMeta {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out []lint.Diagnostic
+	for _, k := range keys {
+		meta := sch.FrontmatterMeta[k]
+		bare := strings.TrimSuffix(k, "?")
+		if _, present := docFM[bare]; !present {
+			continue
+		}
+		d := SchemaDiagnostic{
+			Field:              bare,
+			Deprecated:         true,
+			ReplacedBy:         meta.ReplacedBy,
+			DeprecationMessage: meta.Message,
+			SchemaRef:          schemaRef(sch, k),
+		}
+		warn := mkDiag(f.Path, fmDiagLine(f, []string{bare}, keyLines), d.Format())
+		warn.Severity = lint.Warning
+		warn.Deprecated = true
+		warn.ReplacedBy = meta.ReplacedBy
+		out = append(out, warn)
 	}
 	return out
 }

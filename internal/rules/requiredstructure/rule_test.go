@@ -1260,9 +1260,44 @@ func TestCheck_FrontMatterAnchorRejected(t *testing.T) {
 
 func TestDeriveFrontMatterCUE_AnchorRejected(t *testing.T) {
 	yml := []byte("base: &base\n  id: 1\n")
-	_, _, err := deriveFrontMatterCUE(yml)
+	_, _, _, err := deriveFrontMatterCUE(yml)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "anchors/aliases are not permitted")
+}
+
+// TestDeriveFrontMatterCUE_FieldMetaError covers the error path
+// when ExtractFieldMeta rejects a malformed metadata mapping in
+// the proto.md frontmatter (plan 136). Without this test the
+// `if err != nil` branch after the ExtractFieldMeta call stays
+// uncovered in the legacy path.
+func TestDeriveFrontMatterCUE_FieldMetaError(t *testing.T) {
+	yml := []byte("legacy_owner:\n" +
+		"  type: string\n" +
+		"  deprecated: true\n" +
+		"  tipo: owner\n")
+	_, _, _, err := deriveFrontMatterCUE(yml)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "legacy_owner")
+	assert.Contains(t, err.Error(), "tipo")
+}
+
+// TestDeriveFrontMatterCUE_FieldMetaCapturesMetadata regresses
+// the happy path through deriveFrontMatterCUE's new metadata
+// branch: a deprecated field returns the embedded `type:`
+// constraint and populates the meta map.
+func TestDeriveFrontMatterCUE_FieldMetaCapturesMetadata(t *testing.T) {
+	yml := []byte("legacy_owner:\n" +
+		"  type: string\n" +
+		"  deprecated: true\n" +
+		"  message: 'use owner'\n" +
+		"owner: string\n")
+	cueExpr, perKey, meta, err := deriveFrontMatterCUE(yml)
+	require.NoError(t, err)
+	assert.Contains(t, cueExpr, "legacy_owner: string")
+	assert.Equal(t, "string", perKey["legacy_owner"])
+	require.Contains(t, meta, "legacy_owner")
+	assert.True(t, meta["legacy_owner"].Deprecated)
+	assert.Equal(t, "use owner", meta["legacy_owner"].Message)
 }
 
 func TestExtractRequireDirective_AnchorRejected(t *testing.T) {
@@ -1653,7 +1688,7 @@ func TestCheck_OutOfOrderAlsoReportsLevelMismatch(t *testing.T) {
 // deriveFrontMatterCUE: empty map → return "", nil
 func TestDeriveFrontMatterCUE_EmptyMap(t *testing.T) {
 	// "{}" unmarshals to an empty map → len(raw)==0 branch.
-	result, _, err := deriveFrontMatterCUE([]byte("{}\n"))
+	result, _, _, err := deriveFrontMatterCUE([]byte("{}\n"))
 	require.NoError(t, err)
 	assert.Equal(t, "", result)
 }
@@ -1661,7 +1696,7 @@ func TestDeriveFrontMatterCUE_EmptyMap(t *testing.T) {
 // deriveFrontMatterCUE: cueExprForMap error via null YAML value
 func TestDeriveFrontMatterCUE_NullValueError(t *testing.T) {
 	// YAML null (represented as nil in Go) is not a supported schema type.
-	_, _, err := deriveFrontMatterCUE([]byte("key: ~\n"))
+	_, _, _, err := deriveFrontMatterCUE([]byte("key: ~\n"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing schema frontmatter constraints")
 }
