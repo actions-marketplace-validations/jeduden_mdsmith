@@ -19,11 +19,49 @@ type SectionHeading struct {
 }
 
 // SectionParagraph is a non-table paragraph discovered by
-// CollectSectionParagraphs, carrying its 1-based source line and the
-// plain text used for section-wide body matches.
+// CollectSectionParagraphs. Line is the 1-based source line; Node is
+// the goldmark paragraph node, used by [SectionParagraph.ExtractText]
+// to materialise the plain text lazily.
+//
+// Text is a documented cache: CollectSectionParagraphs no longer
+// fills it (plan 196 — most callers do not need the text on every
+// paragraph), but test literals can still set it directly without
+// building an AST node, and ExtractText prefers the cached value
+// when present. Production code reaches the text through
+// ExtractText, never the field; the field is kept exported to keep
+// existing literals compiling.
+//
+// HasText flags Text as an authoritative cache, including the
+// legitimately-empty case (an image-only paragraph extracts to
+// ""). [CollectSectionParagraphsWithText] sets it so per-heading
+// SectionBody sweeps hit the cache for every paragraph,
+// regardless of whether the extracted text is empty.
 type SectionParagraph struct {
-	Line int
-	Text string
+	Line    int
+	Node    ast.Node
+	Text    string
+	HasText bool
+}
+
+// ExtractText returns the paragraph's plain text. If HasText is
+// set the cached Text is returned verbatim (including the empty
+// string for image-only paragraphs). Otherwise, a non-empty Text
+// short-circuit handles test literals built without an AST node,
+// and the final fallback extracts from Node against source.
+//
+// Precondition: at least one of Text/HasText or Node must be set.
+// Calling on a zero-value SectionParagraph (no Text, no Node)
+// panics inside [mdtext.ExtractPlainText]'s nil-node dereference.
+// Production paragraphs from [CollectSectionParagraphs] always
+// have Node set; test literals set Text and hit the shortcut.
+func (p SectionParagraph) ExtractText(source []byte) string {
+	if p.HasText {
+		return p.Text
+	}
+	if p.Text != "" {
+		return p.Text
+	}
+	return mdtext.ExtractPlainText(p.Node, source)
 }
 
 // CollectSectionHeadings returns every heading in the document
@@ -52,20 +90,26 @@ func CollectSectionHeadings(f *lint.File) []SectionHeading {
 }
 
 // CollectSectionParagraphs returns every non-table paragraph with its
-// 1-based source line and plain text. Goldmark parses pipe-delimited
-// tables as paragraphs when the table extension is absent; those are
-// filtered so cell text does not pollute section bodies.
+// 1-based source line and a reference to its AST node. Goldmark
+// parses pipe-delimited tables as paragraphs when the table
+// extension is absent; those are filtered so cell text does not
+// pollute section bodies.
 //
 // Memoized per File via lint.File.MemoFile (the *File-passing
-// variant of Memo): this walks the whole AST and runs
-// ExtractPlainText on every paragraph. On prose-heavy input the two
-// hot default rules (MDS024 paragraph-structure and
-// paragraph-readability) plus the required-* rules each called it,
-// so the walk and per-paragraph extraction ran several times per
-// file. The result is a pure function of the immutable AST and
-// Source; the memo lives on the per-Check File, so nothing is
-// cached across files or runs. Callers treat the slice as
-// read-only.
+// variant of Memo): the AST walk is shared across the prose rules
+// (MDS023 paragraph-readability, MDS024 paragraph-structure, MDS057
+// required-text-patterns, MDS058 required-mentions). The result is
+// a pure function of the immutable AST and Source; the memo lives
+// on the per-Check File, so nothing is cached across files or runs.
+// Callers treat the slice as read-only.
+//
+// Plan 196 made the extracted text lazy: the per-paragraph
+// [mdtext.ExtractPlainText] call no longer runs in the walk. Rules
+// that need the text reach it via
+// [SectionParagraph.ExtractText]; paragraph-readability, the
+// default-on prose rule, gates on word count alone via
+// [mdtext.CountWordsInNode] and only materialises text for
+// paragraphs that pass minWords.
 //
 // The MemoFile variant lets buildSectionParagraphs be a package-
 // level function instead of a closure, so the build itself adds no
@@ -94,10 +138,48 @@ func buildSectionParagraphs(f *lint.File) any {
 		}
 		out = append(out, SectionParagraph{
 			Line: ParagraphLine(p, f),
-			Text: mdtext.ExtractPlainText(p, f.Source),
+			Node: p,
 		})
 		return ast.WalkContinue, nil
 	})
+	return out
+}
+
+// CollectSectionParagraphsWithText returns the same SectionParagraphs
+// as [CollectSectionParagraphs] but with Text populated for every
+// entry. Memoized per File so MDS057 and MDS058 (and any future rule
+// that builds section bodies from paragraph text) share a single
+// materialisation even when both rules are enabled — without this,
+// each paragraph nested inside multiple overlapping section ranges
+// (h1 > h2 > h3) would re-run [mdtext.ExtractPlainText] once per
+// containing heading.
+//
+// Use this when a rule needs paragraph text for every paragraph in
+// the file. Do NOT use it from the default-on MDS023
+// paragraph-readability rule — that one filters most paragraphs out
+// before any text is needed, which is the point of plan 196's lazy
+// design. The returned slice is a copy of the
+// [CollectSectionParagraphs] memo's slice (with Text filled in);
+// callers treat it as read-only.
+func CollectSectionParagraphsWithText(f *lint.File) []SectionParagraph {
+	return f.MemoFile("astutil.sectionParagraphsWithText", buildSectionParagraphsWithText).([]SectionParagraph)
+}
+
+// buildSectionParagraphsWithText materialises Text on every paragraph
+// returned by [CollectSectionParagraphs]. Built on top of the
+// table-filtered memo so the AST walk runs once even when both memos
+// are accessed. The upstream collector guarantees Text is empty on
+// every entry, so this builder unconditionally fills it and sets
+// HasText so subsequent ExtractText calls hit the cache even when
+// the extracted text is legitimately empty.
+func buildSectionParagraphsWithText(f *lint.File) any {
+	src := CollectSectionParagraphs(f)
+	out := make([]SectionParagraph, len(src))
+	for i, p := range src {
+		out[i] = p
+		out[i].Text = mdtext.ExtractPlainText(p.Node, f.Source)
+		out[i].HasText = true
+	}
 	return out
 }
 
@@ -117,14 +199,16 @@ func SectionEnd(headings []SectionHeading, i, totalLines int) int {
 // SectionBody concatenates paragraph plain text for paragraphs whose
 // start line falls in [start, end). Joins with a space so adjacent
 // paragraphs do not appear glued together to a substring/regex
-// matcher.
-func SectionBody(paragraphs []SectionParagraph, start, end int) string {
+// matcher. The source byte slice is required because
+// SectionParagraph's text is materialised lazily through
+// [SectionParagraph.ExtractText] (plan 196); callers pass f.Source.
+func SectionBody(paragraphs []SectionParagraph, source []byte, start, end int) string {
 	var parts []string
 	for _, p := range paragraphs {
 		if p.Line < start || p.Line >= end {
 			continue
 		}
-		parts = append(parts, p.Text)
+		parts = append(parts, p.ExtractText(source))
 	}
 	return strings.Join(parts, " ")
 }

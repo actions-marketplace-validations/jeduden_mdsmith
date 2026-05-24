@@ -228,7 +228,18 @@ func isUsageError(err error) bool {
 }
 
 func defaultCacheDir() string {
-	userCacheDir, err := os.UserCacheDir()
+	return resolveCacheDir(os.UserCacheDir)
+}
+
+// resolveCacheDir is the testable core of defaultCacheDir: given a
+// function that returns the user's cache directory (os.UserCacheDir
+// in production), it returns the corpusctl-scoped subdirectory or
+// falls back to a TempDir-scoped one when the lookup fails or
+// returns an empty string. Taking the lookup as a parameter (rather
+// than via a mutable package-level seam) keeps tests parallel-safe:
+// no test ever races to swap a global stub.
+func resolveCacheDir(getUserCacheDir func() (string, error)) string {
+	userCacheDir, err := getUserCacheDir()
 	if err != nil || userCacheDir == "" {
 		return filepath.Join(os.TempDir(), "corpusctl")
 	}

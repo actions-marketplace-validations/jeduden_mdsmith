@@ -73,11 +73,26 @@ func (r *Rule) EnabledByDefault() bool { return false }
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	var diags []lint.Diagnostic
 	// Iterate the per-File memoized non-table paragraph collection so
-	// the AST walk and per-paragraph ExtractPlainText are shared with
-	// the other prose rules instead of re-run here (the two hot
-	// default rules on prose-heavy input).
+	// the AST walk is shared with the other paragraph-walking rules
+	// (MDS023 paragraph-readability, MDS057 required-text-patterns,
+	// MDS058 required-mentions) instead of being re-run here. Plan 196
+	// made the per-paragraph text lazy, so the walk no longer carries
+	// the ExtractPlainText cost; MDS024 still materialises the text
+	// per paragraph via ExtractText because every paragraph reaches
+	// the segmenter.
+	//
+	// Note: MDS024 stays on the bare collector even though it
+	// ALWAYS materialises text. The
+	// [astutil.CollectSectionParagraphsWithText] variant would
+	// share the materialisation with MDS057/MDS058 when those
+	// opt-in rules run, but it also adds a per-Check slice copy
+	// + interface boxing for the memo store — enough to put this
+	// rule over its 9-alloc/op budget (plan 193). The bare
+	// collector keeps MDS024 inside the budget; the extra
+	// extraction cost when MDS057/MDS058 are co-enabled is paid
+	// per-paragraph in the bare ExtractText calls.
 	for _, p := range astutil.CollectSectionParagraphs(f) {
-		diags = append(diags, r.checkParagraph(p.Text, p.Line, f.Path)...)
+		diags = append(diags, r.checkParagraph(p.ExtractText(f.Source), p.Line, f.Path)...)
 	}
 	return diags
 }

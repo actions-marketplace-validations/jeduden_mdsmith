@@ -206,3 +206,65 @@ func TestCollect_ErrorPath(t *testing.T) {
 		t.Fatal("expected resolve error")
 	}
 }
+
+// --- reportProgress ---
+
+// TestReportProgress pins all three branches: nil cfg is a no-op,
+// non-nil cfg with nil Progress is a no-op, and non-nil cfg with
+// a Progress callback receives the message verbatim.
+func TestReportProgress(t *testing.T) {
+	t.Parallel()
+	t.Run("nil cfg is no-op", func(t *testing.T) {
+		reportProgress(nil, "ignored")
+	})
+	t.Run("nil Progress is no-op", func(t *testing.T) {
+		reportProgress(&Config{}, "ignored")
+	})
+	t.Run("Progress callback receives message", func(t *testing.T) {
+		var got string
+		cfg := &Config{Progress: func(s string) { got = s }}
+		reportProgress(cfg, "collecting alpha")
+		if got != "collecting alpha" {
+			t.Errorf("got %q, want %q", got, "collecting alpha")
+		}
+	})
+}
+
+// --- sourceRelativePath ---
+
+// TestSourceRelativePath pins every reachable branch: empty and
+// absolute configured roots pass through, relative roots prepend
+// with slash-style joining, and the "./" / leading "/" trims fire
+// on the recognised shapes. The unreachable `joined == ""`
+// fallback is defensive — filepath.Join always cleans to "." or
+// a non-empty path given non-empty inputs — and is not driven.
+func TestSourceRelativePath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		root    string
+		rel     string
+		resRoot string
+		want    string
+	}{
+		{name: "empty configured root passes through",
+			root: "", rel: "docs/file.md", want: "docs/file.md"},
+		{name: "whitespace-only root passes through",
+			root: "   ", rel: "file.md", want: "file.md"},
+		{name: "absolute configured root passes through",
+			root: "/abs/docs", rel: "file.md", want: "file.md"},
+		{name: "relative root joins and slash-cleans",
+			root: "docs", rel: "guide.md", want: "docs/guide.md"},
+		{name: "dot-relative root trims ./",
+			root: "./docs", rel: "guide.md", want: "docs/guide.md"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := sourceRelativePath(c.root, c.rel, c.resRoot)
+			if got != c.want {
+				t.Errorf("sourceRelativePath(%q,%q,%q) = %q, want %q",
+					c.root, c.rel, c.resRoot, got, c.want)
+			}
+		})
+	}
+}

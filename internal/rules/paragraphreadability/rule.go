@@ -50,17 +50,44 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	}
 
 	// Iterate the per-File memoized non-table paragraph collection so
-	// the AST walk and per-paragraph ExtractPlainText are shared with
-	// MDS024 instead of re-run here — the two are the hot default
-	// rules on prose-heavy input.
+	// the AST walk is shared with other paragraph-walking rules
+	// (MDS024 paragraph-structure, MDS057 required-text-patterns,
+	// MDS058 required-mentions) when they are enabled. MDS023 is the
+	// only default-on rule in this set; the rest are opt-in.
+	//
+	// minWords is gated on [mdtext.CountWordsInNode], an AST-walking
+	// counter that does NOT materialise the paragraph text. On
+	// prose-heavy synthetic corpora most paragraphs fall below the
+	// floor (the engine bench's "synthetic sentence …" body is
+	// 13 words, default minWords is 20); skipping the text alloc on
+	// those paragraphs is the bulk of plan 196's win. When
+	// placeholders are configured the count goes through CountWords
+	// on the masked text, because masking is a string transform and
+	// has no AST equivalent.
 	for _, p := range astutil.CollectSectionParagraphs(f) {
-		text := p.Text
-		if len(r.Placeholders) > 0 {
-			text = placeholders.MaskBodyTokens(text, r.Placeholders)
+		var text string
+		var words int
+		usingPlaceholders := len(r.Placeholders) > 0
+		if usingPlaceholders {
+			// Masking is a string transform with no AST equivalent;
+			// materialise the text, mask, and count on the result.
+			// The masked string feeds the index below — even if it
+			// happens to be empty, we MUST NOT fall back to
+			// unmasked text or the index would see content the
+			// caller asked to opaque-out.
+			text = placeholders.MaskBodyTokens(p.ExtractText(f.Source), r.Placeholders)
+			words = mdtext.CountWords(text)
+		} else {
+			words = mdtext.CountWordsInNode(p.Node, f.Source)
 		}
-		words := mdtext.CountWords(text)
 		if words < minWords {
 			continue
+		}
+		if !usingPlaceholders {
+			// Non-placeholder path gated on word count above; only
+			// now do we pay for the text. (Placeholders path
+			// already has the masked text in `text`.)
+			text = p.ExtractText(f.Source)
 		}
 
 		score := index(text)

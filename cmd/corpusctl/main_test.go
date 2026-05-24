@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -206,5 +207,96 @@ func assertExists(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected file %s: %v", path, err)
+	}
+}
+
+// --- usageErr / isUsageError ---
+
+// TestUsageErr_ErrorReturnsMsg pins that the Error() method
+// forwards the wrapped string verbatim. The Run* tests
+// exercise usageError indirectly, but never assert on the
+// Error() output, so the method body was uncovered.
+func TestUsageErr_ErrorReturnsMsg(t *testing.T) {
+	t.Parallel()
+	err := usageError("missing --foo flag")
+	if got := err.Error(); got != "missing --foo flag" {
+		t.Errorf("Error() = %q, want %q", got, "missing --foo flag")
+	}
+	if !isUsageError(err) {
+		t.Errorf("isUsageError must return true for a usageErr")
+	}
+}
+
+// TestIsUsageError_NonUsage pins the negative path: a plain
+// fmt.Errorf is not a usageErr and must not be treated as one.
+func TestIsUsageError_NonUsage(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("plain error")
+	if isUsageError(err) {
+		t.Errorf("isUsageError must return false for a non-usageErr")
+	}
+}
+
+// --- defaultCacheDir ---
+
+// TestDefaultCacheDir_AppendsCorpusctlSegment pins the happy
+// path: whatever UserCacheDir returns, the helper appends a
+// "corpusctl" segment. On Linux this is HOME/.cache; on macOS
+// it is HOME/Library/Caches. We don't assert the prefix, only
+// the suffix, so the test is portable.
+func TestDefaultCacheDir_AppendsCorpusctlSegment(t *testing.T) {
+	got := defaultCacheDir()
+	if !strings.HasSuffix(got, "corpusctl") {
+		t.Errorf("defaultCacheDir() = %q, must end in 'corpusctl'", got)
+	}
+	if got == "" {
+		t.Errorf("defaultCacheDir() returned empty")
+	}
+}
+
+// TestResolveCacheDir_TmpFallbackWhenUserCacheDirFails covers
+// the os.UserCacheDir-failure branch via the parameter-injection
+// shape of resolveCacheDir, so the test is portable
+// (UserCacheDir's env-var contract differs on Windows) and
+// parallel-safe — no global stub to mutate, so this test cannot
+// race with sibling t.Parallel tests calling defaultCacheDir().
+func TestResolveCacheDir_TmpFallbackWhenUserCacheDirFails(t *testing.T) {
+	t.Parallel()
+	got := resolveCacheDir(func() (string, error) {
+		return "", errors.New("forced failure")
+	})
+	if !strings.Contains(got, os.TempDir()) {
+		t.Errorf("resolveCacheDir(...) = %q, must fall back to TempDir %q",
+			got, os.TempDir())
+	}
+	if !strings.HasSuffix(got, "corpusctl") {
+		t.Errorf("resolveCacheDir(...) = %q, must end in 'corpusctl'", got)
+	}
+}
+
+// TestResolveCacheDir_EmptyUserCacheDirAlsoFallsBack covers the
+// secondary `userCacheDir == ""` guard. UserCacheDir can return
+// "" + nil on platforms where the env is set to "", and the
+// helper must treat that the same as an error.
+func TestResolveCacheDir_EmptyUserCacheDirAlsoFallsBack(t *testing.T) {
+	t.Parallel()
+	got := resolveCacheDir(func() (string, error) { return "", nil })
+	if !strings.Contains(got, os.TempDir()) {
+		t.Errorf("resolveCacheDir(...) = %q, must fall back to TempDir %q",
+			got, os.TempDir())
+	}
+}
+
+// TestResolveCacheDir_HappyPath pins the success path: when the
+// lookup returns a directory, the corpusctl-scoped subdirectory
+// is appended.
+func TestResolveCacheDir_HappyPath(t *testing.T) {
+	t.Parallel()
+	got := resolveCacheDir(func() (string, error) {
+		return "/home/user/.cache", nil
+	})
+	if got != "/home/user/.cache/corpusctl" {
+		t.Errorf("resolveCacheDir(...) = %q, want %q",
+			got, "/home/user/.cache/corpusctl")
 	}
 }
