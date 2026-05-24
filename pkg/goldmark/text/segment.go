@@ -162,9 +162,32 @@ func (t *Segment) ConcatPadding(v []byte) []byte {
 	return v
 }
 
+// SegmentsGrower lets an outside allocator redirect Segments
+// backing-array growth. *Segments.Append calls Grow when its values
+// slice has zero spare capacity; Grow returns a longer slice with
+// the existing entries copied in and the new segment already
+// appended. The arena package implements this so paragraph-line
+// growth stays in arena memory instead of the runtime allocator —
+// the fourth target in plan 197's allocator matrix. A nil grower
+// keeps the upstream behaviour (plain `append`).
+type SegmentsGrower interface {
+	Grow(old []Segment, next Segment) []Segment
+}
+
 // Segments is a collection of the Segment.
+//
+// Fork divergence (plan 198): the embedded unexported `grow` field
+// is fork-specific; it lets the arena redirect backing-array
+// growth without changing the Append / AppendAll / Unshift call
+// sites. Because the field is unexported, downstream code cannot
+// reach it through composite literals — Go disallows unkeyed
+// cross-package literals when any field is unexported, and there
+// is no keyed access. Reflection or unsafe by struct-offset would
+// see a different layout than upstream goldmark; mdsmith owns the
+// only consumer in tree and does not need that.
 type Segments struct {
 	values []Segment
+	grow   SegmentsGrower
 }
 
 // NewSegments return a new Segments.
@@ -174,13 +197,49 @@ func NewSegments() *Segments {
 	}
 }
 
+// newSegments returns a Segments allocated through the given
+// SegmentsCreator (typically an arena), falling back to NewSegments
+// when the creator is nil. Internal helper used by FindClosure so
+// the choice lives in one spot.
+func newSegments(c SegmentsCreator) *Segments {
+	if c == nil {
+		return NewSegments()
+	}
+	return c.Segments()
+}
+
+// SetBacking installs an arena-owned backing slice and grower on
+// the receiver. After SetBacking, Append writes into `values` until
+// its capacity is exhausted, then asks the grower for a longer
+// slice. Used by `arena.Arena` when it constructs a Segments or
+// when it equips a block node's embedded Lines() with arena-backed
+// growth.
+//
+// SetBacking is safe to call on a fresh Segments only — calling it
+// after Append would discard the existing entries. The arena calls
+// SetBacking before handing the Segments back to the parser.
+func (s *Segments) SetBacking(values []Segment, grow SegmentsGrower) {
+	s.values = values
+	s.grow = grow
+}
+
 // Append appends the given segment after the tail of the collection.
 func (s *Segments) Append(t Segment) {
+	if s.grow != nil && len(s.values) == cap(s.values) {
+		s.values = s.grow.Grow(s.values, t)
+		return
+	}
 	s.values = append(s.values, t)
 }
 
 // AppendAll appends all elements of given segments after the tail of the collection.
 func (s *Segments) AppendAll(t []Segment) {
+	if s.grow != nil {
+		for _, seg := range t {
+			s.Append(seg)
+		}
+		return
+	}
 	s.values = append(s.values, t...)
 }
 
@@ -225,7 +284,11 @@ func (s *Segments) Clear() {
 // shift the existing values right. copy() handles the alias case
 // because Go's runtime uses memmove for overlapping ranges.
 func (s *Segments) Unshift(v Segment) {
-	s.values = append(s.values, Segment{})
+	if s.grow != nil && len(s.values) == cap(s.values) {
+		s.values = s.grow.Grow(s.values, Segment{})
+	} else {
+		s.values = append(s.values, Segment{})
+	}
 	if len(s.values) > 1 {
 		copy(s.values[1:], s.values[:len(s.values)-1])
 	}
