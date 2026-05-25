@@ -31,9 +31,16 @@ type RuleInfo struct {
 
 // RuleMapping names a rule in a peer Markdown linter that the mdsmith rule
 // covers, plus that linter's default-on/off state for the rule. Partial is
-// true when the mdsmith rule implements only part of the peer check. The
-// coverage matrix at docs/research/markdownlint-coverage/README.md is the
-// source of truth.
+// true when the mdsmith rule implements only part of the peer check.
+//
+// `default:` is required by the proto schema, so every entry on disk
+// states the peer's default-enabled state explicitly. A `false` value
+// in the Go struct after unmarshal always reflects an explicit
+// `default: false` in front matter rather than a missing field.
+//
+// The per-rule front-matter blocks are the source of truth;
+// docs/research/markdownlint-coverage/README.md is regenerated from
+// them by `mdsmith-release sync-coverage-matrix`.
 type RuleMapping struct {
 	ID      string `yaml:"id"`
 	Name    string `yaml:"name"`

@@ -3,10 +3,12 @@
 // canonical page at docs/research/markdownlint-coverage/README.md.
 //
 // Source of truth: the `markdownlint:`, `rumdl:`, `mado:`, and
-// `panache:` blocks in each internal/rules/MDS###/README.md. The
-// generator never reads upstream tool repositories — defaults
-// and rule IDs live in the rule READMEs and are updated by hand
-// when peers ship a new release.
+// `panache:` blocks in each
+// internal/rules/MDS###-<rule-name>/README.md (matched by the
+// embed glob `MDS*/README.md`). The generator never reads
+// upstream tool repositories — defaults and rule IDs live in
+// the rule READMEs and are updated by hand when peers ship a
+// new release.
 package release
 
 import (
@@ -92,7 +94,7 @@ func RenderCoverageMatrix(rs []rules.RuleInfo) string {
 		mdsmithOnly := categoryIsMdsmithOnly(rsInCat)
 		title := categoryTitle[cat]
 		if title == "" {
-			title = strings.Title(cat) //nolint:staticcheck // category is ASCII
+			title = unknownCategoryTitle(cat)
 		}
 		if mdsmithOnly {
 			title += " (mdsmith-only)"
@@ -272,6 +274,18 @@ func orderedCategories(grouped map[string][]rules.RuleInfo) []string {
 	return result
 }
 
+// unknownCategoryTitle renders a section heading for a
+// category value that isn't in categoryTitle. An empty string
+// is rendered as a loud "Uncategorized" label that points
+// contributors at the missing front matter; any other unknown
+// value is rendered with its first ASCII letter upper-cased.
+func unknownCategoryTitle(cat string) string {
+	if cat == "" {
+		return "Uncategorized (category missing from rule README front matter)"
+	}
+	return strings.ToUpper(cat[:1]) + cat[1:]
+}
+
 // categoryIsMdsmithOnly reports whether every rule in the slice
 // has zero peer-linter mappings — i.e. the section is entirely
 // mdsmith-original and should render with the simpler
@@ -319,8 +333,10 @@ func ApplyCoverageMatrix(root string) (bool, error) {
 
 // CheckCoverageMatrix renders the expected page content from
 // the rule READMEs and compares to the file on disk under root.
-// Returns the on-disk byte count and a non-nil diff message
-// when the file has drifted.
+// Returns ("", nil) when the file is in sync, a non-empty drift
+// message and nil error when the file content differs from the
+// generator's output, and an empty string with a non-nil error
+// when the loader or the file read fails.
 func CheckCoverageMatrix(root string) (string, error) {
 	rs, err := listRules()
 	if err != nil {
