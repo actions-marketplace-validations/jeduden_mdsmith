@@ -286,11 +286,16 @@ func categoryIsMdsmithOnly(rs []rules.RuleInfo) bool {
 	return true
 }
 
+// listRules is a package-level seam so tests stub the rule
+// loader without driving the real embed.FS. Production uses
+// the real loader.
+var listRules = rules.ListRules
+
 // ApplyCoverageMatrix re-renders the coverage page from each
 // rule README's front matter and writes it to disk under root.
 // Returns (true, nil) when the on-disk file actually changed.
 func ApplyCoverageMatrix(root string) (bool, error) {
-	rs, err := rules.ListRules()
+	rs, err := listRules()
 	if err != nil {
 		return false, fmt.Errorf("loading rule metadata: %w", err)
 	}
@@ -317,7 +322,7 @@ func ApplyCoverageMatrix(root string) (bool, error) {
 // Returns the on-disk byte count and a non-nil diff message
 // when the file has drifted.
 func CheckCoverageMatrix(root string) (string, error) {
-	rs, err := rules.ListRules()
+	rs, err := listRules()
 	if err != nil {
 		return "", fmt.Errorf("loading rule metadata: %w", err)
 	}

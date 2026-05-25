@@ -1,6 +1,7 @@
 package release
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,6 +90,97 @@ func TestRenderCoverageMatrix_DeterministicAcrossRuns(t *testing.T) {
 	b := RenderCoverageMatrix(rs)
 	assert.Equal(t, a, b)
 }
+
+// TestApplyCoverageMatrix_PropagatesListRulesError verifies the
+// stub-listRules-fails branch in ApplyCoverageMatrix. The
+// real embed.FS-backed listRules cannot fail in practice, so
+// this is the only way to exercise the error-propagation path.
+func TestApplyCoverageMatrix_PropagatesListRulesError(t *testing.T) {
+	prev := listRules
+	t.Cleanup(func() { listRules = prev })
+	listRules = func() ([]rules.RuleInfo, error) {
+		return nil, errStubListRules
+	}
+	_, err := ApplyCoverageMatrix(t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading rule metadata")
+}
+
+// TestCheckCoverageMatrix_PropagatesListRulesError verifies
+// the same listRules-fails branch in CheckCoverageMatrix.
+func TestCheckCoverageMatrix_PropagatesListRulesError(t *testing.T) {
+	prev := listRules
+	t.Cleanup(func() { listRules = prev })
+	listRules = func() ([]rules.RuleInfo, error) {
+		return nil, errStubListRules
+	}
+	_, err := CheckCoverageMatrix(t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading rule metadata")
+}
+
+// TestApplyCoverageMatrix_PropagatesReadError drives the
+// non-NotExist ReadFile error: a directory at the target file
+// path makes os.ReadFile fail with EISDIR, and Apply must
+// surface the error rather than treating it as "file absent".
+func TestApplyCoverageMatrix_PropagatesReadError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(root, CoverageMatrixFile), 0o755,
+	))
+	_, err := ApplyCoverageMatrix(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading existing matrix")
+}
+
+// TestApplyCoverageMatrix_PropagatesMkdirError drives the
+// MkdirAll error path: make an intermediate directory of the
+// target path read-only so the MkdirAll call below it fails
+// even though ReadFile still reports IsNotExist for the leaf.
+func TestApplyCoverageMatrix_PropagatesMkdirError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based readonly test is unreliable as root")
+	}
+	root := t.TempDir()
+	intermediate := filepath.Join(root, "docs", "research")
+	require.NoError(t, os.MkdirAll(intermediate, 0o755))
+	require.NoError(t, os.Chmod(intermediate, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(intermediate, 0o755) })
+	_, err := ApplyCoverageMatrix(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating output dir")
+}
+
+// TestApplyCoverageMatrix_PropagatesWriteError drives the
+// WriteFile error path: pre-create the target file as
+// read-only so ReadFile succeeds (returning stale content
+// distinct from the generator output) and the subsequent
+// WriteFile cannot overwrite it.
+func TestApplyCoverageMatrix_PropagatesWriteError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based readonly test is unreliable as root")
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, CoverageMatrixFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("stale\n"), 0o444))
+	_, err := ApplyCoverageMatrix(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writing coverage matrix")
+}
+
+// TestFormatCoverageDrift_HaveLongerThanWant drives the n =
+// len(wLines) branch (when on-disk has more lines than the
+// generator's output and every overlapping line matches).
+func TestFormatCoverageDrift_HaveLongerThanWant(t *testing.T) {
+	msg := formatCoverageDrift("a\nb\nc", "a\nb")
+	assert.Contains(t, msg, "file has 3 lines, expected 2")
+}
+
+// errStubListRules is the sentinel returned by the listRules
+// seam in the error-path tests above so the assertions can
+// identify it without coupling to the wrapping message.
+var errStubListRules = errors.New("stub listRules failure")
 
 // TestApplyCoverageMatrix_WritesWhenMissing verifies that a
 // fresh run writes the generated file and returns changed=true.
