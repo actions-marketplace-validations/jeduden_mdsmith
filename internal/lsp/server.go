@@ -17,6 +17,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hexops/gotextdiff"
+	"github.com/hexops/gotextdiff/myers"
+	"github.com/hexops/gotextdiff/span"
+
 	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/engine"
 	fixpkg "github.com/jeduden/mdsmith/internal/fix"
@@ -1329,22 +1333,26 @@ func fullFileEdit(uri string, before, after []byte) *workspaceEdit {
 // documentChanges + changeAnnotations path. The annotation is flagged
 // needsConfirmation: true so VS Code routes the edit through Refactor
 // Preview instead of applying it immediately.
+//
+// The edit body is a slice of per-hunk AnnotatedTextEdits computed by
+// a Myers line diff (same algorithm gopls uses). One whole-file
+// AnnotatedTextEdit would still apply correctly, but VS Code's
+// Refactor Preview pane diffs each TextEdit independently — so a
+// single full-file edit renders as "old file → new file" with the
+// changed lines lost in a wall of unchanged context, and the lower
+// tree-node previews the entire new document on one line. Emitting
+// one edit per hunk gives the preview real ranges to highlight and
+// short labels to render.
+//
+// All hunks carry the same annotationID; VS Code groups them under
+// one "Fix all <rule>" confirmation entry.
 func fullFileEditAnnotated(uri string, before, after []byte, annotationID, label string) *workspaceEdit {
-	endLine, endChar := documentEndPosition(before)
+	edits := annotatedHunkEdits(before, after, annotationID)
 	return &workspaceEdit{
 		DocumentChanges: []textDocumentEdit{
 			{
 				TextDocument: optionalVersionedTextDocumentIdentifier{URI: uri},
-				Edits: []annotatedTextEdit{
-					{
-						Range: Range{
-							Start: Position{Line: 0, Character: 0},
-							End:   Position{Line: endLine, Character: endChar},
-						},
-						NewText:      string(after),
-						AnnotationID: annotationID,
-					},
-				},
+				Edits:        edits,
 			},
 		},
 		ChangeAnnotations: map[string]changeAnnotation{
@@ -1355,6 +1363,66 @@ func fullFileEditAnnotated(uri string, before, after []byte, annotationID, label
 			},
 		},
 	}
+}
+
+// annotatedHunkEdits computes a line-aligned diff between before and
+// after and returns one AnnotatedTextEdit per hunk. Myers may emit
+// several adjacent raw edits per hunk — e.g. a Delete-per-line for a
+// multi-line removal followed by a zero-width Insert for the
+// replacement text. Any run of edits where each one's end position
+// touches the next one's start gets coalesced into a single Replace
+// covering the combined range so the preview pane shows one entry per
+// visible change rather than a list of zero-width inserts and empty
+// deletes.
+//
+// Edits are returned bottom-up (last hunk first) so a naive client
+// applying them in slice order doesn't shift the offsets a later
+// edit relies on — same convention as sortTextEditsBottomUp in
+// rename.go. The LSP spec only forbids overlap; it doesn't pin
+// application order.
+//
+// Each edit's range uses character 0 on both endpoints (line-aligned),
+// matching the LSP spec for "replace these whole lines": start at the
+// beginning of the first changed line, end at the beginning of the
+// line immediately after the last changed line.
+func annotatedHunkEdits(before, after []byte, annotationID string) []annotatedTextEdit {
+	raw := myers.ComputeEdits(span.URIFromPath(""), string(before), string(after))
+	gotextdiff.SortTextEdits(raw)
+	out := make([]annotatedTextEdit, 0, len(raw))
+	for i := 0; i < len(raw); {
+		start, end := lineRange(raw[i])
+		var newText strings.Builder
+		newText.WriteString(raw[i].NewText)
+		j := i + 1
+		for j < len(raw) {
+			nStart, nEnd := lineRange(raw[j])
+			if nStart != end {
+				break
+			}
+			end = nEnd
+			newText.WriteString(raw[j].NewText)
+			j++
+		}
+		out = append(out, annotatedTextEdit{
+			Range:        Range{Start: start, End: end},
+			NewText:      newText.String(),
+			AnnotationID: annotationID,
+		})
+		i = j
+	}
+	// Coalesce runs above relied on top-down order. Reverse to the
+	// codebase's bottom-up emit convention.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+// lineRange converts a gotextdiff TextEdit (1-indexed line, column 1)
+// to an LSP Range (0-indexed line, character 0).
+func lineRange(e gotextdiff.TextEdit) (Position, Position) {
+	return Position{Line: e.Span.Start().Line() - 1, Character: 0},
+		Position{Line: e.Span.End().Line() - 1, Character: 0}
 }
 
 // documentEndPosition returns the LSP end position covering the

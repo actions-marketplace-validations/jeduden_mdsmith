@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,8 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/hexops/gotextdiff"
+	"github.com/hexops/gotextdiff/span"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -2379,6 +2382,303 @@ func TestPreviewFixAnnotatedPerRuleQuickFix(t *testing.T) {
 	ann, ok := edit.ChangeAnnotations[wantID]
 	require.True(t, ok)
 	assert.True(t, ann.NeedsConfirmation)
+}
+
+// TestPreviewFixAnnotatedHunksNotWholeFile verifies that the annotated
+// edit path emits per-hunk TextEdits sized to the actual diff, not one
+// giant whole-file replacement. VS Code's Refactor Preview renders each
+// TextEdit as a separate change; a single full-file edit collapses into
+// "old file → new file" with no visible delta and the whole document
+// flattened into the lower preview pane's single-line label.
+//
+// Setup: 12 unchanged lines bracketing two distant trailing-whitespace
+// lines (1 and 10). The per-rule quickfix path runs only
+// no-trailing-spaces, so the only diff is on those two lines and the
+// hunk count check isn't muddied by other auto-fixes.
+func TestPreviewFixAnnotatedHunksNotWholeFile(t *testing.T) {
+	t.Parallel()
+	s := newPreviewServer(t, true, true)
+	cfg := config.Merge(config.Defaults(), nil)
+	lines := []string{
+		"# Heading",
+		"intro line   ", // trailing spaces, line index 1
+		"",
+		"para a",
+		"para b",
+		"para c",
+		"",
+		"para d",
+		"para e",
+		"",
+		"closing line   ", // trailing spaces, line index 10
+		"",
+	}
+	src := []byte(strings.Join(lines, "\n") + "\n")
+	doc := &document{path: "x.md", text: src}
+	p := codeActionParams{
+		TextDocument: textDocumentIdentifier{URI: "file:///x.md"},
+		Context: codeActionContext{
+			Diagnostics: []Diagnostic{{
+				Code: "MDS006",
+				Data: &diagnosticData{RuleName: "no-trailing-spaces"},
+			}},
+			Only: []string{kindQuickFix},
+		},
+	}
+	actions := s.computeCodeActions(p, doc, cfg, "")
+	require.NotEmpty(t, actions)
+	edit := actions[0].Edit
+	require.NotNil(t, edit)
+	require.Len(t, edit.DocumentChanges, 1)
+	edits := edit.DocumentChanges[0].Edits
+	// Two distant changes → at least two hunks. A whole-file edit
+	// would emit exactly one entry spanning the full document.
+	require.GreaterOrEqual(t, len(edits), 2,
+		"preview path must emit per-hunk edits, not a whole-file replacement")
+
+	// No single edit may span the whole document.
+	for i, e := range edits {
+		span := e.Range.End.Line - e.Range.Start.Line
+		assert.Lessf(t, span, len(lines)-1,
+			"edit %d spans %d lines [%d..%d]; "+
+				"preview path must emit per-hunk edits, "+
+				"not a whole-file replacement",
+			i, span, e.Range.Start.Line, e.Range.End.Line)
+	}
+
+	// All edits must share the same annotation id so the preview
+	// pane groups them under one entry.
+	for _, e := range edits {
+		assert.Equal(t, "mdsmith-fix-no-trailing-spaces", e.AnnotationID)
+	}
+
+	// Applying the edits must yield the same bytes the per-rule
+	// fix pipeline would have written.
+	got := applyAnnotatedEdits(t, src, edits)
+	want := s.quickFixBytesFor("no-trailing-spaces", doc, cfg, "")
+	require.NotNil(t, want)
+	assert.Equal(t, string(want), string(got))
+}
+
+// TestAnnotatedHunkEdits covers annotatedHunkEdits directly so the
+// fold rule, the LSP range conversion, and round-trip correctness are
+// each tractable in isolation rather than only through computeCodeActions.
+//
+// Each case asserts:
+//   - the expected edit ranges (line-aligned, character 0), in the order
+//     the function emits them;
+//   - the expected NewText per edit;
+//   - that applying the edits to `before` round-trips to `after`;
+//   - that every edit carries the supplied annotation id.
+func TestAnnotatedHunkEdits(t *testing.T) {
+	t.Parallel()
+	for _, tc := range hunkEditCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkHunkEditCase(t, tc)
+		})
+	}
+}
+
+type hunkEditWant struct {
+	startLine, endLine int
+	newText            string
+}
+
+type hunkEditCase struct {
+	name   string
+	before string
+	after  string
+	want   []hunkEditWant
+}
+
+func hunkEditCases() []hunkEditCase {
+	return append(hunkEditCasesSimple(), hunkEditCasesComplex()...)
+}
+
+func hunkEditCasesSimple() []hunkEditCase {
+	return []hunkEditCase{
+		{
+			name:   "no change",
+			before: "a\nb\n",
+			after:  "a\nb\n",
+			want:   nil,
+		},
+		{
+			name:   "single-line replacement folds delete+insert",
+			before: "a\nold\nc\n",
+			after:  "a\nnew\nc\n",
+			want:   []hunkEditWant{{1, 2, "new\n"}},
+		},
+		{
+			name:   "pure deletion",
+			before: "a\nb\nc\n",
+			after:  "a\nc\n",
+			want:   []hunkEditWant{{1, 2, ""}},
+		},
+		{
+			name:   "pure insertion in the middle",
+			before: "a\nc\n",
+			after:  "a\nb\nc\n",
+			want:   []hunkEditWant{{1, 1, "b\n"}},
+		},
+		{
+			name:   "insertion at start of file",
+			before: "b\n",
+			after:  "a\nb\n",
+			want:   []hunkEditWant{{0, 0, "a\n"}},
+		},
+		{
+			name:   "append at end of file",
+			before: "a\n",
+			after:  "a\nb\n",
+			want:   []hunkEditWant{{1, 1, "b\n"}},
+		},
+	}
+}
+
+func hunkEditCasesComplex() []hunkEditCase {
+	return []hunkEditCase{
+		{
+			// Edits emit bottom-up so naive clients applying them
+			// in slice order don't shift later offsets — see
+			// annotatedHunkEdits' doc comment and
+			// sortTextEditsBottomUp in rename.go.
+			name:   "two distant single-line replacements emit two hunks",
+			before: "a\nold1\nc\nd\ne\nold2\ng\n",
+			after:  "a\nnew1\nc\nd\ne\nnew2\ng\n",
+			want: []hunkEditWant{
+				{5, 6, "new2\n"},
+				{1, 2, "new1\n"},
+			},
+		},
+		{
+			name:   "multi-line replacement",
+			before: "a\nb1\nb2\nb3\nc\n",
+			after:  "a\nX\nc\n",
+			want:   []hunkEditWant{{1, 4, "X\n"}},
+		},
+		{
+			name:   "empty before to non-empty after",
+			before: "",
+			after:  "a\n",
+			want:   []hunkEditWant{{0, 0, "a\n"}},
+		},
+		{
+			name:   "non-empty before to empty after",
+			before: "a\n",
+			after:  "",
+			want:   []hunkEditWant{{0, 1, ""}},
+		},
+	}
+}
+
+func checkHunkEditCase(t *testing.T, tc hunkEditCase) {
+	t.Helper()
+	const annot = "mdsmith-fix-x"
+	got := annotatedHunkEdits([]byte(tc.before), []byte(tc.after), annot)
+	require.Len(t, got, len(tc.want), "edit count mismatch: got %+v", got)
+	for i, w := range tc.want {
+		assert.Equalf(t, w.startLine, got[i].Range.Start.Line,
+			"edit %d start line", i)
+		assert.Equalf(t, w.endLine, got[i].Range.End.Line,
+			"edit %d end line", i)
+		assert.Zerof(t, got[i].Range.Start.Character,
+			"edit %d start character must be 0", i)
+		assert.Zerof(t, got[i].Range.End.Character,
+			"edit %d end character must be 0", i)
+		assert.Equalf(t, w.newText, got[i].NewText,
+			"edit %d NewText", i)
+		assert.Equalf(t, annot, got[i].AnnotationID,
+			"edit %d annotation id", i)
+	}
+	// Apply round-trip: every case must reproduce `after`.
+	if len(got) > 0 {
+		roundTrip := applyAnnotatedEdits(t, []byte(tc.before), got)
+		assert.Equal(t, tc.after, string(roundTrip))
+	}
+}
+
+// TestLineRange covers lineRange directly: the 1-indexed-line,
+// column-1 gotextdiff span maps to a 0-indexed-line, character-0 LSP
+// position. The conversion is one line of arithmetic but is the only
+// thing keeping our LSP edits aligned with the diff hunks the algorithm
+// returns; a regression here would shift every preview edit by a line.
+func TestLineRange(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name               string
+		spanStart, spanEnd int
+		wantStart, wantEnd int
+	}{
+		{"first line point", 1, 1, 0, 0},
+		{"first line span", 1, 2, 0, 1},
+		{"interior span", 4, 7, 3, 6},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := gotextdiff.TextEdit{
+				Span: span.New(span.URIFromPath(""),
+					span.NewPoint(tc.spanStart, 1, 0),
+					span.NewPoint(tc.spanEnd, 1, 0)),
+			}
+			start, end := lineRange(e)
+			assert.Equal(t, tc.wantStart, start.Line)
+			assert.Zero(t, start.Character)
+			assert.Equal(t, tc.wantEnd, end.Line)
+			assert.Zero(t, end.Character)
+		})
+	}
+}
+
+// applyAnnotatedEdits applies a slice of annotatedTextEdit values to
+// src using the LSP edit-application rules: edits' ranges refer to
+// positions in the original buffer, so we sort by descending start
+// position and splice each edit's NewText into the line-indexed slice.
+func applyAnnotatedEdits(t *testing.T, src []byte, edits []annotatedTextEdit) []byte {
+	t.Helper()
+	sorted := make([]annotatedTextEdit, len(edits))
+	copy(sorted, edits)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		a, b := sorted[i].Range.Start, sorted[j].Range.Start
+		if a.Line != b.Line {
+			return a.Line > b.Line
+		}
+		return a.Character > b.Character
+	})
+	// All edits in this test use character 0 (line-aligned), so we
+	// can splice by line index.
+	lines := strings.SplitAfter(string(src), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	for _, e := range sorted {
+		require.Zero(t, e.Range.Start.Character,
+			"applyAnnotatedEdits only supports line-aligned edits")
+		require.Zero(t, e.Range.End.Character,
+			"applyAnnotatedEdits only supports line-aligned edits")
+		start := e.Range.Start.Line
+		end := e.Range.End.Line
+		// Validate rather than clamp: a silent clamp would mask
+		// off-by-one bugs in lineRange/annotatedHunkEdits by making
+		// out-of-range edits "work".
+		require.GreaterOrEqualf(t, start, 0, "start line %d < 0", start)
+		require.LessOrEqualf(t, start, len(lines),
+			"start line %d > line count %d", start, len(lines))
+		require.GreaterOrEqualf(t, end, start,
+			"end line %d < start line %d", end, start)
+		require.LessOrEqualf(t, end, len(lines),
+			"end line %d > line count %d", end, len(lines))
+		insert := strings.SplitAfter(e.NewText, "\n")
+		if len(insert) > 0 && insert[len(insert)-1] == "" {
+			insert = insert[:len(insert)-1]
+		}
+		tail := append([]string{}, lines[end:]...)
+		lines = append(lines[:start], insert...)
+		lines = append(lines, tail...)
+	}
+	return []byte(strings.Join(lines, ""))
 }
 
 // TestPreviewFixOffProducesLegacyEdits verifies that with previewFix
