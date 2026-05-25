@@ -114,6 +114,65 @@ func TestApplyCoverageMatrix_IdempotentAfterFirstWrite(t *testing.T) {
 	assert.False(t, changed)
 }
 
+// TestRenderCoverageMatrix_UnknownCategoryFallback verifies
+// that a rule whose `category:` value is missing from the
+// canonical categoryTitle map still renders — the section
+// title falls back to a title-cased form, and orderedCategories
+// places the bucket at the end. Drives the "extras" branch in
+// orderedCategories plus the title-fallback branch in
+// RenderCoverageMatrix.
+func TestRenderCoverageMatrix_UnknownCategoryFallback(t *testing.T) {
+	rs := []rules.RuleInfo{
+		{
+			ID: "MDS900", Name: "experimental", Status: "ready",
+			Description: "Experimental.",
+			Category:    "experimental",
+		},
+	}
+	out := RenderCoverageMatrix(rs)
+	assert.Contains(t, out, "## Experimental")
+}
+
+// TestCheckCoverageMatrix_ReturnsEmptyWhenInSync verifies the
+// happy path: when on-disk matches the generator, the check
+// reports no drift (empty message, no error).
+func TestCheckCoverageMatrix_ReturnsEmptyWhenInSync(t *testing.T) {
+	root := t.TempDir()
+	_, err := ApplyCoverageMatrix(root)
+	require.NoError(t, err)
+	msg, err := CheckCoverageMatrix(root)
+	require.NoError(t, err)
+	assert.Empty(t, msg)
+}
+
+// TestCheckCoverageMatrix_PropagatesReadError verifies that a
+// non-NotExist read failure (here: a directory where a file is
+// expected) surfaces as an error rather than a drift message.
+func TestCheckCoverageMatrix_PropagatesReadError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(root, CoverageMatrixFile),
+		0o755,
+	))
+	msg, err := CheckCoverageMatrix(root)
+	require.Error(t, err)
+	assert.Empty(t, msg)
+}
+
+// TestFormatCoverageDrift_FileLengthsDiffer drives the fallback
+// branch in formatCoverageDrift: when every overlapping line
+// matches but the files have different total lengths, the
+// formatter reports the length mismatch rather than a per-line
+// diff.
+func TestFormatCoverageDrift_FileLengthsDiffer(t *testing.T) {
+	// Two strings without a trailing newline; every overlapping
+	// line matches and want is exactly one line longer.
+	msg := formatCoverageDrift("a\nb", "a\nb\nc")
+	assert.Contains(t, msg, "file has 2 lines, expected 3")
+	assert.Contains(t, msg,
+		"run `mdsmith-release sync-coverage-matrix` to regenerate")
+}
+
 // TestCheckCoverageMatrix_DetectsDrift verifies that a
 // manually edited coverage file surfaces a drift message with
 // the offending line number.

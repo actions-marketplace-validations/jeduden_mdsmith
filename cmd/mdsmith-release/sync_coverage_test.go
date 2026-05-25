@@ -66,3 +66,24 @@ func TestRunSyncCoverageMatrix_ExtraArgRejected(t *testing.T) {
 	// hits the NArg() != 0 branch and returns 2.
 	assert.Equal(t, 2, run([]string{"sync-coverage-matrix", "extra"}))
 }
+
+func TestRunSyncCoverageMatrix_UnknownFlagRejected(t *testing.T) {
+	// An unrecognised flag is a parse error; reportFlagParseErr
+	// surfaces a non-zero exit code and prints usage. This drives
+	// the flag-parse error branch of runSyncCoverageMatrix.
+	assert.NotEqual(t, 0,
+		run([]string{"sync-coverage-matrix", "--bogus"}))
+}
+
+func TestRunSyncCoverageMatrixApply_PropagatesError(t *testing.T) {
+	// A directory at the target file path makes os.ReadFile fail
+	// with a non-NotExist error; ApplyCoverageMatrix surfaces it
+	// and runSyncCoverageMatrixApply must exit non-zero.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(root, release.CoverageMatrixFile),
+		0o755,
+	))
+	exit := runSyncCoverageMatrixApply(root)
+	assert.NotEqual(t, 0, exit)
+}

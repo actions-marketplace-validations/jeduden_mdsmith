@@ -89,9 +89,6 @@ func RenderCoverageMatrix(rs []rules.RuleInfo) string {
 	cats := orderedCategories(grouped)
 	for i, cat := range cats {
 		rsInCat := grouped[cat]
-		if len(rsInCat) == 0 {
-			continue
-		}
 		mdsmithOnly := categoryIsMdsmithOnly(rsInCat)
 		title := categoryTitle[cat]
 		if title == "" {
