@@ -61,7 +61,7 @@ row-expr: '
   "| \(id) | " +
   strings.Join(
     [for m in markdownlint {
-      "\(m.id) \(if m.default {"✅"} else {"⚪"}) \(m.name)"
+      "\(m.id) \([if m.default {"✅"}, if !m.default {"⚪"}][0]) \(m.name)"
     }],
     ", "
   ) + " |"

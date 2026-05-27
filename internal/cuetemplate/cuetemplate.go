@@ -94,13 +94,17 @@ func (t *Template) Render(fm map[string]any) (string, error) {
 	if err := val.Err(); err != nil {
 		return "", fmt.Errorf("evaluating cue expression: %w", err)
 	}
-	out := val.LookupPath(cue.ParsePath(outField))
-	if out.Kind() != cue.StringKind {
+	// out.String errors on both wrong-kind values (int, bool,
+	// list, struct) and string-typed-but-non-concrete values
+	// (the unevaluated `string` type, an open `"a" | "b"`
+	// disjunction). The error message from CUE already names
+	// the offending shape; wrap it so row-expr never silently
+	// emits a blank cell.
+	s, err := val.LookupPath(cue.ParsePath(outField)).String()
+	if err != nil {
 		return "", fmt.Errorf(
-			"cue expression must evaluate to a string, got %s",
-			out.Kind())
+			"cue expression must yield a concrete string: %w", err)
 	}
-	s, _ := out.String()
 	return s, nil
 }
 

@@ -4517,7 +4517,7 @@ row-expr: '1 + 1'
 	var found bool
 	for _, d := range diags {
 		if strings.Contains(d.Message, "rendering row-expr") ||
-			strings.Contains(d.Message, "must evaluate to a string") {
+			strings.Contains(d.Message, "concrete string") {
 			found = true
 			break
 		}

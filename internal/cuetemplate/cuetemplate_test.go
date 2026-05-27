@@ -80,7 +80,21 @@ func TestTemplate_Render_NonStringResultIsError(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tpl.Render(map[string]any{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must evaluate to a string")
+	assert.Contains(t, err.Error(), "concrete string")
+}
+
+// TestTemplate_Render_NonConcreteStringIsError covers a
+// row-expr that is string-typed but non-concrete — here an
+// open two-arm string disjunction. Without the
+// concreteness check the CUE String() call yields "" and a
+// caller that ignored the error would silently emit a
+// blank row.
+func TestTemplate_Render_NonConcreteStringIsError(t *testing.T) {
+	tpl, err := Compile(`"foo" | "bar"`)
+	require.NoError(t, err)
+	_, err = tpl.Render(map[string]any{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "concrete string")
 }
 
 // TestTemplate_Render_UnknownFieldIsError verifies that a

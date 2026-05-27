@@ -81,7 +81,7 @@ Cell legend:
 | [MDS053](../../../internal/rules/MDS053-no-unused-link-definitions/README.md) no-unused-link-definitions         | MD053 ✅ link-image-reference-definitions           | MD053 ✅ link-image-definitions                 | —                          | duplicate-reference-labels ✅ duplicate-reference-labels, unused-definitions ✅ unused-definitions |
 | [MDS054](../../../internal/rules/MDS054-no-undefined-reference-labels/README.md) no-undefined-reference-labels   | MD052 ✅ reference-links-images                     | MD052 ✅ reference-links-images                 | —                          | undefined-references ✅ undefined-references                                                       |
 | [MDS062](../../../internal/rules/MDS062-link-validity/README.md) link-validity                                   | MD011 ✅ no-reversed-links, MD042 ✅ no-empty-links | MD011 ✅ reversed-link, MD042 ✅ no-empty-links | —                          | —                                                                                                  |
-| [MDS068](../../../internal/rules/MDS068-link-style/README.md) link-style                                         | —                                                   | —                                               | —                          | —                                                                                                  |
+| [MDS068](../../../internal/rules/MDS068-link-style/README.md) link-style                                         | MD054 ✅ link-image-style (partial)                 | MD054 ✅ link-image-style (partial)             | —                          | —                                                                                                  |
 
 ## Tables
 
