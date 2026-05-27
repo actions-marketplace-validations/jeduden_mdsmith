@@ -119,14 +119,14 @@ hooks). Make sure it is executable (`chmod +x`):
 #!/bin/sh
 set -e
 tmp=$(mktemp "${TMPDIR:-/tmp}/mdsmith-prettier.XXXXXX") || exit 1
-trap 'rm -f "$tmp"' EXIT
+trap 'rm -f "$tmp"' 0
 trap 'rm -f "$tmp"; exit 130' INT TERM
 git diff --cached --name-only --diff-filter=ACMR -z -- '**/*.md' > "$tmp"
 [ -s "$tmp" ] || exit 0
-xargs -0 mdsmith fix -- < "$tmp"
-xargs -0 git add -- < "$tmp"
-xargs -0 npx prettier --write -- < "$tmp"
-xargs -0 git add -- < "$tmp"
+xargs -0 mdsmith fix -- < "$tmp" || exit $?
+xargs -0 git add -- < "$tmp" || exit $?
+xargs -0 npx prettier --write -- < "$tmp" || exit $?
+xargs -0 git add -- < "$tmp" || exit $?
 ```
 
 POSIX shell syntax with two near-universal
@@ -136,8 +136,10 @@ BSD, and busybox all support both.
 The NUL-delimited file list lives in a temp file.
 POSIX command substitution strips NUL bytes from
 `$(...)`, which would break the filenames-with-
-spaces guarantee. `set -e` aborts the commit on
-the first failed step. The split `trap` cleans up
+spaces guarantee. `set -e` plus the explicit
+`|| exit $?` chain aborts the commit on any failed
+step (mdsmith fix exits 1 when unfixable
+diagnostics remain). The split `trap` cleans up
 the temp file on every exit. On Ctrl+C or SIGTERM,
 the trap also exits with 130, so the user can
 interrupt the hook.
