@@ -51,9 +51,30 @@ pipelines.
 
 ## VS Code
 
-mdsmith for VS Code — neat, consistent Markdown via inline
-diagnostics, auto-fix on save, and instant cross-file
-navigation. Your Markdown stays a single source of truth.
+Keep your Markdown neat and consistent: inline diagnostics
+with lightbulb quick fixes, fix-on-save, cross-file link
+and anchor integrity, generated TOCs / catalogs /
+includes, frontmatter schemas, and a bundled CLI that
+extracts Markdown sections as JSON or YAML. The `.vsix`
+bundles the mdsmith binary, so no separate install is
+needed.
+
+## VS Code overview
+
+The extension is a thin LSP client over the bundled
+mdsmith binary, which it runs with the lsp subcommand.
+Diagnostics appear inline as squiggles, and every fixable
+rule contributes a lightbulb quick fix. A whole-buffer fix
+action runs on demand or on save, with an optional
+Refactor Preview before edits land. Cross-file navigation
+extends to Go to Definition, Find All References,
+workspace symbol search, and a call hierarchy across
+includes, catalogs, builds, and Markdown links. The
+mdsmith Command Palette runs Initialize Config, Fix All
+Markdown, Install Git Merge Driver, Explain Rule on This
+File, and Show Resolved Config. The .vsix bundles the
+mdsmith binary for every supported OS and architecture, so
+no separate install is needed.
 
 ## Claude Code LSP
 
