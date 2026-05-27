@@ -228,6 +228,20 @@ func (r *Rule) generateIncludeContent(
 			fmt.Sprintf("cannot read include file %q: %v", file, err))}
 	}
 
+	// When the directive carries `extract:`, project the resolved
+	// kind's schema, walk the dotted path, and splice the leaf —
+	// the strip-frontmatter / heading-level / wrap pipeline below
+	// does not apply (the validator rejects the incompatible
+	// combinations on the host side).
+	if dotted, ok := params["extract"]; ok {
+		text, err := projectExtractValue(
+			f, readFS, resolvedFile, data, dotted)
+		if err != nil {
+			return "", []lint.Diagnostic{makeDiag(filePath, line, err.Error())}
+		}
+		return gensection.EnsureTrailingNewline(text), nil
+	}
+
 	// Track this file and recursively expand nested includes.
 	if r.visited != nil {
 		r.visited[resolvedFile] = true

@@ -614,6 +614,7 @@ func loadConfig(configPath string) (*config.Config, string, error) {
 		return nil, "", err
 	}
 	config.InjectBuildConfig(cfg, path)
+	installIncludeExtractProjector(path)
 	return cfg, path, nil
 }
 
