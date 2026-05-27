@@ -23,7 +23,7 @@ cross-file links, and readability budgets.
 ```json
 {
   "lint-staged": {
-    "*.md": [
+    "**/*.md": [
       "mdsmith fix",
       "prettier --write"
     ]
