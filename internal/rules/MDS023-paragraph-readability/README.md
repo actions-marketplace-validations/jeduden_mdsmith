@@ -6,7 +6,10 @@ description: Paragraph readability index must not exceed a threshold.
 category: prose
 nature: content
 maintainability: null
-markdownlint: null
+markdownlint: []
+rumdl: []
+mado: []
+panache: []
 ---
 # MDS023: paragraph-readability
 

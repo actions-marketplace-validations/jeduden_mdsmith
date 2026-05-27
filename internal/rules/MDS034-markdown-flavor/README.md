@@ -8,7 +8,10 @@ description: >-
 category: structural
 nature: structure
 maintainability: null
-markdownlint: null
+markdownlint: []
+rumdl: []
+mado: []
+panache: []
 ---
 # MDS034: markdown-flavor
 

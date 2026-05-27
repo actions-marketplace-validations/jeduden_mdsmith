@@ -94,6 +94,11 @@ type expectedDiag struct {
 	Line    int    `yaml:"line"`
 	Column  int    `yaml:"column"`
 	Message string `yaml:"message"`
+	// MessagePrefix is an alternative to Message for diagnostics
+	// whose tail comes from an upstream library (CUE parser, YAML
+	// decoder). The fixture asserts that the actual message
+	// starts with this string. Mutually exclusive with Message.
+	MessagePrefix string `yaml:"message-prefix"`
 }
 
 type fixtureFrontMatter struct {
@@ -128,6 +133,18 @@ func parseFixtureFrontMatter(
 
 	if requireDiagnostics && len(fm.Diagnostics) == 0 {
 		t.Fatal("bad fixture front matter must contain a non-empty diagnostics key")
+	}
+
+	// message: and message-prefix: are mutually exclusive on
+	// each diagnostic entry. Setting both is ambiguous (which
+	// assertion wins?) and the runner picks the prefix
+	// silently; fail loudly at fixture load instead.
+	for i, d := range fm.Diagnostics {
+		if d.Message != "" && d.MessagePrefix != "" {
+			t.Fatalf(
+				"diagnostic %d sets both message: and message-prefix:; choose one",
+				i)
+		}
 	}
 
 	_, content := lint.StripFrontMatter(data)
@@ -537,8 +554,15 @@ func assertExpectedDiags(
 			"diagnostic %d line mismatch", i)
 		assert.Equal(t, exp.Column, d.Column,
 			"diagnostic %d column mismatch", i)
-		assert.Equal(t, exp.Message, d.Message,
-			"diagnostic %d message mismatch", i)
+		if exp.MessagePrefix != "" {
+			assert.True(t,
+				strings.HasPrefix(d.Message, exp.MessagePrefix),
+				"diagnostic %d message %q does not start with %q",
+				i, d.Message, exp.MessagePrefix)
+		} else {
+			assert.Equal(t, exp.Message, d.Message,
+				"diagnostic %d message mismatch", i)
+		}
 	}
 }
 

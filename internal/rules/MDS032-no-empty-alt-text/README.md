@@ -9,6 +9,13 @@ maintainability: null
 markdownlint:
   - id: MD045
     name: no-alt-text
+    default: true
+rumdl:
+  - id: MD045
+    name: no-alt-text
+    default: true
+mado: []
+panache: []
 ---
 # MDS032: no-empty-alt-text
 

@@ -6,7 +6,10 @@ description: Section headings must include meaningful body content.
 category: heading
 nature: content
 maintainability: null
-markdownlint: null
+markdownlint: []
+rumdl: []
+mado: []
+panache: []
 ---
 # MDS030: empty-section-body
 

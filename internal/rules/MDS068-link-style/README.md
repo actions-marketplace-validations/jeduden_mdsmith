@@ -6,7 +6,18 @@ description: Flag links whose path, extension, or inline-vs-reference form devia
 category: link
 nature: style
 maintainability: null
-markdownlint: null
+markdownlint:
+  - id: MD054
+    name: link-image-style
+    partial: true
+    default: true
+rumdl:
+  - id: MD054
+    name: link-image-style
+    partial: true
+    default: true
+mado: []
+panache: []
 ---
 # MDS068: link-style
 

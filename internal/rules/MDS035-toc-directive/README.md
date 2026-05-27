@@ -6,7 +6,10 @@ description: Flag renderer-specific TOC directives that render as literal text o
 category: directive
 nature: generator
 maintainability: null
-markdownlint: null
+markdownlint: []
+rumdl: []
+mado: []
+panache: []
 ---
 # MDS035: toc-directive
 

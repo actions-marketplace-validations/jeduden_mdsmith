@@ -9,7 +9,10 @@ maintainability:
   signal: near-duplicate sections that drift across files
   fix: adopt `<?include?>` so shared content has one source of truth
   for-diagnostic: false
-markdownlint: null
+markdownlint: []
+rumdl: []
+mado: []
+panache: []
 ---
 # MDS021: include
 

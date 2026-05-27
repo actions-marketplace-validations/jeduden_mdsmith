@@ -11,6 +11,16 @@ maintainability: null
 markdownlint:
   - id: MD030
     name: list-marker-space
+    default: true
+rumdl:
+  - id: MD030
+    name: list-marker-space
+    default: true
+mado:
+  - id: MD030
+    name: list-marker-space
+    default: true
+panache: []
 ---
 # MDS061: list-marker-space
 

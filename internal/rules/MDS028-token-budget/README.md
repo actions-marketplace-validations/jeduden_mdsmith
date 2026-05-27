@@ -6,7 +6,10 @@ description: File must not exceed a token budget.
 category: prose
 nature: content
 maintainability: null
-markdownlint: null
+markdownlint: []
+rumdl: []
+mado: []
+panache: []
 ---
 # MDS028: token-budget
 

@@ -6,7 +6,10 @@ description: Tables must stay within readability complexity limits.
 category: table
 nature: content
 maintainability: null
-markdownlint: null
+markdownlint: []
+rumdl: []
+mado: []
+panache: []
 ---
 # MDS026: table-readability
 

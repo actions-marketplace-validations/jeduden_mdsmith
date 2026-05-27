@@ -6,7 +6,10 @@ description: Heading-bounded sections must match every configured regex.
 category: prose
 nature: content
 maintainability: null
-markdownlint: null
+markdownlint: []
+rumdl: []
+mado: []
+panache: []
 ---
 # MDS057: required-text-patterns
 

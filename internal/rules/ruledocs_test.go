@@ -394,14 +394,45 @@ func TestParseFrontMatter_NullMarkdownlint(t *testing.T) {
 	}
 }
 
-// TestMarkdownlintRule_URL verifies that MarkdownlintRule.URL builds the
-// canonical doc URL by lowercasing the rule ID and appending it to the
-// markdownlint doc path.
-func TestMarkdownlintRule_URL(t *testing.T) {
-	r := MarkdownlintRule{ID: "MD013", Name: "line-length"}
-	assert.Equal(t,
-		"https://github.com/DavidAnson/markdownlint/blob/main/doc/md013.md",
-		r.URL())
+// TestParseFrontMatter_PeerLinterBlocks verifies that rumdl, mado, and
+// panache mapping blocks parse into their respective RuleInfo slices and
+// that the per-entry `default` flag round-trips correctly.
+func TestParseFrontMatter_PeerLinterBlocks(t *testing.T) {
+	content := "---\n" +
+		"id: MDS999\n" +
+		"name: example\n" +
+		"status: ready\n" +
+		"description: Example.\n" +
+		"markdownlint:\n" +
+		"  - id: MD013\n" +
+		"    name: line-length\n" +
+		"    default: true\n" +
+		"rumdl:\n" +
+		"  - id: MD013\n" +
+		"    name: line-length\n" +
+		"    default: true\n" +
+		"mado:\n" +
+		"  - id: MD013\n" +
+		"    name: line-length\n" +
+		"    default: true\n" +
+		"panache:\n" +
+		"  - id: heading-hierarchy\n" +
+		"    name: heading-hierarchy\n" +
+		"    default: false\n" +
+		"---\n# Body\n"
+	info, err := parseFrontMatter(content)
+	require.NoError(t, err)
+	require.Len(t, info.Markdownlint, 1)
+	assert.True(t, info.Markdownlint[0].Default)
+	require.Len(t, info.Rumdl, 1)
+	assert.Equal(t, "MD013", info.Rumdl[0].ID)
+	assert.True(t, info.Rumdl[0].Default)
+	require.Len(t, info.Mado, 1)
+	assert.Equal(t, "MD013", info.Mado[0].ID)
+	assert.True(t, info.Mado[0].Default)
+	require.Len(t, info.Panache, 1)
+	assert.Equal(t, "heading-hierarchy", info.Panache[0].ID)
+	assert.False(t, info.Panache[0].Default)
 }
 
 // TestParseFrontMatter_RejectsYAMLAliases verifies that the safe-YAML wrapper

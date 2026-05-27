@@ -6,7 +6,10 @@ description: Reference-style links and footnotes require global definition resol
 category: link
 nature: style
 maintainability: null
-markdownlint: null
+markdownlint: []
+rumdl: []
+mado: []
+panache: []
 ---
 # MDS043: no-reference-style
 
