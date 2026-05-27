@@ -75,12 +75,13 @@ does not normalize list markers by default, so
 Prettier owns those rewrites without contention.
 
 One value to keep aligned: Prettier's `printWidth`
-and mdsmith's `line-length.max`. Both default to 80.
-If `printWidth` exceeds `line-length.max`, Prettier
-may merge wrapped lines into ones mdsmith then flags
-as too long — and mdsmith does not auto-fix line
-length, so the rewrap would have to be manual. Keep
-the two values equal.
+and the `max` setting of mdsmith's `line-length` rule
+(`rules.line-length.max` in `.mdsmith.yml`). Both
+default to 80. If `printWidth` exceeds that `max`,
+Prettier may merge wrapped lines into ones mdsmith
+then flags as too long — and mdsmith does not
+auto-fix line length, so the rewrap would have to be
+manual. Keep the two values equal.
 
 ## Generated sections
 
@@ -110,13 +111,14 @@ xargs -0 npx prettier --write -- < "$tmp"
 xargs -0 git add -- < "$tmp"
 ```
 
-POSIX sh syntax; requires `git` and an `xargs` that
-supports `-0` (GNU, BSD, and busybox all do). The
-NUL-delimited file list lives in a temp file because
-POSIX command substitution strips NUL bytes from
-`$(...)`, which would break the filenames-with-spaces
-guarantee. The hook exits early on an empty stage so
-neither tool falls back to a full-repo rewrite.
+POSIX shell syntax with two near-universal
+extensions: `mktemp` and `xargs -0`. Linux, macOS,
+BSD, and busybox all support both. The NUL-delimited
+file list lives in a temp file because POSIX command
+substitution strips NUL bytes from `$(...)`, which
+would break the filenames-with-spaces guarantee. The
+hook exits early on an empty stage so neither tool
+falls back to a full-repo rewrite.
 
 ## CI check
 
