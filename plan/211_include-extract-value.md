@@ -87,7 +87,7 @@ the rendered text of an object).
    include block from the current projection — the same model
    the existing file-include path uses. Round-trip stability
    matches the existing include behavior.
-5. [x] **Adopt in messaging.** Update [`README.md`](../README.md),
+5. **Adopt in messaging.** Update [`README.md`](../README.md),
    [`npm/mdsmith/README.md`](../npm/mdsmith/README.md), and
    [`python/README.md`](../python/README.md) to use
    `<?include file: docs/brand/messaging.md extract: tagline.text ?>`.
@@ -119,7 +119,7 @@ the rendered text of an object).
   target, or an `extract:` on a file with no resolved kind.
 - [x] `mdsmith fix` regenerates the block body from the
   projection; running twice is byte-stable.
-- [x] Every README that previously read a fragment file now
+- [ ] Every README that previously read a fragment file now
   reads from `docs/brand/messaging.md` directly via
   `extract: tagline.text`; `docs/brand/fragments/` is removed
   and `mdsmith check .` stays clean.
@@ -130,5 +130,5 @@ the rendered text of an object).
   [generating-content.md](../docs/guides/directives/generating-content.md)
   with at least one worked example per value type (text, code,
   frontmatter scalar).
-- [ ] All tests pass: `go test ./...`.
-- [ ] `go tool golangci-lint run` reports no issues.
+- [x] All tests pass: `go test ./...`.
+- [x] `go tool golangci-lint run` reports no issues.
