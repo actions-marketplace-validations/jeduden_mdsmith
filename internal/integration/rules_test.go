@@ -135,6 +135,18 @@ func parseFixtureFrontMatter(
 		t.Fatal("bad fixture front matter must contain a non-empty diagnostics key")
 	}
 
+	// message: and message-prefix: are mutually exclusive on
+	// each diagnostic entry. Setting both is ambiguous (which
+	// assertion wins?) and the runner picks the prefix
+	// silently; fail loudly at fixture load instead.
+	for i, d := range fm.Diagnostics {
+		if d.Message != "" && d.MessagePrefix != "" {
+			t.Fatalf(
+				"diagnostic %d sets both message: and message-prefix:; choose one",
+				i)
+		}
+	}
+
 	_, content := lint.StripFrontMatter(data)
 
 	return fm.Settings, fm.Diagnostics, content

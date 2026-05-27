@@ -44,33 +44,33 @@ import (
 // CUE identifier alias at the file's top-level scope.
 var identRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
-// reservedAliases lists names that must not be aliased at the
-// file's top-level scope. CUE keywords are syntactically
-// reserved; `strings` is reserved because it is the
-// preimported package and shadowing it would break
-// `strings.Join` in user expressions. Frontmatter keys that
+// reservedAliases lists names that must not be aliased at
+// the file's top-level scope. CUE keywords are syntactically
+// reserved as identifiers; `strings` is reserved because it
+// is the preimported package and shadowing it would break
+// `strings.Join` in user expressions; `fm` and `outField`
+// name the renderer's own scaffolding. Frontmatter keys that
 // collide with these are still reachable through the `fm`
 // struct (e.g. `fm.strings`).
 //
-// Extend this list if a future rule README adopts a key
-// whose name collides with a CUE operator-keyword (`div`,
-// `mod`, `quo`, `rem`) or a new standard-library package
-// imported by buildSource. The CUE spec changes rarely, but
-// the list is hand-curated rather than introspected.
+// CUE operator keywords (`div`, `mod`, `quo`, `rem`) are
+// deliberately omitted — they are operators in expression
+// position only and parse legally as labels in the
+// `<key>: fm.<key>` alias emission.
 var reservedAliases = map[string]bool{
 	"package": true, "import": true, "for": true, "in": true,
 	"if": true, "let": true, "true": true, "false": true,
 	"null": true, "_": true, "strings": true,
-	"div": true, "mod": true, "quo": true, "rem": true,
-	outField: true, "fm": true,
+	outField: true, fmField: true,
 }
 
 // outField is the synthetic field name used to hold the
 // compiled expression's result. No leading underscore: hidden
 // fields are not reachable via LookupPath. The name is
 // deliberately unlikely to collide with a real frontmatter
-// key.
-const outField = "mdsmithTemplateOut"
+// key. Snake-case matches the rest of the synthetic
+// identifiers in this file (`_strings_used`, `fm`).
+const outField = "mdsmith_template_out"
 
 // fmField is the name of the struct that holds the full
 // frontmatter map, indexable by any key (including those that
@@ -148,19 +148,27 @@ func (t *Template) Render(fm map[string]any) (string, error) {
 // failure indicates a programming bug upstream and the panic
 // is the correct response.
 func buildSource(fm map[string]any, expr string) string {
-	// Filter the synthetic field names out of the JSON-emitted
-	// map so a real frontmatter key named `fm` or
-	// `mdsmithTemplateOut` cannot shadow the scaffolding the
-	// renderer relies on. Collisions are extremely unlikely
-	// (the name is deliberately weird), but filtering is
-	// cheaper than asserting the contract elsewhere.
-	emit := fm
-	if _, hasFM := fm[fmField]; hasFM {
-		emit = copyWithout(fm, fmField)
+	// Single-pass filter: drop the renderer's synthetic field
+	// names from the JSON-emitted map AND collect the sorted
+	// alias keys in the same walk. Both surfaces use the same
+	// predicate so the JSON struct and the alias list cannot
+	// drift apart: a key that shadows `fm` or `outField` is
+	// dropped from both; a key that collides with `reservedAliases`
+	// is in the JSON but not aliased at top level (reachable
+	// via `fm["strings"]` etc.).
+	emit := make(map[string]any, len(fm))
+	aliasKeys := make([]string, 0, len(fm))
+	for k, v := range fm {
+		if k == fmField || k == outField {
+			continue
+		}
+		emit[k] = v
+		if identRE.MatchString(k) && !reservedAliases[k] {
+			aliasKeys = append(aliasKeys, k)
+		}
 	}
-	if _, hasOut := emit[outField]; hasOut {
-		emit = copyWithout(emit, outField)
-	}
+	sort.Strings(aliasKeys)
+
 	fmJSON, err := json.Marshal(emit)
 	if err != nil {
 		panic(fmt.Errorf("cuetemplate: encoding frontmatter: %w", err))
@@ -172,36 +180,11 @@ func buildSource(fm map[string]any, expr string) string {
 	src = append(src, []byte(fmField+": ")...)
 	src = append(src, fmJSON...)
 	src = append(src, '\n')
-	// Emit top-level aliases in a stable order so the generated
-	// source is byte-deterministic across runs.
-	keys := make([]string, 0, len(fm))
-	for k := range fm {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if !identRE.MatchString(k) || reservedAliases[k] {
-			continue
-		}
+	for _, k := range aliasKeys {
 		src = append(src, []byte(fmt.Sprintf("%s: %s.%s\n",
 			k, fmField, k))...)
 	}
 	src = append(src, []byte(fmt.Sprintf("%s: %s\n",
 		outField, expr))...)
 	return string(src)
-}
-
-// copyWithout returns a shallow copy of m without the named
-// key. Used by buildSource to drop synthetic field names from
-// the JSON-emitted frontmatter so they cannot shadow the
-// renderer's scaffolding.
-func copyWithout(m map[string]any, drop string) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		if k == drop {
-			continue
-		}
-		out[k] = v
-	}
-	return out
 }

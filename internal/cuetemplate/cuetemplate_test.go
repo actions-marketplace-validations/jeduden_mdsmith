@@ -176,9 +176,9 @@ func TestTemplate_Render_OutFieldCollisionDoesNotShadow(t *testing.T) {
 	tpl, err := Compile(`"\(id)"`)
 	require.NoError(t, err)
 	got, err := tpl.Render(map[string]any{
-		"id":                 "MDS001",
-		"mdsmithTemplateOut": "should-be-ignored",
-		"fm":                 "should-also-be-ignored",
+		"id":                   "MDS001",
+		"mdsmith_template_out": "should-be-ignored",
+		"fm":                   "should-also-be-ignored",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "MDS001", got)

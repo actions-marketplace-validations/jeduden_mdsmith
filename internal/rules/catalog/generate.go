@@ -39,6 +39,15 @@ func renderTemplate(params map[string]string, entries []fileEntry, columns ...ma
 	rowExpr := strings.TrimSpace(params["row-expr"])
 	footer := params["footer"]
 
+	// Defensive: validateCatalogDirective rejects empty
+	// row/row-expr before Generate runs, but a direct caller
+	// that bypasses validation would otherwise produce blank
+	// rows here. Fail loudly instead.
+	if strings.TrimSpace(row) == "" && rowExpr == "" {
+		return "", fmt.Errorf(
+			"renderTemplate called without row or row-expr")
+	}
+
 	var rowTpl *cuetemplate.Template
 	if rowExpr != "" {
 		var err error

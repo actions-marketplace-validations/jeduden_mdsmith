@@ -368,14 +368,25 @@ func CheckCoverageMatrix(root string) (string, error) {
 // failure points at where the file fell out of sync without
 // dumping the whole diff. Full re-render is one command away;
 // the goal here is enough signal to act on, not a code review.
+//
+// Caller contract: have != want. CheckCoverageMatrix returns
+// the "" no-drift path before calling here, so the function
+// never sees byte-equal inputs in production.
 func formatCoverageDrift(have, want string) string {
+	const hint = "run `mdsmith-release sync-coverage-matrix` to regenerate"
+	if have == want {
+		// Defensive only: contract violation — caller should
+		// have returned no-drift. Avoid the misleading
+		// "file has 1 lines, expected 1" message that the
+		// length-diff fallback below would otherwise emit.
+		return ""
+	}
 	hLines := strings.Split(have, "\n")
 	wLines := strings.Split(want, "\n")
 	n := len(hLines)
 	if len(wLines) < n {
 		n = len(wLines)
 	}
-	const hint = "run `mdsmith-release sync-coverage-matrix` to regenerate"
 	for i := 0; i < n; i++ {
 		if hLines[i] != wLines[i] {
 			return fmt.Sprintf(
