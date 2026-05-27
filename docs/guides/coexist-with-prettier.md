@@ -34,10 +34,13 @@ zero diffs.
 | Cross-file link and anchor integrity | mdsmith  |
 | Readability budgets                  | mdsmith  |
 
-Under Prettier's default `--prose-wrap preserve`,
-Prettier leaves an mdsmith-aligned table's column
-widths intact. Running mdsmith first, Prettier last
-converges in one round.
+Prettier's `--prose-wrap preserve` (the default)
+controls paragraph reflow only, not table layout.
+Table column widths converge in one round because
+Prettier's own table formatter pads to the same column
+widths mdsmith's `table-format` rule does — as long as
+neither tool has been reconfigured away from its
+defaults.
 
 ## Prettier config
 
@@ -49,8 +52,9 @@ common settings:
   (both default to 80 columns).
 - Prettier's `tabWidth: 2` matches `list-indent`'s
   default of `spaces: 2`.
-- Prettier's `-` unordered-list marker matches
-  `list-marker-style: dash`.
+- Prettier normalizes unordered-list markers to `-`.
+  `list-marker-style` (MDS045) is opt-in; if you
+  enable it, set `style: dash` so the two tools agree.
 
 If you raise mdsmith's `line-length.max`, raise
 Prettier's `printWidth` to the same number — otherwise
