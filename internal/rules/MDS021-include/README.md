@@ -41,12 +41,13 @@ for details.
 
 ## Parameters
 
-| Parameter           | Required | Default  | Description                                       |
-| ------------------- | -------- | -------- | ------------------------------------------------- |
-| `file`              | yes      | --       | Relative path to include                          |
-| `strip-frontmatter` | no       | `"true"` | Remove YAML frontmatter                           |
-| `wrap`              | no       | --       | Wrap in code fence (value = language)             |
-| `heading-level`     | no       | --       | `"absolute"`: shift headings to nest under parent |
+| Parameter           | Required | Default  | Description                                                                                |
+| ------------------- | -------- | -------- | ------------------------------------------------------------------------------------------ |
+| `file`              | yes      | --       | Relative path to include                                                                   |
+| `extract`           | no       | --       | Dotted path through the extract projection of a kind-typed `file:`. Splices one leaf value |
+| `strip-frontmatter` | no       | `"true"` | Remove YAML frontmatter (incompatible with `extract:`)                                     |
+| `wrap`              | no       | --       | Wrap in code fence (value = language)                                                      |
+| `heading-level`     | no       | --       | `"absolute"`: shift headings to nest under parent (incompatible with `extract:`)           |
 
 ## Link Adjustment
 
@@ -182,6 +183,34 @@ See [rules](../internal/rules/) for details.
 <?/include?>
 ```
 
+### Extract a Typed Value
+
+`extract:` walks the JSON projection
+`mdsmith extract` would produce for a kind-typed
+`file:` target. The value is a dotted path. The
+directive splices the leaf:
+
+```markdown
+<?include
+file: docs/brand/messaging.md
+extract: tagline.text
+?>
+Markdown, fast.
+<?/include?>
+```
+
+A wrapper object with one content key (`text`,
+`code`, `items`, or `rows`) resolves to the inner
+value. So `extract: tagline` is the same as
+`extract: tagline.text`. Multi-key wrappers are
+ambiguous: the directive surfaces a lint error
+listing the keys. Frontmatter scalars sit under the
+`frontmatter` key: `extract: frontmatter.title`.
+
+`extract:` is incompatible with `strip-frontmatter:`
+and `heading-level:`. The projection returns one
+scalar, so those parameters do not apply.
+
 ### Bad — Outdated Content
 
 ```markdown
@@ -194,17 +223,23 @@ Outdated content
 
 ## Diagnostics
 
-| Condition             | Message                                                            |
-| --------------------- | ------------------------------------------------------------------ |
-| content mismatch      | generated section is out of date                                   |
-| missing file          | include file "x.md" not found                                      |
-| no file param         | include directive missing required "file" parameter                |
-| absolute path         | include directive has absolute file path                           |
-| escapes root          | include file path escapes project root                             |
-| no root for dotdot    | include file path contains ".." but project root is not configured |
-| invalid heading-level | include directive "heading-level" must be "absolute"               |
-| cyclic include        | cyclic include: a.md -> b.md -> a.md                               |
-| depth exceeded        | include depth exceeds maximum (10)                                 |
+| Condition              | Message                                                                 |
+| ---------------------- | ----------------------------------------------------------------------- |
+| content mismatch       | generated section is out of date                                        |
+| missing file           | include file "x.md" not found                                           |
+| no file param          | include directive missing required "file" parameter                     |
+| absolute path          | include directive has absolute file path                                |
+| escapes root           | include file path escapes project root                                  |
+| no root for dotdot     | include file path contains ".." but project root is not configured      |
+| invalid heading-level  | include directive "heading-level" must be "absolute"                    |
+| empty extract          | include directive "extract" value is empty                              |
+| extract + sfm          | include directive "extract" cannot be combined with "strip-frontmatter" |
+| extract + hl           | include directive "extract" cannot be combined with "heading-level"     |
+| extract miss           | extract: missing key "x" in extract projection                          |
+| extract no kind        | extract: "x.md" has no resolved kind; cannot project a typed value      |
+| extract not conformant | extract: target file does not conform to its schema: ...                |
+| cyclic include         | cyclic include: a.md -> b.md -> a.md                                    |
+| depth exceeded         | include depth exceeds maximum (10)                                      |
 
 ## Pattern
 

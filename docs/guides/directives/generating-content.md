@@ -280,6 +280,76 @@ chains deeper than 10 levels are rejected:
 cyclic include: a.md -> b.md -> a.md
 ```
 
+### Include a typed value
+
+When the target file is kind-typed, `extract:` walks
+the same JSON projection
+[`mdsmith extract`](../../reference/cli/extract.md)
+produces and splices a single leaf. The value is a
+dotted path: `frontmatter.title` reaches the title
+field; `tagline.text` reaches the paragraph under
+the `## Tagline` heading; `headline.code` reaches a
+fenced code block.
+
+A paragraph section. The target's
+`## Tagline` heading projects to `{"tagline":
+{"text": "..."}}`, so the path `tagline.text` lands
+on the prose:
+
+```markdown
+<?include
+file: docs/brand/messaging.md
+extract: tagline.text
+?>
+Markdown, fast.
+<?/include?>
+```
+
+A fenced code block. The `## Headline` section
+projects to `{"headline": {"code": "..."}}`. Use
+`headline.code` to splice the code body verbatim:
+
+```markdown
+<?include
+file: docs/brand/messaging.md
+extract: headline.code
+?>
+Mark*down*, smithed.
+<?/include?>
+```
+
+A frontmatter scalar. Every kind-typed file's
+projection carries a top-level `frontmatter` object
+beside the body sections. The path is
+`frontmatter.<key>`:
+
+```markdown
+<?include
+file: docs/brand/messaging.md
+extract: frontmatter.title
+?>
+mdsmith product messaging
+<?/include?>
+```
+
+Single-content-key shortcut. A leaf object that
+carries exactly one of `text`, `code`, `items`, or
+`rows` resolves to the inner value, so
+`extract: tagline` and `extract: tagline.text`
+splice the same content. Multi-key wrappers (the
+JSON projection of a section with several content
+entries) are ambiguous and surface as a lint error
+with the available keys listed.
+
+Restrictions. `extract:` is scalar-only for now —
+combining it with `strip-frontmatter:` or
+`heading-level:` is rejected. A target file with no
+resolved kind is rejected too: without a schema there
+is no projection to walk. A target whose body fails
+`required-structure` surfaces the same diagnostic
+`mdsmith check` would raise on the target, anchored
+to the include directive's call site.
+
 For full parameter reference, see
 [MDS021 include](../../../internal/rules/MDS021-include/README.md).
 
