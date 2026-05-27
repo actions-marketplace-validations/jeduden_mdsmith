@@ -159,12 +159,11 @@ Failure modes:
 
 ### CUE-expression rows via `row-expr`
 
-`row` interpolates `{field}` placeholders for scalar
-fields. To project a list-typed field, use `row-expr`.
-The value is a CUE expression evaluated against the
-matched file's front matter. Every identifier-safe key
-is bound at top-level scope. The expression must return
-a string.
+`row` interpolates `{field}` placeholders against
+scalar fields only. `row-expr` is the list-typed
+alternative. It compiles a CUE expression once and
+evaluates it per matched file. Every
+identifier-safe key binds at top-level scope.
 
 ```yaml
 row-expr: |
@@ -176,10 +175,11 @@ row-expr: |
   )
 ```
 
-`strings.Join` is preimported. CUE has no infix ternary;
-pick between two strings with the `[ ... ][0]`
-list-comprehension idiom above. `row` and `row-expr` are
-mutually exclusive. `columns:` only applies to `row`.
+The `strings` package is preimported. CUE has no
+infix ternary; the `[if cond {a}, if !cond {b}][0]`
+idiom selects between two strings on a boolean.
+`row` and `row-expr` are mutually exclusive;
+`columns:` applies to `row` only.
 
 ### Minimal mode
 
