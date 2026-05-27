@@ -35,6 +35,24 @@ import (
 // via CUE's quoted-label reference syntax (\("my-key")).
 var identRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
+// cueKeywords are reserved CUE identifiers that cannot appear
+// as bare labels. A frontmatter key whose name collides with
+// one of these is emitted in quoted form so the generated CUE
+// source stays syntactically valid; the user must reach those
+// fields via CUE's quoted-label reference syntax.
+var cueKeywords = map[string]bool{
+	"package": true, "import": true, "for": true, "in": true,
+	"if": true, "let": true, "true": true, "false": true,
+	"null": true, "_": true,
+}
+
+// isBareLabel reports whether k can be emitted as a bare CUE
+// identifier — it must match identRE and must not collide
+// with a reserved keyword.
+func isBareLabel(k string) bool {
+	return identRE.MatchString(k) && !cueKeywords[k]
+}
+
 // outField is the synthetic field name used to hold the
 // compiled expression's result. No leading underscore: hidden
 // fields are not reachable via LookupPath. The name is
@@ -54,11 +72,11 @@ type Template struct {
 // against a specific frontmatter map.
 func Compile(expr string) (*Template, error) {
 	if expr == "" {
-		return nil, fmt.Errorf("empty CUE expression")
+		return nil, fmt.Errorf("empty cue expression")
 	}
 	if _, err := parser.ParseFile("expr",
 		fmt.Sprintf("%s: %s", outField, expr)); err != nil {
-		return nil, fmt.Errorf("invalid CUE expression: %w", err)
+		return nil, fmt.Errorf("invalid cue expression: %w", err)
 	}
 	return &Template{expr: expr}, nil
 }
@@ -74,12 +92,12 @@ func (t *Template) Render(fm map[string]any) (string, error) {
 	src := buildSource(fm, t.expr)
 	val := cuecontext.New().CompileString(src)
 	if err := val.Err(); err != nil {
-		return "", fmt.Errorf("evaluating CUE expression: %w", err)
+		return "", fmt.Errorf("evaluating cue expression: %w", err)
 	}
 	out := val.LookupPath(cue.ParsePath(outField))
 	if out.Kind() != cue.StringKind {
 		return "", fmt.Errorf(
-			"CUE expression must evaluate to a string, got %s",
+			"cue expression must evaluate to a string, got %s",
 			out.Kind())
 	}
 	s, _ := out.String()
@@ -109,7 +127,7 @@ func buildSource(fm map[string]any, expr string) string {
 			panic(fmt.Errorf("cuetemplate: encoding frontmatter %q: %w", k, err))
 		}
 		var label string
-		if identRE.MatchString(k) {
+		if isBareLabel(k) {
 			label = k
 		} else {
 			label = fmt.Sprintf("%q", k)

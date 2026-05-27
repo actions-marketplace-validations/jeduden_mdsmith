@@ -29,7 +29,8 @@ category: '"accessibility" | "code" | "directive" | "heading" | "line" | "link" 
      cover. These per-rule front-matter blocks are the source
      of truth — `mdsmith-release sync-coverage-matrix` renders
      docs/research/markdownlint-coverage/README.md from them.
-     Set the key to `null` for tools that have no analog rule.
+     Set the key to `[]` (empty list) for tools that have no
+     analog rule; the schema no longer accepts `null` here.
      Repeat the description verbatim. Use prescriptive voice,
      present tense: "Headings must ..." not "Checks that ...".
      The `nature` key labels the rule's kind. Exactly one of:
@@ -127,7 +128,7 @@ rules:
      joined with commas; "(partial)" suffixes a partial cover. The
      matching link-reference definition follows the bullet block.
      Omit the Markdownlint bullet (and the link refs) for mdsmith-only
-     rules with `markdownlint: null` in front matter.
+     rules with `markdownlint: []` in front matter.
      Add a Concept bullet when the rule has a dedicated concept page:
        - **Concept**: [NAME](../../../docs/background/concepts/NAME.md)
      Omit the Concept bullet when no concept page applies. -->

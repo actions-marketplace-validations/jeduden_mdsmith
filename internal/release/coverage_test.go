@@ -134,41 +134,10 @@ func TestApplyCoverageMatrix_PropagatesReadError(t *testing.T) {
 	assert.Contains(t, err.Error(), "reading existing matrix")
 }
 
-// TestApplyCoverageMatrix_PropagatesMkdirError drives the
-// MkdirAll error path: make an intermediate directory of the
-// target path read-only so the MkdirAll call below it fails
-// even though ReadFile still reports IsNotExist for the leaf.
-func TestApplyCoverageMatrix_PropagatesMkdirError(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("chmod-based readonly test is unreliable as root")
-	}
-	root := t.TempDir()
-	intermediate := filepath.Join(root, "docs", "research")
-	require.NoError(t, os.MkdirAll(intermediate, 0o755))
-	require.NoError(t, os.Chmod(intermediate, 0o555))
-	t.Cleanup(func() { _ = os.Chmod(intermediate, 0o755) })
-	_, err := ApplyCoverageMatrix(root)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "creating output dir")
-}
-
-// TestApplyCoverageMatrix_PropagatesWriteError drives the
-// WriteFile error path: pre-create the target file as
-// read-only so ReadFile succeeds (returning stale content
-// distinct from the generator output) and the subsequent
-// WriteFile cannot overwrite it.
-func TestApplyCoverageMatrix_PropagatesWriteError(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("chmod-based readonly test is unreliable as root")
-	}
-	root := t.TempDir()
-	path := filepath.Join(root, CoverageMatrixFile)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte("stale\n"), 0o444))
-	_, err := ApplyCoverageMatrix(root)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "writing coverage matrix")
-}
+// The chmod-based tests that drive ApplyCoverageMatrix's
+// MkdirAll and WriteFile error branches live in
+// coverage_chmod_unix_test.go (build-tagged !windows)
+// because os.Geteuid is not available on Windows.
 
 // TestFormatCoverageDrift_HaveLongerThanWant drives the n =
 // len(wLines) branch (when on-disk has more lines than the

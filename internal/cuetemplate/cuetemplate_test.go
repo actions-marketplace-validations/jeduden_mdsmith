@@ -13,7 +13,7 @@ import (
 func TestCompile_RejectsEmptyExpression(t *testing.T) {
 	_, err := Compile("")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "empty CUE expression")
+	assert.Contains(t, err.Error(), "empty cue expression")
 }
 
 // TestCompile_RejectsSyntaxError verifies that syntactically
@@ -22,7 +22,7 @@ func TestCompile_RejectsEmptyExpression(t *testing.T) {
 func TestCompile_RejectsSyntaxError(t *testing.T) {
 	_, err := Compile("strings.Join([for x in")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid CUE expression")
+	assert.Contains(t, err.Error(), "invalid cue expression")
 }
 
 // TestTemplate_Render_ScalarInterpolation exercises the
@@ -133,6 +133,25 @@ func TestTemplate_Render_NonIdentifierKeySilentlyDropped(t *testing.T) {
 	got, err := tpl.Render(map[string]any{
 		"id":                "MDS001",
 		"markdownlint-cell": "MD013 line-length",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "MDS001", got)
+}
+
+// TestTemplate_Render_CUEKeywordKeyIsQuoted ensures a
+// frontmatter key that collides with a CUE reserved word is
+// emitted as a quoted label, so the generated CUE source
+// stays syntactically valid even when the expression does
+// not reference that field. Without this guard a key like
+// `for` or `import` would produce "missing ','" parse
+// errors at every Render call.
+func TestTemplate_Render_CUEKeywordKeyIsQuoted(t *testing.T) {
+	tpl, err := Compile(`"\(id)"`)
+	require.NoError(t, err)
+	got, err := tpl.Render(map[string]any{
+		"id":     "MDS001",
+		"for":    "reserved-1",
+		"import": "reserved-2",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "MDS001", got)

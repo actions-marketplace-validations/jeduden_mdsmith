@@ -242,7 +242,7 @@ func validateRowParams(
 	}
 	if (hasHeader || hasFooter) && !hasRow && !hasRowExpr {
 		return []lint.Diagnostic{makeDiag(filePath, line,
-			`generated section template missing required "row" key`)}
+			`generated section template missing required "row" or "row-expr" key`)}
 	}
 	if hasRow && strings.TrimSpace(params["row"]) == "" {
 		return []lint.Diagnostic{makeDiag(filePath, line,

@@ -33,10 +33,14 @@ type RuleInfo struct {
 // covers, plus that linter's default-on/off state for the rule. Partial is
 // true when the mdsmith rule implements only part of the peer check.
 //
-// `default:` is required by the proto schema (validated by MDS020), so
-// rule READMEs cannot omit it. Once MDS020 has accepted a README the
-// Go YAML unmarshal cannot decode a missing `default:` key as `false` —
-// the schema rejects the file before this struct sees it.
+// Go's YAML decoder does not enforce the proto schema; a missing
+// `default:` key decodes to the bool zero value (false). The proto
+// schema (validated by MDS020 in `mdsmith check`) makes `default:`
+// required, so the repo's CI gate catches a missing key before it
+// reaches a downstream generator. Tools that walk the embedded rule
+// metadata without running `mdsmith check` first should treat
+// `Default == false` cautiously when reviewing a freshly authored
+// rule README.
 //
 // The per-rule front-matter blocks are the source of truth;
 // docs/research/markdownlint-coverage/README.md is regenerated from

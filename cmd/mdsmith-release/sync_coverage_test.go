@@ -37,12 +37,15 @@ func TestRunSyncCoverageMatrixApply_WritesWhenMissing(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestRunSyncCoverageMatrixCheck_ReportsDriftExits1(t *testing.T) {
+func TestRunSyncCoverageMatrixCheck_PropagatesReadError(t *testing.T) {
 	// Empty root: the target file is missing, so
 	// release.CheckCoverageMatrix surfaces a read error and
 	// runSyncCoverageMatrixCheck returns a non-zero exit code
 	// via reportError. This drives the err-handling branch the
-	// clean-tree test does not reach.
+	// clean-tree test does not reach. The drift branch (where
+	// the file exists but its content differs from the
+	// generator's output) is covered separately by
+	// TestRunSyncCoverageMatrixCheck_DriftAfterTamper.
 	root := t.TempDir()
 	exit := runSyncCoverageMatrixCheck(root)
 	assert.NotEqual(t, 0, exit)

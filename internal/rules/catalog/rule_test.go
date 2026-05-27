@@ -427,7 +427,7 @@ header: |
 	r := &Rule{}
 	diags := r.Check(f)
 	expectDiags(t, diags, 1)
-	expectDiagMsg(t, diags, `generated section template missing required "row" key`)
+	expectDiagMsg(t, diags, `generated section template missing required "row" or "row-expr" key`)
 }
 
 func TestRendering_EmptyValueGetsTrailingNewline(t *testing.T) {
@@ -1374,7 +1374,7 @@ func TestCheck_TemplateErrors(t *testing.T) {
 				"header: \"| T |\"\n?>\n<?/catalog?>\n",
 			fs:        fstest.MapFS{},
 			wantCount: 1,
-			wantMsg:   `missing required "row" key`,
+			wantMsg:   `missing required "row" or "row-expr" key`,
 		},
 		{
 			name: "footer without row",
@@ -1382,7 +1382,7 @@ func TestCheck_TemplateErrors(t *testing.T) {
 				"footer: \"---\"\n?>\n<?/catalog?>\n",
 			fs:        fstest.MapFS{},
 			wantCount: 1,
-			wantMsg:   `missing required "row" key`,
+			wantMsg:   `missing required "row" or "row-expr" key`,
 		},
 		{
 			name: "header and footer without row",
@@ -1390,7 +1390,7 @@ func TestCheck_TemplateErrors(t *testing.T) {
 				"header: \"| Title |\"\nfooter: \"---\"\n?>\n<?/catalog?>\n",
 			fs:        fstest.MapFS{},
 			wantCount: 1,
-			wantMsg:   `missing required "row" key`,
+			wantMsg:   `missing required "row" or "row-expr" key`,
 		},
 		{
 			name: "invalid template syntax",
@@ -2625,7 +2625,7 @@ footer: "---"
 	r := &Rule{}
 	diags := r.Check(f)
 	expectDiags(t, diags, 1)
-	expectDiagMsg(t, diags, `generated section template missing required "row" key`)
+	expectDiagMsg(t, diags, `generated section template missing required "row" or "row-expr" key`)
 }
 
 func TestIntegration_EmptyFallbackWithFullTemplate(t *testing.T) {

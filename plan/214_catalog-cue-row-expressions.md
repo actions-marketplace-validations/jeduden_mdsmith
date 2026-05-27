@@ -3,12 +3,13 @@ id: 214
 title: "MDS019 catalog: CUE-expression row templates"
 status: "🔳"
 summary: >-
-  Let `<?catalog?>` row/header/footer templates be CUE
-  expressions evaluated against frontmatter, in addition
-  to the existing `{path}` placeholder syntax. Unlocks
-  list comprehension, ternary, and string interpolation
-  so a structured field can render into a generated
-  table without an external Go helper.
+  Let `<?catalog?>` row templates be CUE expressions
+  evaluated against frontmatter, in addition to the
+  existing `{path}` placeholder syntax. Unlocks list
+  comprehension, ternary, and string interpolation so a
+  structured field can render into a generated table
+  without an external Go helper. `header:`/`footer:`
+  stay placeholder-only (they emit literal text today).
 model: sonnet
 depends-on: []
 ---
@@ -127,12 +128,20 @@ capability for free.
    four peer cells, status emoji per entry, comma-join
    across multi-entry peer lists.
 
-   Three follow-on changes were needed: schema
-   `| null` → `[]` (done); `partial` field required
-   not optional, so the row-expr reads `m.partial`
-   without `_|_` guards; and the `row-expr` source
-   line-broken to satisfy MDS001. Migration is staged
-   across commits; the page swap is the terminal step.
+   Three follow-on changes are needed before the page
+   swap.
+
+   First, schema `| null` → `[]` (done).
+
+   Second, the proto schema must require `partial: bool`
+   (currently `partial?: bool | *false`). Every existing
+   entry then gets `partial: false` explicitly
+   backfilled, so the row-expr reads `m.partial`
+   without an `m.partial | *false` guard (TODO).
+
+   Third, the `row-expr` source line-broken to satisfy
+   MDS001 (TODO). Migration is staged; the page swap is
+   the terminal step.
 
 ## Acceptance Criteria
 
