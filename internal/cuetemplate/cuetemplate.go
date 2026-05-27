@@ -51,10 +51,17 @@ var identRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 // `strings.Join` in user expressions. Frontmatter keys that
 // collide with these are still reachable through the `fm`
 // struct (e.g. `fm.strings`).
+//
+// Extend this list if a future rule README adopts a key
+// whose name collides with a CUE operator-keyword (`div`,
+// `mod`, `quo`, `rem`) or a new standard-library package
+// imported by buildSource. The CUE spec changes rarely, but
+// the list is hand-curated rather than introspected.
 var reservedAliases = map[string]bool{
 	"package": true, "import": true, "for": true, "in": true,
 	"if": true, "let": true, "true": true, "false": true,
 	"null": true, "_": true, "strings": true,
+	"div": true, "mod": true, "quo": true, "rem": true,
 	outField: true, "fm": true,
 }
 
@@ -71,9 +78,15 @@ const outField = "mdsmithTemplateOut"
 const fmField = "fm"
 
 // Template is a syntactically validated CUE expression body,
-// ready to evaluate against successive frontmatter maps.
+// ready to evaluate against successive frontmatter maps. The
+// CUE context is created once at Compile and reused across
+// Render calls — cuelang's *cue.Context is safe for
+// concurrent use and reusing it avoids the per-Render
+// allocation when the same Template is applied to a catalog
+// of many matched files.
 type Template struct {
 	expr string
+	ctx  *cue.Context
 }
 
 // Compile parses the expression syntactically and returns a
@@ -88,7 +101,7 @@ func Compile(expr string) (*Template, error) {
 		fmt.Sprintf("%s: %s", outField, expr)); err != nil {
 		return nil, fmt.Errorf("invalid cue expression: %w", err)
 	}
-	return &Template{expr: expr}, nil
+	return &Template{expr: expr, ctx: cuecontext.New()}, nil
 }
 
 // Render evaluates the compiled expression against fm and
@@ -101,7 +114,7 @@ func (t *Template) Render(fm map[string]any) (string, error) {
 		fm = map[string]any{}
 	}
 	src := buildSource(fm, t.expr)
-	val := cuecontext.New().CompileString(src)
+	val := t.ctx.CompileString(src)
 	if err := val.Err(); err != nil {
 		return "", fmt.Errorf("evaluating cue expression: %w", err)
 	}
@@ -135,7 +148,20 @@ func (t *Template) Render(fm map[string]any) (string, error) {
 // failure indicates a programming bug upstream and the panic
 // is the correct response.
 func buildSource(fm map[string]any, expr string) string {
-	fmJSON, err := json.Marshal(fm)
+	// Filter the synthetic field names out of the JSON-emitted
+	// map so a real frontmatter key named `fm` or
+	// `mdsmithTemplateOut` cannot shadow the scaffolding the
+	// renderer relies on. Collisions are extremely unlikely
+	// (the name is deliberately weird), but filtering is
+	// cheaper than asserting the contract elsewhere.
+	emit := fm
+	if _, hasFM := fm[fmField]; hasFM {
+		emit = copyWithout(fm, fmField)
+	}
+	if _, hasOut := emit[outField]; hasOut {
+		emit = copyWithout(emit, outField)
+	}
+	fmJSON, err := json.Marshal(emit)
 	if err != nil {
 		panic(fmt.Errorf("cuetemplate: encoding frontmatter: %w", err))
 	}
@@ -163,4 +189,19 @@ func buildSource(fm map[string]any, expr string) string {
 	src = append(src, []byte(fmt.Sprintf("%s: %s\n",
 		outField, expr))...)
 	return string(src)
+}
+
+// copyWithout returns a shallow copy of m without the named
+// key. Used by buildSource to drop synthetic field names from
+// the JSON-emitted frontmatter so they cannot shadow the
+// renderer's scaffolding.
+func copyWithout(m map[string]any, drop string) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if k == drop {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }

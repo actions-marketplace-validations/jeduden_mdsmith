@@ -148,6 +148,42 @@ func TestTemplate_Render_NonIdentifierKeyReachableViaFM(t *testing.T) {
 	assert.Equal(t, "MD013 line-length", got)
 }
 
+// TestTemplate_Render_FMDirectListAccess exercises the
+// headline use case for the fm-struct indirection: indexing
+// directly into a list-typed frontmatter field without
+// going through the top-level alias. The coverage matrix
+// uses this shape via `\(fm.markdownlint[0].id)` when a
+// rule's peer-mapping has a single entry.
+func TestTemplate_Render_FMDirectListAccess(t *testing.T) {
+	tpl, err := Compile(`"\(fm.markdownlint[0].id) \(fm.markdownlint[0].name)"`)
+	require.NoError(t, err)
+	got, err := tpl.Render(map[string]any{
+		"markdownlint": []any{
+			map[string]any{"id": "MD013", "name": "line-length"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "MD013 line-length", got)
+}
+
+// TestTemplate_Render_OutFieldCollisionDoesNotShadow pins
+// the buildSource invariant that a frontmatter key whose
+// name collides with the synthetic outField is filtered out
+// before JSON emission. Without the filter the synthetic
+// field would either silently override the data or create a
+// self-reference cycle.
+func TestTemplate_Render_OutFieldCollisionDoesNotShadow(t *testing.T) {
+	tpl, err := Compile(`"\(id)"`)
+	require.NoError(t, err)
+	got, err := tpl.Render(map[string]any{
+		"id":                 "MDS001",
+		"mdsmithTemplateOut": "should-be-ignored",
+		"fm":                 "should-also-be-ignored",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "MDS001", got)
+}
+
 // TestTemplate_Render_StringsKeyDoesNotShadowImport keeps
 // the `strings` package usable from row-expr even when a
 // matched file's front matter happens to declare a key

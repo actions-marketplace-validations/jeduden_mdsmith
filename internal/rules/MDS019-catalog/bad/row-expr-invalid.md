@@ -2,7 +2,7 @@
 diagnostics:
   - line: 3
     column: 1
-    message: 'generated section directive has invalid "row-expr" expression: invalid cue expression: expected operand, found ''}'''
+    message-prefix: 'generated section directive has invalid "row-expr" expression: invalid cue expression'
 ---
 # Row-Expr With Invalid CUE
 

@@ -94,6 +94,11 @@ type expectedDiag struct {
 	Line    int    `yaml:"line"`
 	Column  int    `yaml:"column"`
 	Message string `yaml:"message"`
+	// MessagePrefix is an alternative to Message for diagnostics
+	// whose tail comes from an upstream library (CUE parser, YAML
+	// decoder). The fixture asserts that the actual message
+	// starts with this string. Mutually exclusive with Message.
+	MessagePrefix string `yaml:"message-prefix"`
 }
 
 type fixtureFrontMatter struct {
@@ -537,8 +542,15 @@ func assertExpectedDiags(
 			"diagnostic %d line mismatch", i)
 		assert.Equal(t, exp.Column, d.Column,
 			"diagnostic %d column mismatch", i)
-		assert.Equal(t, exp.Message, d.Message,
-			"diagnostic %d message mismatch", i)
+		if exp.MessagePrefix != "" {
+			assert.True(t,
+				strings.HasPrefix(d.Message, exp.MessagePrefix),
+				"diagnostic %d message %q does not start with %q",
+				i, d.Message, exp.MessagePrefix)
+		} else {
+			assert.Equal(t, exp.Message, d.Message,
+				"diagnostic %d message mismatch", i)
+		}
 	}
 }
 
