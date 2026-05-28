@@ -336,6 +336,41 @@ func TestCheck_ExtractWithHeadingLevel(t *testing.T) {
 		`"extract" cannot be combined with "heading-level"`)
 }
 
+// TestCheck_ExtractWithWrap and TestCheck_ExtractWithSourceDir guard
+// the silently-dropped-param failure mode: generateIncludeContent
+// returns the projected leaf directly for `extract:` directives and
+// never runs the wrap / source-dir pipeline. Accepting these params
+// without a diagnostic would emit unfenced code into the host body
+// (or unrewritten relative paths), so the validator rejects the
+// combination instead.
+func TestCheck_ExtractWithWrap(t *testing.T) {
+	fsys := fstest.MapFS{
+		"data.md": {Data: []byte("Hello world\n")},
+	}
+	src := "# Doc\n\n<?include\nfile: data.md\n" +
+		"extract: usage.code\n" +
+		"wrap: \"bash\"\n?>\nold\n<?/include?>\n"
+	f := newTestFile(t, "doc.md", src, fsys)
+	r := &Rule{}
+	diags := r.Check(f)
+	expectDiagMsg(t, diags,
+		`"extract" cannot be combined with "wrap"`)
+}
+
+func TestCheck_ExtractWithSourceDir(t *testing.T) {
+	fsys := fstest.MapFS{
+		"data.md": {Data: []byte("Hello world\n")},
+	}
+	src := "# Doc\n\n<?include\nfile: data.md\n" +
+		"extract: tagline.text\n" +
+		"source-dir: \"some/dir\"\n?>\nold\n<?/include?>\n"
+	f := newTestFile(t, "doc.md", src, fsys)
+	r := &Rule{}
+	diags := r.Check(f)
+	expectDiagMsg(t, diags,
+		`"extract" cannot be combined with "source-dir"`)
+}
+
 func TestCheck_ExtractEmptyValue(t *testing.T) {
 	fsys := fstest.MapFS{
 		"data.md": {Data: []byte("Hello world\n")},

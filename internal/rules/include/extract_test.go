@@ -205,19 +205,48 @@ func TestProjectExtractValue_Success(t *testing.T) {
 // =====================================================================
 
 func TestFormatExtractValue_Nil(t *testing.T) {
-	assert.Equal(t, "", formatExtractValue(nil))
+	got, err := formatExtractValue(nil)
+	require.NoError(t, err)
+	assert.Equal(t, "", got)
 }
 
 func TestFormatExtractValue_String(t *testing.T) {
-	assert.Equal(t, "hello", formatExtractValue("hello"))
+	got, err := formatExtractValue("hello")
+	require.NoError(t, err)
+	assert.Equal(t, "hello", got)
 }
 
 func TestFormatExtractValue_List(t *testing.T) {
-	got := formatExtractValue([]any{"one", "two", "three"})
+	got, err := formatExtractValue([]any{"one", "two", "three"})
+	require.NoError(t, err)
 	assert.Equal(t, "- one\n- two\n- three", got)
 }
 
 func TestFormatExtractValue_NumberFallthrough(t *testing.T) {
-	assert.Equal(t, "42", formatExtractValue(42))
-	assert.Equal(t, "true", formatExtractValue(true))
+	gotInt, err := formatExtractValue(42)
+	require.NoError(t, err)
+	assert.Equal(t, "42", gotInt)
+	gotBool, err := formatExtractValue(true)
+	require.NoError(t, err)
+	assert.Equal(t, "true", gotBool)
+}
+
+// TestFormatExtractValue_MapRejected guards against a future
+// regression where a map leaf would render via fmt.Sprint as Go
+// syntax ("map[k:v]") and be spliced into a host README. A leaf at
+// the path the user requested must be a scalar or list; objects are
+// the user's signal to add another path segment.
+func TestFormatExtractValue_MapRejected(t *testing.T) {
+	_, err := formatExtractValue(map[string]any{"a": 1, "b": 2})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "leaf is an object")
+	// Keys are sorted so the diagnostic is deterministic across runs.
+	assert.Contains(t, err.Error(), "[a b]")
+}
+
+func TestFormatExtractValue_UnsupportedType(t *testing.T) {
+	type unknown struct{ X int }
+	_, err := formatExtractValue(unknown{X: 1})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported type")
 }

@@ -157,6 +157,17 @@ func validateIncludeDirective(
 			return []lint.Diagnostic{makeDiag(filePath, line,
 				`include directive "extract" cannot be combined with "heading-level"`)}
 		}
+		// generateIncludeContent returns the projected leaf directly
+		// for extract: directives and never runs the wrap / source-dir
+		// pipeline, so silently accepting these params would drop them.
+		if _, hasWrap := params["wrap"]; hasWrap {
+			return []lint.Diagnostic{makeDiag(filePath, line,
+				`include directive "extract" cannot be combined with "wrap"`)}
+		}
+		if _, hasSD := params["source-dir"]; hasSD {
+			return []lint.Diagnostic{makeDiag(filePath, line,
+				`include directive "extract" cannot be combined with "source-dir"`)}
+		}
 	}
 
 	return nil

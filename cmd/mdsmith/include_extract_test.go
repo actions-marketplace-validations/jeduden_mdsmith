@@ -41,7 +41,11 @@ func TestInstallIncludeExtractProjector_EmptyPathClearsProjector(t *testing.T) {
 // projectIncludeExtract, which is fully covered by the
 // TestProjectIncludeExtract_* tests below.
 func TestInstallIncludeExtractProjector_NonEmptyPathDoesNotPanic(t *testing.T) {
-	t.Cleanup(func() { include.SetExtractProjector(nil) })
+	prev := includeExtractCfgPath
+	t.Cleanup(func() {
+		include.SetExtractProjector(nil)
+		includeExtractCfgPath = prev
+	})
 	installIncludeExtractProjector("/tmp/does-not-need-to-exist.yml")
 	// No assertion beyond "did not panic"; the projector body is the
 	// single call to projectIncludeExtract, covered separately.
@@ -296,7 +300,7 @@ func TestComposeTargetSchema_ApplySettingsError(t *testing.T) {
 	tf, err := lint.NewFileFromSource("docs/x.md", []byte("# x\n"), false)
 	require.NoError(t, err)
 
-	_, err = composeTargetSchema(tf, "docs/x.md", map[string]any{
+	_, _, err = composeTargetSchema(tf, "docs/x.md", map[string]any{
 		"path-patterns": 42, // not a list-of-strings
 	})
 	require.Error(t, err)
@@ -315,7 +319,7 @@ func TestComposeTargetSchema_ComposedSchemaError(t *testing.T) {
 	require.NoError(t, err)
 	tf.FS = fstest.MapFS{} // no schema file present
 
-	_, err = composeTargetSchema(tf, "docs/x.md", map[string]any{
+	_, _, err = composeTargetSchema(tf, "docs/x.md", map[string]any{
 		"schema": "schemas/missing.md",
 	})
 	require.Error(t, err)

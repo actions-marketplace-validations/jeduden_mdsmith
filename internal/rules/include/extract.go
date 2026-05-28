@@ -3,7 +3,9 @@ package include
 import (
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 )
@@ -39,12 +41,32 @@ type ExtractProjector func(
 // SetExtractProjector. Nil means no projector is installed: an
 // `extract:` directive then surfaces a clear diagnostic instead of
 // silently returning nothing.
-var projectExtract ExtractProjector
+//
+// The mutex guards concurrent SetExtractProjector calls (LSP config
+// reloads, parallel tests via t.Cleanup) against in-flight reads
+// from Rule.Check goroutines the engine fans out across files.
+var (
+	projectExtractMu sync.RWMutex
+	projectExtract   ExtractProjector
+)
 
 // SetExtractProjector installs the package-level projector used by
 // `<?include?>` directives carrying `extract:`. Calling with nil
 // clears the projector (used by tests).
-func SetExtractProjector(fn ExtractProjector) { projectExtract = fn }
+func SetExtractProjector(fn ExtractProjector) {
+	projectExtractMu.Lock()
+	defer projectExtractMu.Unlock()
+	projectExtract = fn
+}
+
+// getExtractProjector returns the currently-installed projector
+// under the read lock so the engine's parallel Check goroutines do
+// not race with concurrent SetExtractProjector calls.
+func getExtractProjector() ExtractProjector {
+	projectExtractMu.RLock()
+	defer projectExtractMu.RUnlock()
+	return projectExtract
+}
 
 // extractContentKeys lists the well-known projection keys that mark
 // an object as a "leaf" content carrier. When a path lookup ends at
@@ -134,6 +156,7 @@ func pickContentKey(obj map[string]any) (any, error) {
 	for k := range obj {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return nil, fmt.Errorf(
 		"ambiguous object target with keys %v; "+
 			"pick a leaf with a more specific extract path", keys)
@@ -165,14 +188,15 @@ func projectExtractValue(
 	readFS fs.FS, resolvedFile string,
 	data []byte, dottedPath string,
 ) (string, error) {
-	if projectExtract == nil {
+	fn := getExtractProjector()
+	if fn == nil {
 		return "", fmt.Errorf(
 			"extract: no extract projector is installed; " +
 				"the include rule needs a host-installed projector " +
 				"to project a typed value from the target file")
 	}
 
-	tree, err := projectExtract(host, readFS, resolvedFile, data)
+	tree, err := fn(host, readFS, resolvedFile, data)
 	if err != nil {
 		return "", fmt.Errorf("extract: %w", err)
 	}
@@ -188,31 +212,55 @@ func projectExtractValue(
 	if err != nil {
 		return "", err
 	}
-	return formatExtractValue(leaf), nil
+	out, err := formatExtractValue(leaf)
+	if err != nil {
+		return "", fmt.Errorf("extract %q at %q: %w",
+			resolvedFile, dottedPath, err)
+	}
+	return out, nil
 }
 
 // formatExtractValue renders an extract projection leaf as the text
-// the include block body should contain. Strings pass through; other
-// scalars (numbers, bools) stringify via fmt. List leaves (`items`)
-// render as Markdown bullet lists, one entry per line. Tables, when
-// they reach this path, are rejected — a future plan can add a
-// canonical Markdown table rendering rather than emit JSON-shaped
-// data.
-func formatExtractValue(v any) string {
+// the include block body should contain. Strings, numbers, and bools
+// stringify; list leaves (`items`) render as Markdown bullet lists,
+// one entry per line, with list items themselves stringifying via the
+// same rules. Map and table leaves (which would otherwise render as
+// `map[k:v]` Go-syntax garbage via fmt.Sprint) are refused with an
+// error so the caller can pick a more specific extract path.
+func formatExtractValue(v any) (string, error) {
 	switch val := v.(type) {
 	case nil:
-		return ""
+		return "", nil
 	case string:
-		return val
+		return val, nil
+	case bool, int, int64, float64:
+		return fmt.Sprint(val), nil
 	case []any:
 		var b strings.Builder
-		for _, item := range val {
+		for i, item := range val {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			inner, err := formatExtractValue(item)
+			if err != nil {
+				return "", fmt.Errorf("list item %d: %w", i, err)
+			}
 			b.WriteString("- ")
-			b.WriteString(formatExtractValue(item))
-			b.WriteString("\n")
+			b.WriteString(inner)
 		}
-		return strings.TrimRight(b.String(), "\n")
+		return b.String(), nil
+	case map[string]any:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return "", fmt.Errorf(
+			"leaf is an object with keys %v; pick a leaf with a "+
+				"more specific extract path", keys)
 	default:
-		return fmt.Sprint(val)
+		return "", fmt.Errorf(
+			"leaf has unsupported type %T; only strings, numbers, "+
+				"bools, and lists can be spliced into the include body", val)
 	}
 }

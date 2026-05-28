@@ -1931,6 +1931,41 @@ func TestReloadConfigDiscoverInTempDir(t *testing.T) {
 	assert.Equal(t, dir+"/.mdsmith.yml", path)
 }
 
+// TestReloadConfigOnReloadHookFires ensures the OnConfigReload hook
+// is invoked with the resolved config path on every reload. The CLI
+// uses this to keep the include-extract projector pointing at the
+// active config so `<?include extract:?>` directives produce the
+// same diagnostics in the editor as `mdsmith check` does on the CLI;
+// without this wiring the LSP would always emit "no extract
+// projector is installed" diagnostics.
+func TestReloadConfigOnReloadHookFires(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, writeFile(dir+"/.mdsmith.yml", "rules:\n  line-length: false\n"))
+
+	var gotPath string
+	var calls int
+	s := New(Options{
+		Reader: nil, Writer: io.Discard,
+		OnConfigReload: func(cfgPath string) {
+			gotPath = cfgPath
+			calls++
+		},
+	})
+	s.configMu.Lock()
+	s.rootDir = dir
+	s.configMu.Unlock()
+
+	s.reloadConfig()
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, dir+"/.mdsmith.yml", gotPath)
+
+	// A second reload re-fires the hook so a config-path change
+	// reaches the install site.
+	s.reloadConfig()
+	assert.Equal(t, 2, calls)
+}
+
 func TestReloadConfigOverridePath(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

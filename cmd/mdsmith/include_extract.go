@@ -7,6 +7,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/extract"
 	"github.com/jeduden/mdsmith/internal/lint"
+	"github.com/jeduden/mdsmith/internal/placeholders"
 	"github.com/jeduden/mdsmith/internal/rules/include"
 	"github.com/jeduden/mdsmith/internal/rules/requiredstructure"
 	"github.com/jeduden/mdsmith/internal/schema"
@@ -79,12 +80,16 @@ func projectIncludeExtract(
 	if err != nil {
 		return nil, err
 	}
-	tf := buildTargetFile(host, readFS, targetFile, data)
-	sch, err := composeTargetSchema(tf, targetFile, rsSettings)
+	tf, err := buildTargetFile(host, readFS, targetFile, data)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateTargetAgainstSchema(tf, sch, fmFields); err != nil {
+	sch, phs, err := composeTargetSchema(tf, targetFile, rsSettings)
+	if err != nil {
+		return nil, err
+	}
+	fmIsCUE := placeholders.HasCUEFrontmatter(phs)
+	if err := validateTargetAgainstSchema(tf, sch, fmFields, fmIsCUE); err != nil {
 		return nil, err
 	}
 	mt := schema.BuildMatchTree(tf, sch, fmFields)
@@ -124,61 +129,68 @@ func resolveRequiredStructureSettings(
 // buildTargetFile parses data as Markdown the same way the engine
 // would, with the host's strip-frontmatter / max-input-bytes /
 // FS settings copied over so the projection sees the same
-// coordinate system the rest of the lint uses.
-//
-// lint.NewFileFromSource never errors with the current goldmark
-// configuration (same invariant cmd/mdsmith/export.go's
-// prepareExportFile and several rules already rely on), so the
-// parse is unchecked.
+// coordinate system the rest of the lint uses. Returns an error
+// rather than discarding NewFileFromSource's error to keep this
+// path crash-safe if a future goldmark configuration change ever
+// makes the parse fallible.
 func buildTargetFile(
 	host *lint.File, readFS fs.FS, targetFile string, data []byte,
-) *lint.File {
-	tf, _ := lint.NewFileFromSource(targetFile, data, host.StripFrontMatter) //nolint:errcheck // never errors today
+) (*lint.File, error) {
+	tf, err := lint.NewFileFromSource(targetFile, data, host.StripFrontMatter)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %q: %w", targetFile, err)
+	}
 	tf.MaxInputBytes = host.MaxInputBytes
 	tf.FS = readFS
 	tf.RootFS = host.RootFS
 	tf.RootDir = host.RootDir
-	return tf
+	return tf, nil
 }
 
 // composeTargetSchema builds the composed schema MDS020 would
-// validate tf against. A nil schema means the kind declares no
-// schema sources, which is a hard error here — there is nothing to
-// project against.
+// validate tf against. Returns the composed schema and the
+// placeholder vocabulary the rsRule resolved (so the caller can
+// derive fmIsCUE for schema.Validate). A nil schema means the kind
+// declares no schema sources, which is a hard error here — there is
+// nothing to project against.
 func composeTargetSchema(
 	tf *lint.File, targetFile string, rsSettings map[string]any,
-) (*schema.Schema, error) {
+) (*schema.Schema, []string, error) {
 	rsRule := &requiredstructure.Rule{}
 	if rsSettings != nil {
 		if err := rsRule.ApplySettings(rsSettings); err != nil {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"loading schema config for %q: %w", targetFile, err)
 		}
 	}
 	sch, err := rsRule.ComposedSchema(tf)
 	if err != nil {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"composing schema for %q: %w", targetFile, err)
 	}
 	if sch == nil || sch.IsEmpty() {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"%q declares no schema to extract against", targetFile)
 	}
-	return sch, nil
+	return sch, rsRule.Placeholders, nil
 }
 
 // validateTargetAgainstSchema gates projection on a clean schema
 // validation. A non-conformant target would produce a partial /
 // lossy projection; bubble the underlying diagnostic up so the
 // include error points at the same root cause `mdsmith check`
-// would surface for the target.
+// would surface for the target. fmIsCUE comes from the resolved
+// placeholder vocabulary (matching requiredstructure.Rule's own
+// Check), so kinds declaring `cue-frontmatter` do not produce
+// spurious frontmatter-parse diagnostics.
 func validateTargetAgainstSchema(
 	tf *lint.File, sch *schema.Schema, fmFields map[string]any,
+	fmIsCUE bool,
 ) error {
 	mkDiag := func(file string, line int, msg string) lint.Diagnostic {
 		return lint.Diagnostic{File: file, Line: line, Message: msg}
 	}
-	if vd := schema.Validate(tf, sch, fmFields, false, mkDiag); len(vd) > 0 {
+	if vd := schema.Validate(tf, sch, fmFields, fmIsCUE, mkDiag); len(vd) > 0 {
 		return fmt.Errorf(
 			"target file does not conform to its schema: %s",
 			vd[0].Message)

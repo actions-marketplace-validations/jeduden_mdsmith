@@ -38,6 +38,7 @@ type Server struct {
 	debounce       time.Duration
 	fetchTimeout   time.Duration
 	discoverConfig func(string) (string, error)
+	onConfigReload func(cfgPath string)
 	logger         *vlog.Logger
 	docs           *documentStore
 
@@ -147,6 +148,15 @@ type Options struct {
 	Debounce time.Duration
 	// Logger receives server-side trace messages. May be nil.
 	Logger *vlog.Logger
+	// OnConfigReload, if non-nil, is invoked every time the server
+	// resolves a new config path (initial load and every subsequent
+	// reload triggered by didChangeConfiguration or watched-file
+	// events). cfgPath is the empty string when no config was
+	// successfully loaded. Used by cmd/mdsmith to keep the include
+	// extract projector pointing at the active config so `<?include
+	// extract:?>` directives produce the same diagnostics in the
+	// editor as `mdsmith check` does on the CLI.
+	OnConfigReload func(cfgPath string)
 }
 
 // New constructs a Server. The Server does not run until Run() is
@@ -169,6 +179,7 @@ func New(opts Options) *Server {
 		debounce:       debounce,
 		fetchTimeout:   2 * time.Second,
 		discoverConfig: config.Discover,
+		onConfigReload: opts.OnConfigReload,
 		logger:         logger,
 		docs:           newDocumentStore(),
 		settings:       userSettings{Run: runOnSave},
@@ -1551,6 +1562,10 @@ func (s *Server) reloadConfig() {
 		// previous root, so the cache must be cleared before the
 		// next runLint computes new ones.
 		s.parseCache.InvalidateAll()
+	}
+
+	if s.onConfigReload != nil {
+		s.onConfigReload(cfgPath)
 	}
 
 	if loadErr != "" {
