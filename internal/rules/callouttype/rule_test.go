@@ -170,3 +170,16 @@ func TestUnknownTypeDiag_AllowListExtras(t *testing.T) {
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, "(plus custom, decision)")
 }
+
+func TestCheck_UsesCompiledAllowSetAfterApplySettings(t *testing.T) {
+	// ApplySettings populates compiledAllowSet; a subsequent Check must use
+	// the cached set (the non-nil branch in effectiveAllowSet) so that the
+	// map is not rebuilt on every call.
+	f := newFile(t, "> [!custom]\n> body\n")
+	r := &Rule{}
+	require.NoError(t, r.ApplySettings(map[string]any{"allow": []any{"custom"}}))
+	// compiledAllowSet is now non-nil; Check must return no diagnostics.
+	assert.Empty(t, r.Check(f))
+	// Call Check a second time to confirm repeated reads from the cache work.
+	assert.Empty(t, r.Check(f))
+}

@@ -4,11 +4,17 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/yuin/goldmark/ast"
+
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newRawHTMLNode() *ast.RawHTML {
+	return ast.NewRawHTML()
+}
 
 // --- extractTag unit tests ---
 
@@ -275,4 +281,11 @@ func TestRegisteredDefault_AllowCommentsTrue(t *testing.T) {
 	require.True(t, ok)
 	assert.True(t, hr.AllowComments,
 		"registered MDS041 must have AllowComments=true to match DefaultSettings")
+}
+
+func TestRawHTMLBytes_ZeroSegments(t *testing.T) {
+	// A freshly allocated RawHTML node has no segments; rawHTMLBytes must
+	// return nil rather than a non-nil empty slice.
+	node := newRawHTMLNode()
+	assert.Nil(t, rawHTMLBytes(node, []byte("source")))
 }
