@@ -18,9 +18,8 @@ import (
 var crossRefRECache sync.Map // map[string]*regexp.Regexp
 
 // compileCrossRefRE returns a cached *regexp.Regexp for pattern, compiling it
-// on the first call. A compilation error is returned on the first call only;
-// subsequent calls for the same invalid pattern also return an error (the
-// failed entry is never stored).
+// on the first successful call. Failed compilations are not cached; every call
+// with an invalid pattern string recompiles and returns the error.
 func compileCrossRefRE(pattern string) (*regexp.Regexp, error) {
 	if v, ok := crossRefRECache.Load(pattern); ok {
 		return v.(*regexp.Regexp), nil

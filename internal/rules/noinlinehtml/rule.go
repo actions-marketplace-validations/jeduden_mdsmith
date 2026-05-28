@@ -219,6 +219,9 @@ func rawHTMLBytes(n *ast.RawHTML, source []byte) []byte {
 	for i := 0; i < segLen; i++ {
 		seg := n.Segments.At(i)
 		total += seg.Stop - seg.Start + seg.Padding
+		if seg.ForceNewline {
+			total++ // seg.Value may append '\n' when the segment doesn't end with one
+		}
 	}
 	b := make([]byte, 0, total)
 	for i := 0; i < segLen; i++ {

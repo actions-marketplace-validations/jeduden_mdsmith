@@ -171,15 +171,13 @@ func TestUnknownTypeDiag_AllowListExtras(t *testing.T) {
 	assert.Contains(t, diags[0].Message, "(plus custom, decision)")
 }
 
-func TestCheck_UsesCompiledAllowSetAfterApplySettings(t *testing.T) {
-	// ApplySettings populates compiledAllowSet; a subsequent Check must use
-	// the cached set (the non-nil branch in effectiveAllowSet) so that the
-	// map is not rebuilt on every call.
+func TestCheck_AllowSetCachedPerFileAfterApplySettings(t *testing.T) {
+	// After ApplySettings registers a custom type, Check must accept it.
+	// Calling Check twice on the same file exercises the per-file memo cache
+	// (f.Memo) that buildAllowSet stores its result in.
 	f := newFile(t, "> [!custom]\n> body\n")
 	r := &Rule{}
 	require.NoError(t, r.ApplySettings(map[string]any{"allow": []any{"custom"}}))
-	// compiledAllowSet is now non-nil; Check must return no diagnostics.
 	assert.Empty(t, r.Check(f))
-	// Call Check a second time to confirm repeated reads from the cache work.
 	assert.Empty(t, r.Check(f))
 }

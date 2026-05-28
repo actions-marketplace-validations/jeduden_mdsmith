@@ -26,9 +26,8 @@ func init() {
 // any user-configured `allow:` entries; `allow-unknown: true` turns
 // validation off entirely.
 type Rule struct {
-	Allow            []string
-	AllowUnknown     bool
-	compiledAllowSet map[string]bool // cached union of builtInTypes and Allow; rebuilt in ApplySettings
+	Allow        []string
+	AllowUnknown bool
 }
 
 // ID implements rule.Rule.
@@ -103,7 +102,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	if f == nil || f.AST == nil {
 		return nil
 	}
-	allowed := r.effectiveAllowSet()
+	allowed := r.cachedAllowSet(f)
 	var diags []lint.Diagnostic
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -127,8 +126,10 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 }
 
 // buildAllowSet constructs the union of the built-in Obsidian types and the
-// user-configured Allow entries. Call once in ApplySettings to populate
-// compiledAllowSet; Check reads compiledAllowSet directly.
+// user-configured Allow entries. It is called from cachedAllowSet via f.Memo
+// so it runs at most once per file. Rule instances are shared across concurrent
+// LSP calls, so mutable caching on the Rule struct itself would race; the
+// per-File memo is sync.Map + sync.Once protected and avoids that entirely.
 func (r *Rule) buildAllowSet() map[string]bool {
 	out := make(map[string]bool, len(builtInTypes)+len(r.Allow))
 	for k := range builtInTypes {
@@ -140,14 +141,12 @@ func (r *Rule) buildAllowSet() map[string]bool {
 	return out
 }
 
-// effectiveAllowSet returns the cached union of built-in Obsidian types and
-// the user-configured allow entries, building it on first call when
-// ApplySettings has not yet been invoked.
-func (r *Rule) effectiveAllowSet() map[string]bool {
-	if r.compiledAllowSet != nil {
-		return r.compiledAllowSet
-	}
-	return r.buildAllowSet()
+// cachedAllowSet returns the effective allow set memoised on the per-Check
+// *lint.File, so the map is built at most once per file regardless of how
+// many callout blockquotes the file contains.
+func (r *Rule) cachedAllowSet(f *lint.File) map[string]bool {
+	v := f.Memo("MDS067.allowSet", func() any { return r.buildAllowSet() })
+	return v.(map[string]bool)
 }
 
 // calloutToken returns the `[!type]` token, body-relative line, and
@@ -215,7 +214,6 @@ func (r *Rule) ApplySettings(s map[string]any) error {
 			return fmt.Errorf("callout-type: unknown setting %q", k)
 		}
 	}
-	r.compiledAllowSet = r.buildAllowSet()
 	return nil
 }
 
