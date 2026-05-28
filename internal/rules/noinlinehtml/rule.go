@@ -108,6 +108,9 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 			return []lint.Diagnostic{d}
 		}
 	case *ast.RawHTML:
+		if node.Segments.Len() == 0 {
+			return nil
+		}
 		seg := node.Segments.At(0)
 		raw := rawHTMLBytes(node, f.Source)
 		if d, ok := r.checkRaw(f, r.cachedAllowSet(f), raw, seg.Start); ok {

@@ -291,6 +291,19 @@ func TestRawHTMLBytes_ZeroSegments(t *testing.T) {
 	assert.Nil(t, rawHTMLBytes(node, []byte("source")))
 }
 
+func TestCheckNode_ZeroSegmentRawHTML_NoPanic(t *testing.T) {
+	// A synthetic *ast.RawHTML with no segments must not panic in CheckNode.
+	// Segments.At(0) would panic on the empty slice before rawHTMLBytes is
+	// reached, so CheckNode must guard with Len() == 0 first.
+	r := newRule(t, nil)
+	f := parse(t, "# Title\n")
+	node := newRawHTMLNode() // 0 segments
+	assert.NotPanics(t, func() {
+		diags := r.CheckNode(node, true, f)
+		assert.Nil(t, diags)
+	})
+}
+
 func TestRawHTMLBytes_ForceNewline(t *testing.T) {
 	// When a segment carries ForceNewline=true, seg.Value() appends a trailing
 	// '\n' that the capacity formula must account for. Verify that rawHTMLBytes
