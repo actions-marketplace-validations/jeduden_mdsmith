@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/yuin/goldmark/ast"
+	goldmarktext "github.com/yuin/goldmark/text"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -288,4 +289,17 @@ func TestRawHTMLBytes_ZeroSegments(t *testing.T) {
 	// return nil rather than a non-nil empty slice.
 	node := newRawHTMLNode()
 	assert.Nil(t, rawHTMLBytes(node, []byte("source")))
+}
+
+func TestRawHTMLBytes_ForceNewline(t *testing.T) {
+	// When a segment carries ForceNewline=true, seg.Value() appends a trailing
+	// '\n' that the capacity formula must account for. Verify that rawHTMLBytes
+	// returns the full content including the forced newline without a panic or
+	// truncation.
+	source := []byte("<br>")
+	node := newRawHTMLNode()
+	seg := goldmarktext.Segment{Start: 0, Stop: 4, ForceNewline: true}
+	node.Segments.Append(seg)
+	got := rawHTMLBytes(node, source)
+	assert.Equal(t, []byte("<br>\n"), got)
 }
