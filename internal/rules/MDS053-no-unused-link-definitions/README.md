@@ -24,6 +24,7 @@ panache:
   - id: unused-definitions
     name: unused-definitions
     default: true
+obsidian-linter: []
 ---
 # MDS053: no-unused-link-definitions
 

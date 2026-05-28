@@ -19,6 +19,10 @@ mado:
     name: no-bare-urls
     default: true
 panache: []
+obsidian-linter:
+  - id: no-bare-urls
+    name: no-bare-urls
+    default: false
 ---
 # MDS012: no-bare-urls
 

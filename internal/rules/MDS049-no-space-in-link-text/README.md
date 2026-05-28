@@ -19,6 +19,7 @@ mado:
     name: no-space-in-links
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS049: no-space-in-link-text
 

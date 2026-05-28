@@ -2,8 +2,8 @@
 // matrix from each rule README's front matter into the single
 // canonical page at docs/research/markdownlint-coverage/README.md.
 //
-// Source of truth: the `markdownlint:`, `rumdl:`, `mado:`, and
-// `panache:` blocks in each
+// Source of truth: the `markdownlint:`, `rumdl:`, `mado:`,
+// `panache:`, and `obsidian-linter:` blocks in each
 // internal/rules/MDS###-<rule-name>/README.md (matched by the
 // embed glob `MDS*/README.md`). The generator never reads
 // upstream tool repositories — defaults and rule IDs live in
@@ -81,16 +81,17 @@ func RenderCoverageMatrix(rs []rules.RuleInfo) string {
 	buf.WriteString("summary: >-\n")
 	buf.WriteString("  Per-tool, per-rule coverage matrix: each mdsmith rule\n")
 	buf.WriteString("  alongside its analog in markdownlint, rumdl, mado,\n")
-	buf.WriteString("  and panache, with the upstream default-enabled state\n")
-	buf.WriteString("  per peer.\n")
+	buf.WriteString("  panache, and obsidian-linter, with the upstream\n")
+	buf.WriteString("  default-enabled state per peer.\n")
 	buf.WriteString("---\n")
 	buf.WriteString("# Peer-linter coverage matrix\n\n")
 	buf.WriteString("For every mdsmith rule, the analog rule in each peer\n")
-	buf.WriteString("Markdown linter (markdownlint, rumdl, mado, panache)\n")
-	buf.WriteString("with the peer's upstream default-enabled state. This\n")
-	buf.WriteString("page is generated from each rule README's front matter\n")
-	buf.WriteString("by `mdsmith-release sync-coverage-matrix`; do not edit\n")
-	buf.WriteString("it by hand.\n\n")
+	buf.WriteString("Markdown linter (markdownlint, rumdl, mado, panache,\n")
+	buf.WriteString("obsidian-linter) with the peer's upstream\n")
+	buf.WriteString("default-enabled state. This page is generated from each\n")
+	buf.WriteString("rule README's front matter by\n")
+	buf.WriteString("`mdsmith-release sync-coverage-matrix`; do not edit it\n")
+	buf.WriteString("by hand.\n\n")
 	buf.WriteString("Cell legend:\n\n")
 	buf.WriteString("- ✅ implemented, enabled by default upstream\n")
 	buf.WriteString("- ⚪ implemented, off by default upstream\n")
@@ -123,13 +124,16 @@ func RenderCoverageMatrix(rs []rules.RuleInfo) string {
 	return buf.String()
 }
 
-// renderPeerTable emits the five-column table used for mdsmith
+// renderPeerTable emits the six-column table used for mdsmith
 // rules that have at least one peer-linter analog somewhere in
 // the category. Column widths are sized to the widest cell so
 // the output passes the MDS025 table-format rule without a
 // downstream `mdsmith fix` pass.
 func renderPeerTable(buf *bytes.Buffer, rs []rules.RuleInfo) {
-	headers := []string{"mdsmith", "markdownlint", "rumdl", "mado", "panache"}
+	headers := []string{
+		"mdsmith", "markdownlint", "rumdl", "mado", "panache",
+		"obsidian-linter",
+	}
 	rows := make([][]string, 0, len(rs))
 	for _, r := range rs {
 		rows = append(rows, []string{
@@ -138,6 +142,7 @@ func renderPeerTable(buf *bytes.Buffer, rs []rules.RuleInfo) {
 			renderPeerCell(r.Rumdl),
 			renderPeerCell(r.Mado),
 			renderPeerCell(r.Panache),
+			renderPeerCell(r.ObsidianLinter),
 		})
 	}
 	writePaddedTable(buf, headers, rows)
@@ -303,7 +308,8 @@ func unknownCategoryTitle(cat string) string {
 func categoryIsMdsmithOnly(rs []rules.RuleInfo) bool {
 	for _, r := range rs {
 		if len(r.Markdownlint) > 0 || len(r.Rumdl) > 0 ||
-			len(r.Mado) > 0 || len(r.Panache) > 0 {
+			len(r.Mado) > 0 || len(r.Panache) > 0 ||
+			len(r.ObsidianLinter) > 0 {
 			return false
 		}
 	}

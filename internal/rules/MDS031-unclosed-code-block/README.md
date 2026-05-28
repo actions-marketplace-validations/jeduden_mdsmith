@@ -10,6 +10,7 @@ markdownlint: []
 rumdl: []
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS031: unclosed-code-block
 

@@ -9,6 +9,7 @@ markdownlint: '[...{id: =~"^MD[0-9]{3}$", name: string & != "", partial?: bool |
 rumdl: '[...{id: =~"^MD[0-9]{3}$", name: string & != "", partial?: bool | *false, default: bool}]'
 mado: '[...{id: =~"^MD[0-9]{3}$", name: string & != "", partial?: bool | *false, default: bool}]'
 panache: '[...{id: =~"^[a-z][a-z0-9-]*$", name: string & != "", partial?: bool | *false, default: bool}]'
+obsidian-linter: '[...{id: =~"^[a-z][a-z0-9-]*$", name: string & != "", partial?: bool | *false, default: bool}]'
 category: '"directive"'
 ---
 # {id}: {name}

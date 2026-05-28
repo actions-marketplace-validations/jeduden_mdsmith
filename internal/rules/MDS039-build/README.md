@@ -12,6 +12,7 @@ markdownlint: []
 rumdl: []
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS039: build
 

@@ -19,6 +19,7 @@ mado:
     name: single-h1
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS051: single-h1
 

@@ -19,6 +19,10 @@ mado:
     name: single-trailing-newline
     default: true
 panache: []
+obsidian-linter:
+  - id: line-break-at-document-end
+    name: line-break-at-document-end
+    default: false
 ---
 # MDS009: single-trailing-newline
 

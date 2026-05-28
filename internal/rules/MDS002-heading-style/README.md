@@ -19,6 +19,7 @@ mado:
     name: heading-style
     default: false
 panache: []
+obsidian-linter: []
 ---
 # MDS002: heading-style
 

@@ -31,6 +31,7 @@ mado:
     name: ul-indent
     default: false
 panache: []
+obsidian-linter: []
 ---
 # MDS016: list-indent
 

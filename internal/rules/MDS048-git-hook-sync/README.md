@@ -10,6 +10,7 @@ markdownlint: []
 rumdl: []
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS048: git-hook-sync
 

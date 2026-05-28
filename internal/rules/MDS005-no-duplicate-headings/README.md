@@ -19,6 +19,7 @@ mado:
     name: no-duplicate-heading
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS005: no-duplicate-headings
 

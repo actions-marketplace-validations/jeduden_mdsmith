@@ -10,6 +10,7 @@ markdownlint: []
 rumdl: []
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS038: toc
 

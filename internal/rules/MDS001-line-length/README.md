@@ -19,6 +19,7 @@ mado:
     name: line-length
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS001: line-length
 

@@ -19,6 +19,10 @@ mado:
     name: no-trailing-spaces
     default: true
 panache: []
+obsidian-linter:
+  - id: trailing-spaces
+    name: trailing-spaces
+    default: false
 ---
 # MDS006: no-trailing-spaces
 

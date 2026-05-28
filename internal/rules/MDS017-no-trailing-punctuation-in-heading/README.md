@@ -19,6 +19,10 @@ mado:
     name: no-trailing-punctuation
     default: true
 panache: []
+obsidian-linter:
+  - id: remove-trailing-punctuation-in-heading
+    name: remove-trailing-punctuation-in-heading
+    default: false
 ---
 # MDS017: no-trailing-punctuation-in-heading
 

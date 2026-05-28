@@ -30,6 +30,11 @@ rumdl:
     default: true
 mado: []
 panache: []
+obsidian-linter:
+  - id: empty-line-around-tables
+    name: empty-line-around-tables
+    partial: true
+    default: false
 ---
 # MDS025: table-format
 

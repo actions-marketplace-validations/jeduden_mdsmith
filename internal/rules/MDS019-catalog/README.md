@@ -13,6 +13,7 @@ markdownlint: []
 rumdl: []
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS019: catalog
 

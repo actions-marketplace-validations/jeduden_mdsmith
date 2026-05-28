@@ -25,6 +25,7 @@ rumdl:
     default: true
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS062: link-validity
 

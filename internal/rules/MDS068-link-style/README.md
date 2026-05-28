@@ -18,6 +18,7 @@ rumdl:
     default: true
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS068: link-style
 

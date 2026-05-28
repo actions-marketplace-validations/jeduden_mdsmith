@@ -19,6 +19,7 @@ mado:
     name: no-space-in-code
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS052: no-space-in-code-spans
 

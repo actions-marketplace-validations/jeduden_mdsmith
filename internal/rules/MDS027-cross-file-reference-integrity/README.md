@@ -19,6 +19,7 @@ panache:
   - id: undefined-anchor
     name: undefined-anchor
     default: true
+obsidian-linter: []
 ---
 # MDS027: cross-file-reference-integrity
 

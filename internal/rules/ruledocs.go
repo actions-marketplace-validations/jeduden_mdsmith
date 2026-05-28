@@ -27,6 +27,7 @@ type RuleInfo struct {
 	Rumdl           []RuleMapping
 	Mado            []RuleMapping
 	Panache         []RuleMapping
+	ObsidianLinter  []RuleMapping
 }
 
 // RuleMapping names a rule in a peer Markdown linter that the mdsmith rule
@@ -178,6 +179,7 @@ func parseFrontMatter(content string) (RuleInfo, error) {
 		Rumdl           []RuleMapping    `yaml:"rumdl"`
 		Mado            []RuleMapping    `yaml:"mado"`
 		Panache         []RuleMapping    `yaml:"panache"`
+		ObsidianLinter  []RuleMapping    `yaml:"obsidian-linter"`
 	}
 	if err := yamlutil.UnmarshalSafe([]byte(strings.Join(front, "\n")), &meta); err != nil {
 		return RuleInfo{}, fmt.Errorf("parsing front matter: %w", err)
@@ -193,6 +195,7 @@ func parseFrontMatter(content string) (RuleInfo, error) {
 		Rumdl:           meta.Rumdl,
 		Mado:            meta.Mado,
 		Panache:         meta.Panache,
+		ObsidianLinter:  meta.ObsidianLinter,
 	}
 
 	if info.ID == "" {

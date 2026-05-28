@@ -19,6 +19,7 @@ mado:
     name: no-hard-tabs
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS007: no-hard-tabs
 

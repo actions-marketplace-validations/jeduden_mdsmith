@@ -16,6 +16,7 @@ rumdl:
     default: true
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS010: fenced-code-style
 
