@@ -230,12 +230,59 @@ effective kinds:
   - plan (from kind-assignment[2]: glob plan/*.md AND fields-present id)
 ```
 
+## Choose inline or file-based
+
+Both forms accept the same body keys and
+produce identical diagnostics. Pick per kind
+based on edit history, body size, and how
+reviewers read the diff.
+
+### When to keep a kind inline
+
+Inline is the default. Keep a kind inline when:
+
+- The body fits on a screen and the project's
+  `kinds:` block is under about 50 lines.
+  Scanning every kind at once is faster in one
+  file.
+- The kind is new and still under iteration.
+  Editing in place is faster than switching
+  between two files.
+- The kind sits next to a related override or
+  `kind-assignment:` entry, and the proximity
+  helps a reader follow the wiring.
+- The project has fewer than six kinds. The
+  review cost of one extra file per kind
+  outweighs the gain of isolating each kind's
+  edit history.
+
+### When to lift a kind into its own file
+
+Move the kind to `.mdsmith/kinds/<name>.yaml`
+when:
+
+- The `kinds:` block has grown past about 150
+  lines or six kinds, and per-kind edits dirty
+  unrelated config history.
+- A reviewer should see which kind changed from
+  the file list alone. A PR touching
+  `.mdsmith/kinds/<name>.yaml` carries the kind
+  name in its path. A PR touching `.mdsmith.yml`
+  forces the reviewer to open the diff to find
+  which kind moved.
+- The kind body is large. A long frontmatter
+  schema and many rule overrides bloat the
+  inline view of every other kind.
+- The kind is reused across repos. Copying a
+  standalone file is cleaner than excising a
+  named block from a shared `.mdsmith.yml`.
+
+See [Kind files reference](../reference/kind-files.md)
+for layout details and the basename rule.
+
 ## Split a kind into its own file
 
-When a project's `kinds:` block has grown large
-enough that one kind's edits dirty the same
-`.mdsmith.yml` as every other config change, lift
-the kind into a standalone file under
+Lift the kind into a standalone file under
 `.mdsmith/kinds/<name>.yaml`. The basename is the
 kind's name; the body is identical to the inline
 `kinds.<name>:` body.
