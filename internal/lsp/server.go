@@ -690,17 +690,13 @@ func (s *Server) invalidateCachedRead(path string) {
 // document at absPath. The parse cache is keyed by the workspace-
 // relative path RunSourceWithVersion sees, so this method resolves
 // absPath against the current workspace root before delegating to
-// the cache. A nil cache or empty path is a no-op so callers do
-// not need to guard their call sites.
+// the cache.
 //
 // Used by didChange (edits bump the version, so the prior entry is
 // already dead; this drops it promptly), didClose (buffer gone),
 // and didChangeWatchedFiles (on-disk content changed underneath the
 // editor).
 func (s *Server) invalidateParseCache(absPath string) {
-	if s.parseCache == nil || absPath == "" {
-		return
-	}
 	_, _, root := s.snapshotConfig()
 	s.parseCache.Invalidate(workspaceRelative(root, absPath))
 }

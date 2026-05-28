@@ -532,13 +532,10 @@ func (r *Runner) parseForSource(path string, source []byte, version int, usePars
 		}
 	}
 	f, err := lint.NewFileFromSource(path, source, r.StripFrontMatter)
-	if err != nil {
-		return nil, err
-	}
-	if useParseCache && r.ParseCache != nil {
+	if err == nil && useParseCache && r.ParseCache != nil {
 		r.ParseCache.Put(path, version, f)
 	}
-	return f, nil
+	return f, err
 }
 
 // runSourceCheckRules wraps the post-parse check pipeline for
