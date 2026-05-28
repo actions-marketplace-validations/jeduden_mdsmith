@@ -185,9 +185,9 @@ Cross-document parses are independent; the
    tests that construct a Runner without setting
    the field must keep passing (nil cache = always
    parse).
-3. Add a contract test in `internal/engine/` that
-   runs the same corpus through `RunSource` with
-   `ParseCache` nil and with `ParseCache`
+3. [x] Add a contract test in `internal/engine/`
+   that runs the same corpus through `RunSource`
+   with `ParseCache` nil and with `ParseCache`
    installed, asserting byte-equal diagnostics.
 4. Wire `s.parseCache` into the LSP `Server`
    alongside `s.runCache`. Pass the document
