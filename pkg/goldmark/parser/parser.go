@@ -88,12 +88,12 @@ type IDs interface {
 }
 
 type ids struct {
-	values map[string]bool
+	values map[string]struct{}
 }
 
 func newIDs() IDs {
 	return &ids{
-		values: map[string]bool{},
+		values: map[string]struct{}{},
 	}
 }
 
@@ -125,13 +125,13 @@ func (s *ids) Generate(value []byte, kind ast.NodeKind) []byte {
 		}
 	}
 	if _, ok := s.values[util.BytesToReadOnlyString(result)]; !ok {
-		s.values[util.BytesToReadOnlyString(result)] = true
+		s.values[util.BytesToReadOnlyString(result)] = struct{}{}
 		return result
 	}
 	for i := 1; ; i++ {
 		newResult := fmt.Sprintf("%s-%d", result, i)
 		if _, ok := s.values[newResult]; !ok {
-			s.values[newResult] = true
+			s.values[newResult] = struct{}{}
 			return []byte(newResult)
 		}
 
@@ -139,7 +139,7 @@ func (s *ids) Generate(value []byte, kind ast.NodeKind) []byte {
 }
 
 func (s *ids) Put(value []byte) {
-	s.values[util.BytesToReadOnlyString(value)] = true
+	s.values[util.BytesToReadOnlyString(value)] = struct{}{}
 }
 
 // ContextKey is a key that is used to set arbitrary values to the context.
