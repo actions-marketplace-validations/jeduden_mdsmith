@@ -86,9 +86,8 @@ func lookupRuleInfoFromFS(fsys fs.FS, query string) (RuleInfo, error) {
 	if err != nil {
 		return RuleInfo{}, err
 	}
-	q := strings.ToUpper(query)
 	for _, r := range rules {
-		if strings.ToUpper(r.ID) == q || r.Name == query {
+		if strings.EqualFold(r.ID, query) || r.Name == query {
 			return r, nil
 		}
 	}
@@ -132,9 +131,8 @@ func lookupRuleFromFS(fsys fs.FS, query string) (string, error) {
 		return "", err
 	}
 
-	q := strings.ToUpper(query)
 	for _, r := range rules {
-		if strings.ToUpper(r.ID) == q || r.Name == query {
+		if strings.EqualFold(r.ID, query) || r.Name == query {
 			return stripFrontMatter(r.Content), nil
 		}
 	}

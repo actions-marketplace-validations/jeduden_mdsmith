@@ -4,11 +4,34 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/mdtext"
 	"github.com/yuin/goldmark/ast"
 )
+
+// crossRefRECache caches compiled cross-reference regexes by pattern string.
+// Cross-reference patterns come from schema config and are stable for the
+// process lifetime, so a process-scoped cache avoids recompiling the same NFA
+// once per file.
+var crossRefRECache sync.Map // map[string]*regexp.Regexp
+
+// compileCrossRefRE returns a cached *regexp.Regexp for pattern, compiling it
+// on the first call. A compilation error is returned on the first call only;
+// subsequent calls for the same invalid pattern also return an error (the
+// failed entry is never stored).
+func compileCrossRefRE(pattern string) (*regexp.Regexp, error) {
+	if v, ok := crossRefRECache.Load(pattern); ok {
+		return v.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := crossRefRECache.LoadOrStore(pattern, re)
+	return actual.(*regexp.Regexp), nil
+}
 
 // ValidateCrossReferences walks the document's inline text nodes and,
 // for each cross-reference pattern, checks that every match resolves
@@ -25,13 +48,13 @@ func ValidateCrossReferences(
 	texts := collectTextNodes(f)
 	var diags []lint.Diagnostic
 	for _, cr := range sch.CrossReferences {
-		// Use pre-compiled regex from parse time; fall back to compiling on
-		// demand for CrossRef values constructed outside parseCrossRefEntry
+		// Use pre-compiled regex from parse time; fall back to compileCrossRefRE
+		// for CrossRef values constructed outside parseCrossRefEntry
 		// (e.g. in tests or compose paths).
 		re := cr.compiledRE
 		if re == nil {
 			var err error
-			re, err = regexp.Compile(cr.Pattern)
+			re, err = compileCrossRefRE(cr.Pattern)
 			if err != nil {
 				diags = append(diags, mkDiag(f.Path, 1,
 					fmt.Sprintf(
@@ -43,7 +66,7 @@ func ValidateCrossReferences(
 		skipRE := cr.compiledSkipRE
 		if skipRE == nil && cr.SkipLinesMatching != "" {
 			var err error
-			skipRE, err = regexp.Compile(cr.SkipLinesMatching)
+			skipRE, err = compileCrossRefRE(cr.SkipLinesMatching)
 			if err != nil {
 				diags = append(diags, mkDiag(f.Path, 1,
 					fmt.Sprintf(

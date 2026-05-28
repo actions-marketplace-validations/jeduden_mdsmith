@@ -26,8 +26,9 @@ func init() {
 // any user-configured `allow:` entries; `allow-unknown: true` turns
 // validation off entirely.
 type Rule struct {
-	Allow        []string
-	AllowUnknown bool
+	Allow            []string
+	AllowUnknown     bool
+	compiledAllowSet map[string]bool // cached union of builtInTypes and Allow; rebuilt in ApplySettings
 }
 
 // ID implements rule.Rule.
@@ -125,10 +126,10 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	return diags
 }
 
-// effectiveAllowSet returns the union of the built-in Obsidian types
-// (lowercased) and the user-configured `allow` entries. Returned map
-// is private to one Check call.
-func (r *Rule) effectiveAllowSet() map[string]bool {
+// buildAllowSet constructs the union of the built-in Obsidian types and the
+// user-configured Allow entries. Call once in ApplySettings to populate
+// compiledAllowSet; Check reads compiledAllowSet directly.
+func (r *Rule) buildAllowSet() map[string]bool {
 	out := make(map[string]bool, len(builtInTypes)+len(r.Allow))
 	for k := range builtInTypes {
 		out[k] = true
@@ -137,6 +138,16 @@ func (r *Rule) effectiveAllowSet() map[string]bool {
 		out[strings.ToLower(name)] = true
 	}
 	return out
+}
+
+// effectiveAllowSet returns the cached union of built-in Obsidian types and
+// the user-configured allow entries, building it on first call when
+// ApplySettings has not yet been invoked.
+func (r *Rule) effectiveAllowSet() map[string]bool {
+	if r.compiledAllowSet != nil {
+		return r.compiledAllowSet
+	}
+	return r.buildAllowSet()
 }
 
 // calloutToken returns the `[!type]` token, body-relative line, and
@@ -204,6 +215,7 @@ func (r *Rule) ApplySettings(s map[string]any) error {
 			return fmt.Errorf("callout-type: unknown setting %q", k)
 		}
 	}
+	r.compiledAllowSet = r.buildAllowSet()
 	return nil
 }
 

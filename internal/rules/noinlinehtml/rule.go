@@ -211,8 +211,17 @@ func isClosingTag(raw []byte) bool {
 }
 
 func rawHTMLBytes(n *ast.RawHTML, source []byte) []byte {
-	var b []byte
-	for i := 0; i < n.Segments.Len(); i++ {
+	segLen := n.Segments.Len()
+	if segLen == 0 {
+		return nil
+	}
+	total := 0
+	for i := 0; i < segLen; i++ {
+		seg := n.Segments.At(i)
+		total += seg.Stop - seg.Start + seg.Padding
+	}
+	b := make([]byte, 0, total)
+	for i := 0; i < segLen; i++ {
 		seg := n.Segments.At(i)
 		b = append(b, seg.Value(source)...)
 	}

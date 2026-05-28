@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 
@@ -530,12 +529,12 @@ func buildCrossRefGraph(f *lint.File, sch *Schema) (map[string]string, error) {
 	}
 	texts := collectTextNodes(f)
 	for _, cr := range sch.CrossReferences {
-		// Use pre-compiled regex from parse time; fall back to compiling on
-		// demand for CrossRef values constructed outside parseCrossRefEntry.
+		// Use pre-compiled regex from parse time; fall back to compileCrossRefRE
+		// for CrossRef values constructed outside parseCrossRefEntry.
 		re := cr.compiledRE
 		if re == nil {
 			var err error
-			re, err = regexp.Compile(cr.Pattern)
+			re, err = compileCrossRefRE(cr.Pattern)
 			if err != nil {
 				return nil, fmt.Errorf(
 					"index cross-ref-graph: invalid pattern %q: %w",
@@ -545,7 +544,7 @@ func buildCrossRefGraph(f *lint.File, sch *Schema) (map[string]string, error) {
 		skipRE := cr.compiledSkipRE
 		if skipRE == nil && cr.SkipLinesMatching != "" {
 			var err error
-			skipRE, err = regexp.Compile(cr.SkipLinesMatching)
+			skipRE, err = compileCrossRefRE(cr.SkipLinesMatching)
 			if err != nil {
 				return nil, fmt.Errorf(
 					"index cross-ref-graph: invalid skip-lines-matching %q: %w",
@@ -586,7 +585,7 @@ func buildWordCounts(f *lint.File) map[string]int {
 		}
 		count := 0
 		for ln := startLine; ln < endLine && ln-1 < len(f.Lines); ln++ {
-			count += len(strings.Fields(string(f.Lines[ln-1])))
+			count += len(bytes.Fields(f.Lines[ln-1]))
 		}
 		out[h.Slug] = count
 	}
