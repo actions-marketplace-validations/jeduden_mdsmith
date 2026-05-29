@@ -150,3 +150,42 @@ func TestProseRanges_ConcurrentMemo(t *testing.T) {
 		require.Equal(t, len(results[0]), len(results[i]))
 	}
 }
+
+// TestProseRanges_CodeOnlyDocumentYieldsNoProse covers the empty-output
+// path in collectProseRanges: a document whose only content is excluded
+// (a fenced code block) parses to a non-nil AST yet contributes zero
+// prose ranges, so the projection returns nil rather than an empty slice.
+func TestProseRanges_CodeOnlyDocumentYieldsNoProse(t *testing.T) {
+	f, err := NewFile("t.md", []byte("```\nfenced code only\n```\n"))
+	require.NoError(t, err)
+	assert.Empty(t, f.ProseRanges(), "a code-only document has no prose ranges")
+}
+
+// TestAppendProseRange_CoalescesAdjacentAndOverlapping drives
+// appendProseRange directly: goldmark rarely emits the adjacent or
+// overlapping Text segments the coalescing branch defends against, so a
+// direct unit test pins every branch deterministically rather than
+// relying on a fragile markdown input.
+func TestAppendProseRange_CoalescesAdjacentAndOverlapping(t *testing.T) {
+	var out []Range
+
+	// Empty slice: append a fresh range.
+	appendProseRange(&out, 0, 5)
+	require.Equal(t, []Range{{0, 5}}, out)
+
+	// Adjacent (start == prev.End): coalesce and extend, no new entry.
+	appendProseRange(&out, 5, 8)
+	require.Equal(t, []Range{{0, 8}}, out, "adjacent range extends the previous")
+
+	// Overlapping past prev.End: extend to the new stop.
+	appendProseRange(&out, 6, 12)
+	require.Equal(t, []Range{{0, 12}}, out, "overlapping range extends to new stop")
+
+	// Fully contained (stop <= prev.End): swallowed, End unchanged.
+	appendProseRange(&out, 3, 9)
+	require.Equal(t, []Range{{0, 12}}, out, "contained range neither shrinks nor appends")
+
+	// Beyond prev.End: append a new entry.
+	appendProseRange(&out, 20, 25)
+	require.Equal(t, []Range{{0, 12}, {20, 25}}, out, "non-adjacent range appends")
+}
