@@ -754,7 +754,7 @@ func resolveBodySyncLine(
 		return patchedLine{}, false
 	}
 	expected := resolveFields(sp.BodyText, docFM)
-	re := buildFieldPattern(sp.BodyText)
+	re := sp.compiled
 	for i := startLine - 1; i < endLine && i < len(work); i++ {
 		trimmed := strings.TrimSpace(string(work[i]))
 		if trimmed == expected {
@@ -785,6 +785,19 @@ func buildFieldPattern(bodyText string) *regexp.Regexp {
 	}
 	patBuf.WriteString("$")
 	return regexp.MustCompile(patBuf.String())
+}
+
+// buildSchemaHeading constructs a schemaHeading from a docHeading,
+// pre-compiling the field-interpolation regex when the text contains
+// {field} references so matchesSchema pays no per-call compile cost.
+// Pattern construction is delegated to buildFieldPattern, which owns
+// the QuoteMeta+".+" logic and its MustCompile invariant.
+func buildSchemaHeading(h docHeading) schemaHeading {
+	sh := schemaHeading{Level: h.Level, Text: h.Text}
+	if fieldinterp.ContainsField(h.Text) {
+		sh.compiled = buildFieldPattern(h.Text)
+	}
+	return sh
 }
 
 // composedSchemaForFix returns the same composed *schema.Schema
@@ -1077,9 +1090,9 @@ type schemaConfig struct {
 
 // schemaHeading represents a required heading from the schema.
 type schemaHeading struct {
-	Level int
-	Text  string         // raw text, may contain {field} or ?
-	re    *regexp.Regexp // pre-compiled for {field} patterns; nil when no fields
+	Level    int
+	Text     string         // raw text, may contain {field} or ?
+	compiled *regexp.Regexp // pre-compiled regex for {field} patterns; nil if not needed
 }
 
 // parsedSchema holds the full parsed schema.
@@ -1094,8 +1107,9 @@ type parsedSchema struct {
 // syncPoint represents a {field} reference in heading text.
 type syncPoint struct {
 	Field    string
-	InBody   bool   // true if in body content, false if in heading
-	BodyText string // the full expected body line text with field substituted
+	InBody   bool           // true if in body content, false if in heading
+	BodyText string         // the full expected body line text with field substituted
+	compiled *regexp.Regexp // pre-compiled pattern for BodyText; nil for non-body sync points
 }
 
 var cueIdentPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -1321,7 +1335,7 @@ func collectBodySyncPoints(
 			for _, f := range fields {
 				syncPoints[currentHeading] = append(
 					syncPoints[currentHeading],
-					syncPoint{Field: f, InBody: true, BodyText: trimmed},
+					syncPoint{Field: f, InBody: true, BodyText: trimmed, compiled: buildFieldPattern(trimmed)},
 				)
 			}
 		}
@@ -1438,13 +1452,8 @@ func parseSchemaWithCache(
 	syncPoints := make(map[int][]syncPoint)
 
 	for i, h := range headings {
-		sh := schemaHeading{Level: h.Level, Text: h.Text}
-		fields := fieldinterp.Fields(h.Text)
-		if len(fields) > 0 {
-			sh.re = buildFieldPattern(h.Text)
-		}
-		schHeadings[i] = sh
-		for _, f := range fields {
+		schHeadings[i] = buildSchemaHeading(h)
+		for _, f := range fieldinterp.Fields(h.Text) {
 			syncPoints[i] = append(syncPoints[i], syncPoint{Field: f})
 		}
 	}
@@ -1948,12 +1957,16 @@ func nextUnclaimed(candidates []int, claimed map[int]bool, minIdx int) int {
 }
 
 // matchesSchema checks if a document heading matches a schema heading.
+// For headings with {field} references the regex was compiled once at
+// schema parse time and stored in req.compiled, so no per-call NFA build.
+// Invariant: req.compiled is non-nil whenever ContainsField(req.Text) is
+// true — buildSchemaHeading guarantees this.
 func matchesSchema(req schemaHeading, doc docHeading) bool {
 	if req.Text == "?" {
 		return true
 	}
-	if req.re != nil {
-		return req.re.MatchString(doc.Text)
+	if req.compiled != nil {
+		return req.compiled.MatchString(doc.Text)
 	}
 	return doc.Text == req.Text
 }

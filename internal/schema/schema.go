@@ -134,19 +134,18 @@ type FieldMeta struct {
 // MustMatch, slugifies the result, and looks it up in the document's
 // heading slug set. Lines whose raw text matches SkipLinesMatching
 // are exempt — typically blockquoted stale text.
+//
+// compiled and compiledSkip are set by parseCrossRefEntry at parse
+// time so ValidateCrossReferences and buildCrossRefGraph never
+// recompile the same NFA on every document. They are nil for CrossRef
+// values constructed directly (e.g., in tests); compilePattern and
+// compileSkip fall back to regexp.Compile in that case.
 type CrossRef struct {
 	Pattern           string
 	MustMatch         string
 	SkipLinesMatching string
-
-	// compiledRE and compiledSkipRE cache regexp.Compile(Pattern) and
-	// regexp.Compile(SkipLinesMatching) respectively. They are set once
-	// by parseCrossRefEntry at schema parse time so ValidateCrossReferences
-	// and buildCrossRefGraph never recompile the same NFA on every document.
-	// Nil means the pattern has not been compiled yet; callers fall back to
-	// compiling on demand.
-	compiledRE     *regexp.Regexp
-	compiledSkipRE *regexp.Regexp
+	compiled          *regexp.Regexp // compiled Pattern; nil for test-constructed values
+	compiledSkip      *regexp.Regexp // compiled SkipLinesMatching; nil if empty or test-constructed
 }
 
 // AcronymRule configures first-use acronym detection. KnownSafe is

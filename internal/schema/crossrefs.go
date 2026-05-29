@@ -4,52 +4,32 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/mdtext"
 	"github.com/yuin/goldmark/ast"
 )
 
-// crossRefRECacheCap bounds the process-scoped compiled cross-reference regex
-// cache, matching the matcherCacheCap policy in matcher.go. When the cap is
-// reached, the map is reset — a deliberate eviction that trades recompilation
-// on the next hit for a bounded memory footprint in long-running LSP sessions.
-const crossRefRECacheCap = 1024
-
-var (
-	crossRefRECacheMu  sync.Mutex
-	crossRefRECacheMap = make(map[string]*regexp.Regexp, crossRefRECacheCap)
-	crossRefRECacheLen int
-)
-
-// compileCrossRefRE returns a cached *regexp.Regexp for pattern, compiling it
-// on the first successful call. Failed compilations are not cached; every call
-// with an invalid pattern string recompiles and returns the error.
-func compileCrossRefRE(pattern string) (*regexp.Regexp, error) {
-	crossRefRECacheMu.Lock()
-	if v, ok := crossRefRECacheMap[pattern]; ok {
-		crossRefRECacheMu.Unlock()
-		return v, nil
+// compilePattern returns the pre-compiled Pattern regexp when available,
+// falling back to regexp.Compile for CrossRef values built outside the
+// parser (e.g., in tests).
+func (cr CrossRef) compilePattern() (*regexp.Regexp, error) {
+	if cr.compiled != nil {
+		return cr.compiled, nil
 	}
-	crossRefRECacheMu.Unlock()
+	return regexp.Compile(cr.Pattern)
+}
 
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, err
+// compileSkip returns the pre-compiled SkipLinesMatching regexp when
+// available, nil when the field is empty, and a fresh compile otherwise.
+func (cr CrossRef) compileSkip() (*regexp.Regexp, error) {
+	if cr.SkipLinesMatching == "" {
+		return nil, nil
 	}
-
-	crossRefRECacheMu.Lock()
-	if crossRefRECacheLen >= crossRefRECacheCap {
-		crossRefRECacheMap = make(map[string]*regexp.Regexp, crossRefRECacheCap)
-		crossRefRECacheLen = 0
+	if cr.compiledSkip != nil {
+		return cr.compiledSkip, nil
 	}
-	if _, exists := crossRefRECacheMap[pattern]; !exists {
-		crossRefRECacheLen++
-	}
-	crossRefRECacheMap[pattern] = re
-	crossRefRECacheMu.Unlock()
-	return re, nil
+	return regexp.Compile(cr.SkipLinesMatching)
 }
 
 // ValidateCrossReferences walks the document's inline text nodes and,
@@ -67,32 +47,21 @@ func ValidateCrossReferences(
 	texts := collectTextNodes(f)
 	var diags []lint.Diagnostic
 	for _, cr := range sch.CrossReferences {
-		// Use pre-compiled regex from parse time; fall back to compileCrossRefRE
-		// for CrossRef values constructed outside parseCrossRefEntry
-		// (e.g. in tests or compose paths).
-		re := cr.compiledRE
-		if re == nil {
-			var err error
-			re, err = compileCrossRefRE(cr.Pattern)
-			if err != nil {
-				diags = append(diags, mkDiag(f.Path, 1,
-					fmt.Sprintf(
-						"cross-references: invalid pattern %q: %v",
-						cr.Pattern, err)))
-				continue
-			}
+		re, err := cr.compilePattern()
+		if err != nil {
+			diags = append(diags, mkDiag(f.Path, 1,
+				fmt.Sprintf(
+					"cross-references: invalid pattern %q: %v",
+					cr.Pattern, err)))
+			continue
 		}
-		skipRE := cr.compiledSkipRE
-		if skipRE == nil && cr.SkipLinesMatching != "" {
-			var err error
-			skipRE, err = compileCrossRefRE(cr.SkipLinesMatching)
-			if err != nil {
-				diags = append(diags, mkDiag(f.Path, 1,
-					fmt.Sprintf(
-						"cross-references: invalid skip-lines-matching %q: %v",
-						cr.SkipLinesMatching, err)))
-				continue
-			}
+		skipRE, err := cr.compileSkip()
+		if err != nil {
+			diags = append(diags, mkDiag(f.Path, 1,
+				fmt.Sprintf(
+					"cross-references: invalid skip-lines-matching %q: %v",
+					cr.SkipLinesMatching, err)))
+			continue
 		}
 		diags = append(diags, checkCrossRef(f, cr, re, skipRE, slugs, texts, mkDiag)...)
 	}

@@ -1983,6 +1983,14 @@ func TestHeadingText_WithLink(t *testing.T) {
 	assert.Contains(t, headings[0].Text, "link text")
 }
 
+// matchesSchema: schemaHeading with field text but compiled == nil falls
+// through to the exact-text comparison and does not match, without panicking.
+func TestMatchesSchema_CompiledNil_NoMatch(t *testing.T) {
+	req := schemaHeading{Level: 2, Text: "{id}: {name}", compiled: nil}
+	dh := docHeading{Level: 2, Text: "42: Alice", Line: 1}
+	assert.False(t, matchesSchema(req, dh))
+}
+
 // matchRequired: level mismatch for out-of-order heading
 func TestCheck_OutOfOrderSectionLevelMismatch(t *testing.T) {
 	// Schema requires ## Alpha then ## Beta.
@@ -2417,7 +2425,10 @@ func TestFix_BodySync_HeadingFollowedByAnother(t *testing.T) {
 // TestResolveBodySyncLine_NilPath covers the path == nil branch by
 // calling resolveBodySyncLine directly with an empty-string field.
 func TestResolveBodySyncLine_NilPath(t *testing.T) {
-	sp := syncPoint{Field: "", InBody: true, BodyText: "- **Category**: {category}"}
+	sp := syncPoint{
+		Field: "", InBody: true, BodyText: "- **Category**: {category}",
+		compiled: buildFieldPattern("- **Category**: {category}"),
+	}
 	_, ok := resolveBodySyncLine(sp, map[string]any{"category": "structural"}, nil, 1, 1)
 	assert.False(t, ok, "empty field should yield ok=false")
 }
