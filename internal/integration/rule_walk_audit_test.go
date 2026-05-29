@@ -40,6 +40,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/config"
@@ -327,7 +328,7 @@ func diagsEqual(a, b []lint.Diagnostic) bool {
 	}
 	key := func(d lint.Diagnostic) string {
 		return d.RuleID + "\x00" + d.Message + "\x00" +
-			string(rune(d.Line)) + "\x00" + string(rune(d.Column)) +
+			strconv.Itoa(d.Line) + "\x00" + strconv.Itoa(d.Column) +
 			"\x00" + string(d.Severity)
 	}
 	ka := make([]string, len(a))
