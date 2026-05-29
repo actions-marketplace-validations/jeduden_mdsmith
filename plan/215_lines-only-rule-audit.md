@@ -235,9 +235,8 @@ rule, so the manifest stays accurate.
 1. [x] Audit harness (nil-AST probe, code-block-
    perturbation probe, `go/packages` static scan) plus
    the initial manifest. In `rule_walk_audit_test.go`;
-   manifest `testdata/rule_walk_audit.json`. Probes
-   drive each rule against its own `bad/` fixtures.
-2. Add `(f *File).ProseRanges()` with the AST
+   manifest `testdata/rule_walk_audit.json`.
+2. [x] Add `(f *File).ProseRanges()` with the AST
    projection. Memoize via the `atomic.Bool +
    sync.Mutex` pattern `newlineOffsets` and
    `codeBlockLines` use in
@@ -248,7 +247,8 @@ rule, so the manifest stays accurate.
    constraint. Unit tests cover Paragraph,
    Heading, ListItem, Blockquote text, and the
    exclusions (FencedCodeBlock, CodeBlock,
-   HTMLBlock, CodeSpan, AutoLink, inline HTML).
+   HTMLBlock, CodeSpan, AutoLink, inline-HTML
+   tags — but not the visible text those tags wrap).
 3. Convert the three highest-allocating Category
    A candidates, one commit per rule.
 4. Convert Category B candidates against
