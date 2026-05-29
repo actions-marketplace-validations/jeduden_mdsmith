@@ -705,7 +705,7 @@ type catalogEntries struct {
 func cachedCatalogEntries(
 	f *lint.File, params map[string]string, filePath string, line int,
 ) ([]fileEntry, globResolution, []lint.Diagnostic) {
-	key := fmt.Sprintf("catalog.entries:%s#%d", filePath, line)
+	key := "catalog.entries:" + filePath + "#" + strconv.Itoa(line)
 	v := f.Memo(key, func() any {
 		e, res, d := buildCatalogEntries(f, params, filePath, line)
 		return catalogEntries{entries: e, res: res, diags: d}
