@@ -108,6 +108,9 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 			return []lint.Diagnostic{d}
 		}
 	case *ast.RawHTML:
+		if node.Segments.Len() == 0 {
+			return nil
+		}
 		seg := node.Segments.At(0)
 		raw := rawHTMLBytes(node, f.Source)
 		if d, ok := r.checkRaw(f, r.cachedAllowSet(f), raw, seg.Start); ok {
@@ -160,7 +163,7 @@ func (r *Rule) cachedAllowSet(f *lint.File) map[string]bool {
 }
 
 func (r *Rule) diag(f *lint.File, offset int, display string) lint.Diagnostic {
-	line, col := lineColOfOffset(f.Source, offset)
+	line, col := f.LineOfOffset(offset), f.ColumnOfOffset(offset)
 	return lint.Diagnostic{
 		File:     f.Path,
 		Line:     line,
@@ -170,20 +173,6 @@ func (r *Rule) diag(f *lint.File, offset int, display string) lint.Diagnostic {
 		Severity: lint.Warning,
 		Message:  fmt.Sprintf("inline HTML %s is not allowed", display),
 	}
-}
-
-// lineColOfOffset converts a byte offset in source to 1-based line and column numbers.
-func lineColOfOffset(source []byte, offset int) (line, col int) {
-	line = 1
-	lineStart := 0
-	for i := 0; i < offset && i < len(source); i++ {
-		if source[i] == '\n' {
-			line++
-			lineStart = i + 1
-		}
-	}
-	col = offset - lineStart + 1
-	return
 }
 
 var tagNameRe = regexp.MustCompile(`(?i)</?([a-zA-Z][a-zA-Z0-9-]*)`)
@@ -211,8 +200,20 @@ func isClosingTag(raw []byte) bool {
 }
 
 func rawHTMLBytes(n *ast.RawHTML, source []byte) []byte {
-	var b []byte
-	for i := 0; i < n.Segments.Len(); i++ {
+	segLen := n.Segments.Len()
+	if segLen == 0 {
+		return nil
+	}
+	total := 0
+	for i := 0; i < segLen; i++ {
+		seg := n.Segments.At(i)
+		total += seg.Stop - seg.Start + seg.Padding
+		if seg.ForceNewline {
+			total++ // seg.Value may append '\n' when the segment doesn't end with one
+		}
+	}
+	b := make([]byte, 0, total)
+	for i := 0; i < segLen; i++ {
 		seg := n.Segments.At(i)
 		b = append(b, seg.Value(source)...)
 	}

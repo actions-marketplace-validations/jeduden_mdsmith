@@ -4,11 +4,18 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/yuin/goldmark/ast"
+	goldmarktext "github.com/yuin/goldmark/text"
+
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newRawHTMLNode() *ast.RawHTML {
+	return ast.NewRawHTML()
+}
 
 // --- extractTag unit tests ---
 
@@ -275,4 +282,37 @@ func TestRegisteredDefault_AllowCommentsTrue(t *testing.T) {
 	require.True(t, ok)
 	assert.True(t, hr.AllowComments,
 		"registered MDS041 must have AllowComments=true to match DefaultSettings")
+}
+
+func TestRawHTMLBytes_ZeroSegments(t *testing.T) {
+	// A freshly allocated RawHTML node has no segments; rawHTMLBytes must
+	// return nil rather than a non-nil empty slice.
+	node := newRawHTMLNode()
+	assert.Nil(t, rawHTMLBytes(node, []byte("source")))
+}
+
+func TestCheckNode_ZeroSegmentRawHTML_NoPanic(t *testing.T) {
+	// A synthetic *ast.RawHTML with no segments must not panic in CheckNode.
+	// Segments.At(0) would panic on the empty slice before rawHTMLBytes is
+	// reached, so CheckNode must guard with Len() == 0 first.
+	r := newRule(t, nil)
+	f := parse(t, "# Title\n")
+	node := newRawHTMLNode() // 0 segments
+	assert.NotPanics(t, func() {
+		diags := r.CheckNode(node, true, f)
+		assert.Nil(t, diags)
+	})
+}
+
+func TestRawHTMLBytes_ForceNewline(t *testing.T) {
+	// When a segment carries ForceNewline=true, seg.Value() appends a trailing
+	// '\n' that the capacity formula must account for. Verify that rawHTMLBytes
+	// returns the full content including the forced newline without a panic or
+	// truncation.
+	source := []byte("<br>")
+	node := newRawHTMLNode()
+	seg := goldmarktext.Segment{Start: 0, Stop: 4, ForceNewline: true}
+	node.Segments.Append(seg)
+	got := rawHTMLBytes(node, source)
+	assert.Equal(t, []byte("<br>\n"), got)
 }

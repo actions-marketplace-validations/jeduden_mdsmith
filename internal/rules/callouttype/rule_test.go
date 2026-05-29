@@ -170,3 +170,14 @@ func TestUnknownTypeDiag_AllowListExtras(t *testing.T) {
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, "(plus custom, decision)")
 }
+
+func TestCheck_AllowSetCachedPerFileAfterApplySettings(t *testing.T) {
+	// After ApplySettings registers a custom type, Check must accept it.
+	// Calling Check twice on the same file exercises the per-file memo cache
+	// (f.Memo) that buildAllowSet stores its result in.
+	f := newFile(t, "> [!custom]\n> body\n")
+	r := &Rule{}
+	require.NoError(t, r.ApplySettings(map[string]any{"allow": []any{"custom"}}))
+	assert.Empty(t, r.Check(f))
+	assert.Empty(t, r.Check(f))
+}

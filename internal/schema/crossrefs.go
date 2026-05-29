@@ -4,11 +4,53 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/mdtext"
 	"github.com/yuin/goldmark/ast"
 )
+
+// crossRefRECacheCap bounds the process-scoped compiled cross-reference regex
+// cache, matching the matcherCacheCap policy in matcher.go. When the cap is
+// reached, the map is reset — a deliberate eviction that trades recompilation
+// on the next hit for a bounded memory footprint in long-running LSP sessions.
+const crossRefRECacheCap = 1024
+
+var (
+	crossRefRECacheMu  sync.Mutex
+	crossRefRECacheMap = make(map[string]*regexp.Regexp, crossRefRECacheCap)
+	crossRefRECacheLen int
+)
+
+// compileCrossRefRE returns a cached *regexp.Regexp for pattern, compiling it
+// on the first successful call. Failed compilations are not cached; every call
+// with an invalid pattern string recompiles and returns the error.
+func compileCrossRefRE(pattern string) (*regexp.Regexp, error) {
+	crossRefRECacheMu.Lock()
+	if v, ok := crossRefRECacheMap[pattern]; ok {
+		crossRefRECacheMu.Unlock()
+		return v, nil
+	}
+	crossRefRECacheMu.Unlock()
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	crossRefRECacheMu.Lock()
+	if crossRefRECacheLen >= crossRefRECacheCap {
+		crossRefRECacheMap = make(map[string]*regexp.Regexp, crossRefRECacheCap)
+		crossRefRECacheLen = 0
+	}
+	if _, exists := crossRefRECacheMap[pattern]; !exists {
+		crossRefRECacheLen++
+	}
+	crossRefRECacheMap[pattern] = re
+	crossRefRECacheMu.Unlock()
+	return re, nil
+}
 
 // ValidateCrossReferences walks the document's inline text nodes and,
 // for each cross-reference pattern, checks that every match resolves
@@ -25,13 +67,13 @@ func ValidateCrossReferences(
 	texts := collectTextNodes(f)
 	var diags []lint.Diagnostic
 	for _, cr := range sch.CrossReferences {
-		// Use pre-compiled regex from parse time; fall back to compiling on
-		// demand for CrossRef values constructed outside parseCrossRefEntry
+		// Use pre-compiled regex from parse time; fall back to compileCrossRefRE
+		// for CrossRef values constructed outside parseCrossRefEntry
 		// (e.g. in tests or compose paths).
 		re := cr.compiledRE
 		if re == nil {
 			var err error
-			re, err = regexp.Compile(cr.Pattern)
+			re, err = compileCrossRefRE(cr.Pattern)
 			if err != nil {
 				diags = append(diags, mkDiag(f.Path, 1,
 					fmt.Sprintf(
@@ -43,7 +85,7 @@ func ValidateCrossReferences(
 		skipRE := cr.compiledSkipRE
 		if skipRE == nil && cr.SkipLinesMatching != "" {
 			var err error
-			skipRE, err = regexp.Compile(cr.SkipLinesMatching)
+			skipRE, err = compileCrossRefRE(cr.SkipLinesMatching)
 			if err != nil {
 				diags = append(diags, mkDiag(f.Path, 1,
 					fmt.Sprintf(

@@ -102,7 +102,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	if f == nil || f.AST == nil {
 		return nil
 	}
-	allowed := r.effectiveAllowSet()
+	allowed := r.cachedAllowSet(f)
 	var diags []lint.Diagnostic
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -125,10 +125,12 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	return diags
 }
 
-// effectiveAllowSet returns the union of the built-in Obsidian types
-// (lowercased) and the user-configured `allow` entries. Returned map
-// is private to one Check call.
-func (r *Rule) effectiveAllowSet() map[string]bool {
+// buildAllowSet constructs the union of the built-in Obsidian types and the
+// user-configured Allow entries. It is called from cachedAllowSet via f.Memo
+// so it runs at most once per file. Rule instances are shared across concurrent
+// LSP calls, so mutable caching on the Rule struct itself would race; the
+// per-File memo is sync.Map + sync.Once protected and avoids that entirely.
+func (r *Rule) buildAllowSet() map[string]bool {
 	out := make(map[string]bool, len(builtInTypes)+len(r.Allow))
 	for k := range builtInTypes {
 		out[k] = true
@@ -137,6 +139,14 @@ func (r *Rule) effectiveAllowSet() map[string]bool {
 		out[strings.ToLower(name)] = true
 	}
 	return out
+}
+
+// cachedAllowSet returns the effective allow set memoised on the per-Check
+// *lint.File, so the map is built at most once per file regardless of how
+// many callout blockquotes the file contains.
+func (r *Rule) cachedAllowSet(f *lint.File) map[string]bool {
+	v := f.Memo("MDS067.allowSet", func() any { return r.buildAllowSet() })
+	return v.(map[string]bool)
 }
 
 // calloutToken returns the `[!type]` token, body-relative line, and
