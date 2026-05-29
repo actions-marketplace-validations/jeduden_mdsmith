@@ -290,7 +290,7 @@ func replaceMarker(line []byte, newMarker byte) []byte {
 // joinLines joins lines with newline separators.
 func joinLines(lines [][]byte) []byte {
 	if len(lines) == 0 {
-		return []byte{}
+		return nil
 	}
 	totalLen := 0
 	for _, line := range lines {

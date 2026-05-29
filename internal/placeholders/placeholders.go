@@ -16,7 +16,6 @@ package placeholders
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/jeduden/mdsmith/internal/fieldinterp"
@@ -29,12 +28,6 @@ const (
 	PlaceholderSection = "placeholder-section"
 	CUEFrontmatter     = "cue-frontmatter"
 )
-
-// questionPattern matches a heading text that is exactly "?".
-var questionPattern = regexp.MustCompile(`^\s*\?\s*$`)
-
-// ellipsisPattern matches a heading text that is exactly "...".
-var ellipsisPattern = regexp.MustCompile(`^\s*\.\.\.\s*$`)
 
 // neutralText is the neutral replacement per body token.
 var neutralText = map[string]string{
@@ -72,11 +65,11 @@ func ContainsBodyToken(text string, tokens []string) bool {
 				return true
 			}
 		case HeadingQuestion:
-			if questionPattern.MatchString(text) {
+			if strings.TrimSpace(text) == "?" {
 				return true
 			}
 		case PlaceholderSection:
-			if ellipsisPattern.MatchString(text) {
+			if strings.TrimSpace(text) == "..." {
 				return true
 			}
 		}
@@ -96,11 +89,11 @@ func MaskBodyTokens(text string, tokens []string) string {
 			// Replace all {field} occurrences with a neutral word.
 			text = replaceVarTokens(text)
 		case HeadingQuestion:
-			if questionPattern.MatchString(text) {
+			if strings.TrimSpace(text) == "?" {
 				return neutralText[HeadingQuestion]
 			}
 		case PlaceholderSection:
-			if ellipsisPattern.MatchString(text) {
+			if strings.TrimSpace(text) == "..." {
 				return neutralText[PlaceholderSection]
 			}
 		}
@@ -129,11 +122,11 @@ func stripBodyTokens(text string, tokens []string) string {
 			parts := fieldinterp.SplitOnFields(text)
 			text = strings.Join(parts, "")
 		case HeadingQuestion:
-			if questionPattern.MatchString(text) {
+			if strings.TrimSpace(text) == "?" {
 				return ""
 			}
 		case PlaceholderSection:
-			if ellipsisPattern.MatchString(text) {
+			if strings.TrimSpace(text) == "..." {
 				return ""
 			}
 		}

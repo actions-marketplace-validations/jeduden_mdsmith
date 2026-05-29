@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -152,8 +153,26 @@ func (r *Rule) cachedBannedSet() map[string]bool {
 }
 
 // normalizeText trims, lowercases, and collapses internal whitespace.
+// Single-pass to avoid the three intermediate allocations of the
+// strings.Fields → strings.Join → strings.ToLower chain.
 func normalizeText(s string) string {
-	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+	var b strings.Builder
+	b.Grow(len(s))
+	needSpace := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			if b.Len() > 0 {
+				needSpace = true
+			}
+		} else {
+			if needSpace {
+				b.WriteByte(' ')
+				needSpace = false
+			}
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
 }
 
 // isOnlyImageChild reports whether link's sole child is an image node.
