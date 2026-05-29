@@ -10,6 +10,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/extract"
 	"github.com/jeduden/mdsmith/internal/lint"
+	"github.com/jeduden/mdsmith/internal/placeholders"
 	"github.com/jeduden/mdsmith/internal/rules/requiredstructure"
 	"github.com/jeduden/mdsmith/internal/schema"
 
@@ -59,12 +60,13 @@ func runTestProjection(
 	if err != nil {
 		return nil, err
 	}
-	tf, sch, err := testComposeTargetSchema(
+	tf, sch, phs, err := testComposeTargetSchema(
 		host, readFS, targetFile, data, rsSettings)
 	if err != nil {
 		return nil, err
 	}
-	if err := testValidateAgainstSchema(tf, sch, fmFields); err != nil {
+	fmIsCUE := placeholders.HasCUEFrontmatter(phs)
+	if err := testValidateAgainstSchema(tf, sch, fmFields, fmIsCUE); err != nil {
 		return nil, err
 	}
 	mt := schema.BuildMatchTree(tf, sch, fmFields)
@@ -91,12 +93,15 @@ func testDecodeFrontMatter(
 	}
 	var kinds []string
 	if raw, ok := fields["kinds"]; ok {
-		if v, ok := raw.([]any); ok {
+		switch v := raw.(type) {
+		case []any:
 			for _, item := range v {
 				if s, ok := item.(string); ok {
 					kinds = append(kinds, s)
 				}
 			}
+		case string:
+			kinds = []string{v}
 		}
 	}
 	return kinds, fields, nil
@@ -124,42 +129,44 @@ func testResolveRsSettings(
 func testComposeTargetSchema(
 	host *lint.File, readFS fs.FS, targetFile string, data []byte,
 	rsSettings map[string]any,
-) (*lint.File, *schema.Schema, error) {
+) (*lint.File, *schema.Schema, []string, error) {
 	tf, err := lint.NewFileFromSource(targetFile, data, host.StripFrontMatter)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parsing %q: %w", targetFile, err)
+		return nil, nil, nil, fmt.Errorf("parsing %q: %w", targetFile, err)
 	}
 	tf.MaxInputBytes = host.MaxInputBytes
 	tf.FS = readFS
 	tf.RootFS = host.RootFS
 	tf.RootDir = host.RootDir
+	tf.RunCache = host.RunCache
 
 	rsRule := &requiredstructure.Rule{}
 	if rsSettings != nil {
 		if err := rsRule.ApplySettings(rsSettings); err != nil {
-			return nil, nil, fmt.Errorf(
+			return nil, nil, nil, fmt.Errorf(
 				"loading schema config for %q: %w", targetFile, err)
 		}
 	}
 	sch, err := rsRule.ComposedSchema(tf)
 	if err != nil {
-		return nil, nil, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"composing schema for %q: %w", targetFile, err)
 	}
 	if sch == nil || sch.IsEmpty() {
-		return nil, nil, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"%q declares no schema to extract against", targetFile)
 	}
-	return tf, sch, nil
+	return tf, sch, rsRule.Placeholders, nil
 }
 
 func testValidateAgainstSchema(
 	tf *lint.File, sch *schema.Schema, fmFields map[string]any,
+	fmIsCUE bool,
 ) error {
 	mkDiag := func(file string, line int, msg string) lint.Diagnostic {
 		return lint.Diagnostic{File: file, Line: line, Message: msg}
 	}
-	if vd := schema.Validate(tf, sch, fmFields, false, mkDiag); len(vd) > 0 {
+	if vd := schema.Validate(tf, sch, fmFields, fmIsCUE, mkDiag); len(vd) > 0 {
 		return fmt.Errorf(
 			"target file does not conform to its schema: %s",
 			vd[0].Message)

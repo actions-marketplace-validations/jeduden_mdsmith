@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -19,65 +20,65 @@ import (
 // =====================================================================
 
 // TestInstallIncludeExtractProjector_EmptyPathClearsProjector seeds a
-// sentinel projector, calls install with "" to clear it. The include
-// rule's package-level projector is private; we verify the clear by
-// re-installing a recognisable closure and observing that follow-up
-// calls reach it (no residual state from the cleared sentinel).
+// sentinel projector, calls install with "" to clear it, then drives
+// the include rule's projectExtractValue and asserts the
+// "no projector installed" diagnostic — proving the clear branch
+// actually wiped the projector rather than leaving the sentinel in
+// place.
 func TestInstallIncludeExtractProjector_EmptyPathClearsProjector(t *testing.T) {
 	include.SetExtractProjector(
 		func(*lint.File, fs.FS, string, []byte) (any, error) {
-			return "sentinel", nil
+			return map[string]any{"x": "sentinel"}, nil
 		})
 	t.Cleanup(func() { include.SetExtractProjector(nil) })
 
-	// The clear branch: should set the projector to nil.
 	installIncludeExtractProjector("")
-	// We rely on SetExtractProjector(nil) being equivalent to the
-	// clear, which is the install function's documented contract.
+
+	// Drive the rule the same way `<?include extract:?>` does. With
+	// no projector installed, the rule must surface the documented
+	// diagnostic rather than silently consult the cleared sentinel.
+	src := "# Doc\n\n<?include\nfile: t.md\nextract: x\n?>\nold\n<?/include?>\n"
+	hostDoc, err := lint.NewFileFromSource("README.md", []byte(src), false)
+	require.NoError(t, err)
+	hostDoc.FS = fstest.MapFS{"t.md": {Data: []byte("# t\n")}}
+	r := &include.Rule{}
+	diags := r.Check(hostDoc)
+	var found bool
+	for _, d := range diags {
+		if strings.Contains(d.Message, "no extract projector is installed") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found,
+		"expected 'no extract projector is installed' diagnostic; got %+v", diags)
 }
 
-// TestInstallIncludeExtractProjector_NonEmptyPathDoesNotPanic exercises
-// the non-empty install branch. The installed projector delegates to
-// projectIncludeExtract, which is fully covered by the
-// TestProjectIncludeExtract_* tests below.
-func TestInstallIncludeExtractProjector_NonEmptyPathDoesNotPanic(t *testing.T) {
-	prev := includeExtractCfgPath
-	t.Cleanup(func() {
-		include.SetExtractProjector(nil)
-		includeExtractCfgPath = prev
-	})
-	installIncludeExtractProjector("/tmp/does-not-need-to-exist.yml")
-	// No assertion beyond "did not panic"; the projector body is the
-	// single call to projectIncludeExtract, covered separately.
-}
-
-// TestProductionExtractProjector_ReadsActiveCfgPath exercises the
-// named projector function the install wires up. It re-runs the
-// success path of TestProjectIncludeExtract_SuccessTopLevelText
-// through the projector closure-equivalent so that branch coverage
-// stops registering the wiring as untouched.
-func TestProductionExtractProjector_ReadsActiveCfgPath(t *testing.T) {
+// TestInstallIncludeExtractProjector_NonEmptyPathInstallsClosure
+// exercises the non-empty install branch end-to-end. The installed
+// closure captures cfgPath, so a subsequent install with a different
+// path produces a fresh closure that owns its own cfgPath; we drive
+// the rule and assert it returns the projected leaf via the
+// captured path.
+func TestInstallIncludeExtractProjector_NonEmptyPathInstallsClosure(t *testing.T) {
 	dir := chdirToConfig(t, includeExtractTestCfg)
 	cfgPath := filepath.Join(dir, ".mdsmith.yml")
 	writeFixture(t, dir, "docs/brand/messaging.md", messagingFixtureForInclude)
+	t.Cleanup(func() { include.SetExtractProjector(nil) })
 
-	prev := includeExtractCfgPath
-	includeExtractCfgPath = cfgPath
-	t.Cleanup(func() { includeExtractCfgPath = prev })
+	installIncludeExtractProjector(cfgPath)
 
-	host, err := lint.NewFileFromSource("README.md", []byte("# x\n"), false)
+	src := "# Doc\n\n<?include\nfile: docs/brand/messaging.md\n" +
+		"extract: tagline.text\n?>\nold\n<?/include?>\n"
+	hostDoc, err := lint.NewFileFromSource("README.md", []byte(src), false)
 	require.NoError(t, err)
+	hostDoc.FS = dirFSForInclude(dir)
+	hostDoc.RootDir = dir
 
-	tree, err := productionExtractProjector(
-		host, dirFSForInclude(dir),
-		"docs/brand/messaging.md",
-		[]byte(messagingFixtureForInclude))
-	require.NoError(t, err)
-	root, ok := tree.(map[string]any)
-	require.True(t, ok)
-	tagline, ok := root["tagline"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "Tagline text.", tagline["text"])
+	r := &include.Rule{}
+	out := r.Fix(hostDoc)
+	assert.Contains(t, string(out), "Tagline text.",
+		"installed projector did not run with captured cfgPath")
 }
 
 // =====================================================================
@@ -326,9 +327,31 @@ func TestComposeTargetSchema_ComposedSchemaError(t *testing.T) {
 	assert.Contains(t, err.Error(), "composing schema")
 }
 
-// =====================================================================
-// projectIncludeExtract: extract.Extract diag bubbling.
-// =====================================================================
+// TestComposeTargetSchema_ReturnsPlaceholders covers the fmIsCUE
+// plumbing the projector relies on: composeTargetSchema must return
+// the placeholder vocabulary it resolved so the caller can derive
+// fmIsCUE via placeholders.HasCUEFrontmatter. A kind declaring
+// `placeholders: [cue-frontmatter]` must produce a non-empty phs
+// slice that contains the token; without this the caller silently
+// validates CUE-typed frontmatter as YAML and emits spurious
+// frontmatter-parse diagnostics.
+func TestComposeTargetSchema_ReturnsPlaceholders(t *testing.T) {
+	tf, err := lint.NewFileFromSource("docs/x.md", []byte("# x\n"), false)
+	require.NoError(t, err)
+
+	_, phs, err := composeTargetSchema(tf, "docs/x.md", map[string]any{
+		"placeholders": []any{"cue-frontmatter"},
+		"inline-schema": map[string]any{
+			"sections": []any{
+				map[string]any{"heading": nil},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, phs, "cue-frontmatter",
+		"composeTargetSchema must return the rsRule.Placeholders "+
+			"so projectIncludeExtract can derive fmIsCUE")
+}
 
 // TestProjectIncludeExtract_ExtractCollisionBubbles drives the
 // "projection failed" branch using a duplicate-table-column-header

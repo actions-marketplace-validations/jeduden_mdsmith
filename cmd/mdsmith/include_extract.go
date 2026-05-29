@@ -15,8 +15,8 @@ import (
 
 // installIncludeExtractProjector wires the production projector
 // that `<?include?>` directives carrying `extract:` consult. The
-// projector reads the loaded .mdsmith.yml at cfgPath, resolves the
-// target file's kind, composes its schema, parses the target with
+// projector reads the .mdsmith.yml at cfgPath, resolves the target
+// file's kind, composes its schema, parses the target with
 // internal/lint, runs internal/extract.Extract, and returns the
 // resulting JSON tree.
 //
@@ -31,32 +31,25 @@ import (
 // surfaces a clear diagnostic on any `extract:` use, the same
 // outcome as a project without `.mdsmith.yml`.
 //
-// cfgPath is stashed in includeExtractCfgPath so the production
-// projector can be a named function (productionExtractProjector)
-// rather than a closure — closures resist direct unit testing
-// because their captured state is not addressable from outside.
+// cfgPath is captured inside the closure handed to
+// SetExtractProjector. Each install creates a fresh function value
+// that owns its own cfgPath, so a concurrent LSP reload that calls
+// installIncludeExtractProjector with a new path cannot race
+// against in-flight rule.Check goroutines reading the path — the
+// mutex inside include.SetExtractProjector serialises the pointer
+// swap, and the old function value's captured cfgPath stays valid
+// until the last caller returns.
 func installIncludeExtractProjector(cfgPath string) {
-	includeExtractCfgPath = cfgPath
 	if cfgPath == "" {
 		include.SetExtractProjector(nil)
 		return
 	}
-	include.SetExtractProjector(productionExtractProjector)
-}
-
-// includeExtractCfgPath stores the active config path for the
-// production projector. Updated by every installIncludeExtractProjector
-// call so the projector sees the most recently loaded .mdsmith.yml.
-var includeExtractCfgPath string
-
-// productionExtractProjector is the projector the host installs via
-// installIncludeExtractProjector. Pulled out of the closure so the
-// pipeline is exercisable as a plain function in tests.
-func productionExtractProjector(
-	host *lint.File, readFS fs.FS, targetFile string, data []byte,
-) (any, error) {
-	return projectIncludeExtract(
-		includeExtractCfgPath, host, readFS, targetFile, data)
+	include.SetExtractProjector(func(
+		host *lint.File, readFS fs.FS, targetFile string, data []byte,
+	) (any, error) {
+		return projectIncludeExtract(
+			cfgPath, host, readFS, targetFile, data)
+	})
 }
 
 // projectIncludeExtract runs the full schema-compose + extract
@@ -141,6 +134,12 @@ func buildTargetFile(
 	tf.FS = readFS
 	tf.RootFS = host.RootFS
 	tf.RootDir = host.RootDir
+	// Forward the engine-owned RunCache so repeated `<?include
+	// extract:?>` directives against the same target across a single
+	// engine.Run reuse the host's read-side cache rather than
+	// independently re-reading + re-parsing the target on every
+	// directive.
+	tf.RunCache = host.RunCache
 	return tf
 }
 

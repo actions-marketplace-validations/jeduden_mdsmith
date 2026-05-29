@@ -149,7 +149,7 @@ func TestWalkExtractPath_MultiKeyWithExactlyOneContentKey(t *testing.T) {
 // =====================================================================
 
 func TestProjectExtractValue_NoProjectorInstalled(t *testing.T) {
-	prev := projectExtract
+	prev := getExtractProjector()
 	SetExtractProjector(nil)
 	t.Cleanup(func() { SetExtractProjector(prev) })
 
@@ -160,7 +160,7 @@ func TestProjectExtractValue_NoProjectorInstalled(t *testing.T) {
 }
 
 func TestProjectExtractValue_ProjectorErrorBubbles(t *testing.T) {
-	prev := projectExtract
+	prev := getExtractProjector()
 	SetExtractProjector(func(*lint.File, fs.FS, string, []byte) (any, error) {
 		return nil, errors.New("boom")
 	})
@@ -173,7 +173,7 @@ func TestProjectExtractValue_ProjectorErrorBubbles(t *testing.T) {
 }
 
 func TestProjectExtractValue_NonObjectRoot(t *testing.T) {
-	prev := projectExtract
+	prev := getExtractProjector()
 	SetExtractProjector(func(*lint.File, fs.FS, string, []byte) (any, error) {
 		return "scalar-at-root", nil
 	})
@@ -186,7 +186,7 @@ func TestProjectExtractValue_NonObjectRoot(t *testing.T) {
 }
 
 func TestProjectExtractValue_Success(t *testing.T) {
-	prev := projectExtract
+	prev := getExtractProjector()
 	SetExtractProjector(func(*lint.File, fs.FS, string, []byte) (any, error) {
 		return map[string]any{
 			"tagline": map[string]any{"text": "Hello world"},
@@ -251,19 +251,44 @@ func TestFormatExtractValue_UnsupportedType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported type")
 }
 
-// TestFormatExtractValue_ListOfMapsBubblesError makes sure the
-// per-item recursion propagates the inner map-leaf error with a
-// "list item N" prefix instead of silently swallowing it. Drives
-// the case where formatExtractValue recurses on a slice whose
-// entries are themselves rejected leaf types.
-func TestFormatExtractValue_ListOfMapsBubblesError(t *testing.T) {
+// TestFormatExtractValue_ListOfMapsRejected makes sure list items
+// that are themselves objects are refused with a clear "list item N
+// is an object" diagnostic — splicing them would otherwise emit Go-
+// syntax garbage ("map[k:v]") into the host body.
+func TestFormatExtractValue_ListOfMapsRejected(t *testing.T) {
 	_, err := formatExtractValue([]any{
 		"first",
 		map[string]any{"k": "v"},
 	})
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list item 1 is an object")
+}
+
+// TestFormatExtractValue_NestedListRejected guards the malformed-
+// Markdown case where a nested []any would render as `- - inner`
+// (a bullet whose body starts with `- ` rather than a child list).
+// The rule refuses the shape; the user must drill into a more
+// specific path or expose the inner list at a different leaf.
+func TestFormatExtractValue_NestedListRejected(t *testing.T) {
+	_, err := formatExtractValue([]any{
+		"top",
+		[]any{"sub1", "sub2"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list item 1 is a nested list")
+}
+
+// TestFormatExtractValue_ListItemUnsupportedTypeBubbles drives the
+// per-item recursion's error-return path: a list whose entry is a
+// struct (or any other type the leaf-format switch refuses) must
+// surface as a "list item N" wrapped error rather than silently
+// stringifying via fmt.Sprint.
+func TestFormatExtractValue_ListItemUnsupportedTypeBubbles(t *testing.T) {
+	type unknown struct{ X int }
+	_, err := formatExtractValue([]any{"first", unknown{X: 1}})
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list item 1")
-	assert.Contains(t, err.Error(), "leaf is an object")
+	assert.Contains(t, err.Error(), "unsupported type")
 }
 
 // TestProjectExtractValue_MapLeafBubblesError drives the
@@ -273,7 +298,7 @@ func TestFormatExtractValue_ListOfMapsBubblesError(t *testing.T) {
 // — formatExtractValue then refuses to splice the map and the
 // wrapper makes the diagnostic actionable.
 func TestProjectExtractValue_MapLeafBubblesError(t *testing.T) {
-	prev := projectExtract
+	prev := getExtractProjector()
 	t.Cleanup(func() { SetExtractProjector(prev) })
 	SetExtractProjector(func(
 		_ *lint.File, _ fs.FS, _ string, _ []byte,

@@ -238,12 +238,29 @@ func formatExtractValue(v any) (string, error) {
 	case []any:
 		var b strings.Builder
 		for i, item := range val {
-			if i > 0 {
-				b.WriteByte('\n')
+			// List items themselves must be scalars; a nested []any
+			// would render as `- - inner` (a bullet whose body
+			// starts with `- ` rather than a Markdown nested list).
+			// Maps would render as `- map[k:v]` Go-syntax garbage.
+			// Refuse both shapes and ask the user to drill in.
+			switch item.(type) {
+			case []any:
+				return "", fmt.Errorf(
+					"list item %d is a nested list; only scalar "+
+						"list items can be spliced into the include body",
+					i)
+			case map[string]any:
+				return "", fmt.Errorf(
+					"list item %d is an object; only scalar "+
+						"list items can be spliced into the include body",
+					i)
 			}
 			inner, err := formatExtractValue(item)
 			if err != nil {
 				return "", fmt.Errorf("list item %d: %w", i, err)
+			}
+			if i > 0 {
+				b.WriteByte('\n')
 			}
 			b.WriteString("- ")
 			b.WriteString(inner)

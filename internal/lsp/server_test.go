@@ -1932,12 +1932,17 @@ func TestReloadConfigDiscoverInTempDir(t *testing.T) {
 }
 
 // TestReloadConfigOnReloadHookFires ensures the OnConfigReload hook
-// is invoked with the resolved config path on every reload. The CLI
-// uses this to keep the include-extract projector pointing at the
-// active config so `<?include extract:?>` directives produce the
-// same diagnostics in the editor as `mdsmith check` does on the CLI;
+// is invoked when the resolved config path changes. The CLI uses
+// this to keep the include-extract projector pointing at the active
+// config so `<?include extract:?>` directives produce the same
+// diagnostics in the editor as `mdsmith check` does on the CLI;
 // without this wiring the LSP would always emit "no extract
 // projector is installed" diagnostics.
+//
+// A no-op reload (no path change) must NOT fire the hook — the host
+// installs a closure that captures the current cfgPath, and
+// re-installing the same closure on every settings refresh would
+// take the projector's write lock for nothing.
 func TestReloadConfigOnReloadHookFires(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1960,10 +1965,22 @@ func TestReloadConfigOnReloadHookFires(t *testing.T) {
 	assert.Equal(t, 1, calls)
 	assert.Equal(t, dir+"/.mdsmith.yml", gotPath)
 
-	// A second reload re-fires the hook so a config-path change
-	// reaches the install site.
+	// A second reload with no path change must NOT re-fire the hook.
+	s.reloadConfig()
+	assert.Equal(t, 1, calls,
+		"hook should fire only on path changes, not on every reload")
+
+	// Move the resolved path (point at a different config). The hook
+	// fires again with the new path so the host can re-install.
+	otherDir := t.TempDir()
+	require.NoError(t, writeFile(otherDir+"/.mdsmith.yml", "rules:\n  line-length: false\n"))
+	s.configMu.Lock()
+	s.rootDir = otherDir
+	s.configMu.Unlock()
+
 	s.reloadConfig()
 	assert.Equal(t, 2, calls)
+	assert.Equal(t, otherDir+"/.mdsmith.yml", gotPath)
 }
 
 func TestReloadConfigOverridePath(t *testing.T) {
