@@ -39,6 +39,9 @@ func (s *Server) handleCompletion(msg *requestMessage) {
 	}
 
 	items := s.completionItems(ctx, rel, idx)
+	if items == nil {
+		items = []completionItem{}
+	}
 	_ = s.t.writeResponse(msg.ID, completionList{IsIncomplete: false, Items: items})
 }
 
