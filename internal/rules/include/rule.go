@@ -143,6 +143,33 @@ func validateIncludeDirective(
 		}
 	}
 
+	// Validate extract parameter if present.
+	if ex, ok := params["extract"]; ok {
+		if strings.TrimSpace(ex) == "" {
+			return []lint.Diagnostic{makeDiag(filePath, line,
+				`include directive "extract" value is empty`)}
+		}
+		if _, hasSFM := params["strip-frontmatter"]; hasSFM {
+			return []lint.Diagnostic{makeDiag(filePath, line,
+				`include directive "extract" cannot be combined with "strip-frontmatter"`)}
+		}
+		if _, hasHL := params["heading-level"]; hasHL {
+			return []lint.Diagnostic{makeDiag(filePath, line,
+				`include directive "extract" cannot be combined with "heading-level"`)}
+		}
+		// generateIncludeContent returns the projected leaf directly
+		// for extract: directives and never runs the wrap / source-dir
+		// pipeline, so silently accepting these params would drop them.
+		if _, hasWrap := params["wrap"]; hasWrap {
+			return []lint.Diagnostic{makeDiag(filePath, line,
+				`include directive "extract" cannot be combined with "wrap"`)}
+		}
+		if _, hasSD := params["source-dir"]; hasSD {
+			return []lint.Diagnostic{makeDiag(filePath, line,
+				`include directive "extract" cannot be combined with "source-dir"`)}
+		}
+	}
+
 	return nil
 }
 
@@ -210,6 +237,20 @@ func (r *Rule) generateIncludeContent(
 	if err != nil {
 		return "", []lint.Diagnostic{makeDiag(filePath, line,
 			fmt.Sprintf("cannot read include file %q: %v", file, err))}
+	}
+
+	// When the directive carries `extract:`, project the resolved
+	// kind's schema, walk the dotted path, and splice the leaf —
+	// the strip-frontmatter / heading-level / wrap pipeline below
+	// does not apply (the validator rejects the incompatible
+	// combinations on the host side).
+	if dotted, ok := params["extract"]; ok {
+		text, err := projectExtractValue(
+			f, readFS, resolvedFile, data, dotted)
+		if err != nil {
+			return "", []lint.Diagnostic{makeDiag(filePath, line, err.Error())}
+		}
+		return gensection.EnsureTrailingNewline(text), nil
 	}
 
 	// Track this file and recursively expand nested includes.

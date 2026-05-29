@@ -74,9 +74,10 @@ func runLSPWith(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writ
 	defer cancel()
 
 	srv := lsp.New(lsp.Options{
-		Rules:  rule.All(),
-		Reader: stdin,
-		Writer: stdout,
+		Rules:          rule.All(),
+		Reader:         stdin,
+		Writer:         stdout,
+		OnConfigReload: installIncludeExtractProjector,
 	})
 	// SIGINT/SIGTERM cancel ctx, so srv.Run returns context.Canceled.
 	// That's a clean shutdown (the user or the OS asked us to exit), not

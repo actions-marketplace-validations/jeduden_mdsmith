@@ -178,6 +178,39 @@ full grammar.
 
 [secref]: ../reference/section-schema.md
 
+## Reading a value back into Markdown
+
+`mdsmith extract` writes the projection out as JSON,
+YAML, or msgpack — the right shape for a release
+script, a Hugo data file, or any non-Markdown
+consumer. The read-side counterpart lives on the
+`<?include?>` directive: the `extract:` parameter
+walks the same JSON tree and splices one leaf into
+the host file's Markdown body.
+
+Re-using the product-copy example above, a README
+embed reads the tagline directly:
+
+```markdown
+<?include
+file: docs/copy/product.md
+extract: tagline.text
+?>
+Mark down your ideas; smith them into shipping
+docs.
+<?/include?>
+```
+
+The directive runs the included file through the
+same projection rules `mdsmith extract` produces,
+walks the dotted path, and splices the leaf. There
+is no intermediate "fragment" file to keep in sync —
+the README reads the source of truth on every lint.
+
+The full set of supported paths, content-key
+shortcuts, and lint-time errors are documented in
+[generating-content.md](directives/generating-content.md#include-a-typed-value).
+
 ## See also
 
 - [`mdsmith extract`][extract] — the CLI reference,
@@ -186,6 +219,10 @@ full grammar.
   table → `rows`, paragraph → `text`).
 - [Schemas guide][schemas] — declaring the kind
   schema that doubles as the extraction contract.
+- [Generating Content with Directives][gen-content] —
+  the `<?include ... extract:?>` read-side
+  documentation.
 
 [extract]: ../reference/cli/extract.md
 [schemas]: schemas.md
+[gen-content]: directives/generating-content.md

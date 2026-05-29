@@ -1,7 +1,7 @@
 ---
 id: 211
 title: "`<?include?>` projects any typed value of any kind via `extract`"
-status: "🔲"
+status: "🔳"
 summary: >-
   Extend the include directive to pull a typed value out of any
   kind-typed Markdown file via the same projection
@@ -97,7 +97,7 @@ the rendered text of an object).
    under [`internal/release/`][rel]. Drop the
    `MarkdownFragment` patcher type if no other target
    references it.
-7. **Documentation.** Add an "Include a typed value"
+7. [x] **Documentation.** Add an "Include a typed value"
    subsection to the
    [generating-content guide][gen-content] with worked
    examples (text, code, frontmatter, nested bind). Update
@@ -111,13 +111,13 @@ the rendered text of an object).
 
 ## Acceptance Criteria
 
-- [ ] `<?include file: <f> extract: <path> ?>` resolves the
+- [x] `<?include file: <f> extract: <path> ?>` resolves the
   dotted path in the kind's extract projection and splices the
   scalar (or the rendered text of an object) into the block
   body.
-- [ ] `mdsmith check` flags a missing path, an ambiguous object
+- [x] `mdsmith check` flags a missing path, an ambiguous object
   target, or an `extract:` on a file with no resolved kind.
-- [ ] `mdsmith fix` regenerates the block body from the
+- [x] `mdsmith fix` regenerates the block body from the
   projection; running twice is byte-stable.
 - [ ] Every README that previously read a fragment file now
   reads from `docs/brand/messaging.md` directly via
@@ -126,9 +126,9 @@ the rendered text of an object).
 - [ ] `mdsmith-release sync-messaging --check` reports no drift
   (the JSON / TOML / YAML patcher targets continue working
   unchanged; only the fragment layer goes away).
-- [ ] The new directive is documented in
+- [x] The new directive is documented in
   [generating-content.md](../docs/guides/directives/generating-content.md)
   with at least one worked example per value type (text, code,
   frontmatter scalar).
-- [ ] All tests pass: `go test ./...`.
-- [ ] `go tool golangci-lint run` reports no issues.
+- [x] All tests pass: `go test ./...`.
+- [x] `go tool golangci-lint run` reports no issues.
