@@ -1983,6 +1983,15 @@ func TestHeadingText_WithLink(t *testing.T) {
 	assert.Contains(t, headings[0].Text, "link text")
 }
 
+// matchesSchema: compiled nil guard — ContainsField text but compiled == nil
+// returns false without panicking. This invariant is maintained by
+// buildSchemaHeading; the branch guards against direct construction in tests.
+func TestMatchesSchema_CompiledNilGuard(t *testing.T) {
+	req := schemaHeading{Level: 2, Text: "{id}: {name}", compiled: nil}
+	dh := docHeading{Level: 2, Text: "42: Alice", Line: 1}
+	assert.False(t, matchesSchema(req, dh))
+}
+
 // matchRequired: level mismatch for out-of-order heading
 func TestCheck_OutOfOrderSectionLevelMismatch(t *testing.T) {
 	// Schema requires ## Alpha then ## Beta.

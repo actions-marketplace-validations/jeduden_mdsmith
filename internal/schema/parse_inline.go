@@ -825,7 +825,7 @@ func parseCrossRefEntry(m map[string]any, i int) (CrossRef, error) {
 		return CrossRef{}, fmt.Errorf(
 			"schema.cross-references[%d]: invalid pattern %q: %w", i, cr.Pattern, err)
 	}
-	cr.compiledRE = re
+	cr.compiled = re
 	if cr.SkipLinesMatching != "" {
 		skipRE, err := regexp.Compile(cr.SkipLinesMatching)
 		if err != nil {
@@ -833,7 +833,7 @@ func parseCrossRefEntry(m map[string]any, i int) (CrossRef, error) {
 				"schema.cross-references[%d]: invalid skip-lines-matching %q: %w",
 				i, cr.SkipLinesMatching, err)
 		}
-		cr.compiledSkipRE = skipRE
+		cr.compiledSkip = skipRE
 	}
 	return cr, nil
 }
