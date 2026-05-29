@@ -236,6 +236,130 @@ and their aliases out of the box. Dataview inline
 fields (`key:: value`) are still not front matter.
 The `require`/`schema` directives do not read them.
 
+### [obsidian-linter][]
+
+TypeScript plugin for the Obsidian editor — not a
+standalone CLI. ~1.9k stars, MIT. Tagline: "This
+Obsidian plugin formats and styles your notes with
+a focus on configurability and extensibility."
+
+- 65 rules in six categories: YAML (14), Headings
+  (5), Footnotes (3), Content (16), Spacing (19),
+  Paste (8)
+- Autofix only — runs via the "Lint file" and
+  "Lint all files" commands, an opt-in lint-on-save
+  setting, or auto-applies on paste
+- Config in the plugin settings UI, not a
+  checked-in file; rules toggle per vault
+- No CLI, no CI gate, no LSP — diagnostics never
+  leave the Obsidian process
+
+| Aspect        | obsidian-linter         | mdsmith                          |
+| ------------- | ----------------------- | -------------------------------- |
+| Distribution  | Obsidian plugin         | Static Go binary                 |
+| Scope         | Active note only        | Whole repo walk                  |
+| CI gate       | no                      | `mdsmith check`                  |
+| Editor        | Obsidian only           | LSP for any editor               |
+| Config        | per-vault UI            | `.mdsmith.yml` in repo           |
+| Autofix model | save / paste / command  | `mdsmith fix`, multi-pass        |
+| Cross-file    | no                      | links, includes, catalogs, kinds |
+| YAML rules    | 14 (key sort, alias, …) | MDS020 + CUE schema              |
+
+obsidian-linter and mdsmith sit on opposite sides
+of the same vault. obsidian-linter runs inside the
+editor and rewrites the note a writer is touching.
+mdsmith runs in the repo and gates the whole tree
+at commit. A team that writes in Obsidian can
+layer both: format on save with obsidian-linter,
+then enforce the contract across every `.md` in CI
+with mdsmith.
+
+Sixteen obsidian-linter rules map onto an mdsmith
+rule. They appear in the [peer-linter coverage
+matrix][mdcov]. The remaining 49 are listed below.
+
+#### obsidian-linter rules with no mdsmith equivalent
+
+Three obsidian-linter categories cover ground no
+peer linter on this page touches.
+
+**YAML structure (14 rules).** mdsmith validates
+YAML *shape* via [MDS020][mds020] plus a CUE
+schema. obsidian-linter rewrites YAML *content*.
+
+- `yaml-key-sort` — sorts the keys
+- `yaml-title` / `yaml-title-alias` — derives them
+  from the H1
+- `yaml-timestamp` — normalises date fields
+- `format-yaml-array` / `sort-yaml-array-values` /
+  `dedupe-yaml-array-values` — normalises arrays
+- `move-tags-to-yaml` — promotes inline tags into
+  the front matter
+- `format-tags-in-yaml` — normalises tag syntax
+- `escape-yaml-special-characters` /
+  `force-yaml-escape` — escapes string values
+- `insert-yaml-attributes` — fills missing keys
+- `remove-yaml-keys` — strips unwanted keys
+- `add-blank-line-after-yaml` — blank line after
+  the closing `---`
+
+**Footnotes (3 rules).** mdsmith has no footnote
+rule today.
+
+- `footnote-after-punctuation` — puts the marker
+  after the punctuation, not before
+- `move-footnotes-to-the-bottom` — collects
+  reference definitions
+- `re-index-footnotes` — renumbers `[^1]` markers
+  in document order
+
+**On-paste rewrites (8 rules).** Applied on paste,
+not at lint time. The closest mdsmith concept is
+`mdsmith fix` on save via the LSP.
+
+- `add-blockquote-indentation-on-paste`
+- `prevent-double-checklist-indicator-on-paste`
+- `prevent-double-list-item-indicator-on-paste`
+- `proper-ellipsis-on-paste`
+- `remove-hyphens-on-paste`
+- `remove-leading-or-trailing-whitespace-on-paste`
+- `remove-leftover-footnotes-from-quote-on-paste`
+- `remove-multiple-blank-lines-on-paste`
+
+Two **Obsidian-specific** rules apply only to
+vault notes:
+
+- `capitalize-headings` — style preference
+- `file-name-heading` — the first H1 must match the
+  filename stem
+
+The rest are **prose helpers** none of the other
+linters touch:
+
+- `auto-correct-common-misspellings`
+- `proper-ellipsis` and `quote-style` — straight to
+  typographic forms
+- `remove-hyphenated-line-breaks` — joins words
+  split by line-ending hyphens
+- `remove-multiple-spaces`,
+  `remove-space-around-characters`,
+  `remove-space-before-or-after-characters`
+- `two-spaces-between-lines-with-content` — forces
+  the Markdown hard-break form
+- `space-between-chinese-japanese-or-korean-and-english-or-numbers`
+- `convert-bullet-list-markers`,
+  `remove-consecutive-list-markers`,
+  `remove-empty-list-markers`,
+  `remove-empty-lines-between-list-markers-and-checklists`
+- `remove-link-spacing` — close to MD039 but
+  applied as autofix
+- `compact-yaml` — collapses blank lines inside the
+  front matter
+- `convert-spaces-to-tabs` — inverse of MD010
+- `empty-line-around-horizontal-rules`
+- `empty-line-around-math-blocks`,
+  `move-math-block-indicators-to-their-own-line`
+
 ### [mdbase][]
 
 Specification for treating folders of Markdown files
@@ -585,6 +709,12 @@ not need them.
 Its lossless CST keeps the Pandoc syntax that Prettier and
 mdformat flatten. It bundles the formatter, linter, and LSP
 for those formats.
+
+**obsidian-linter** fits a team that writes notes in
+Obsidian and wants every save to clean up YAML keys,
+heading case, and spacing inside the editor. There is no
+CLI or CI gate, so pair it with mdsmith when the same
+vault is also a Git repo that needs a commit-time check.
 
 **LLM as linter** is best for subjective quality checks:
 conciseness, clarity, tone. Use it in PR review workflows

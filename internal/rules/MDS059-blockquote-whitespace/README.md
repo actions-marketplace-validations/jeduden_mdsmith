@@ -30,6 +30,15 @@ mado:
     name: no-blanks-blockquote
     default: true
 panache: []
+obsidian-linter:
+  - id: blockquote-style
+    name: blockquote-style
+    partial: true
+    default: false
+  - id: empty-line-around-blockquotes
+    name: empty-line-around-blockquotes
+    partial: true
+    default: false
 ---
 # MDS059: blockquote-whitespace
 

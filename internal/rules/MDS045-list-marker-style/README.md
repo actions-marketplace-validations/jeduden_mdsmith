@@ -19,6 +19,10 @@ mado:
     name: ul-style
     default: true
 panache: []
+obsidian-linter:
+  - id: unordered-list-style
+    name: unordered-list-style
+    default: false
 ---
 # MDS045: list-marker-style
 

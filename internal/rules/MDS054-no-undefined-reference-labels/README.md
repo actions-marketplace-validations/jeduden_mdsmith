@@ -19,6 +19,7 @@ panache:
   - id: undefined-references
     name: undefined-references
     default: true
+obsidian-linter: []
 ---
 # MDS054: no-undefined-reference-labels
 

@@ -19,6 +19,10 @@ mado:
     name: blanks-around-headings
     default: true
 panache: []
+obsidian-linter:
+  - id: heading-blank-lines
+    name: heading-blank-lines
+    default: false
 ---
 # MDS013: blank-line-around-headings
 

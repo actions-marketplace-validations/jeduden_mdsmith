@@ -25,6 +25,13 @@ rumdl:
     default: true
 mado: []
 panache: []
+obsidian-linter:
+  - id: emphasis-style
+    name: emphasis-style
+    default: false
+  - id: strong-style
+    name: strong-style
+    default: false
 ---
 # MDS042: emphasis-style
 

@@ -21,6 +21,7 @@ mado:
     name: hr-style
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS044: horizontal-rule-style
 

@@ -19,6 +19,7 @@ mado:
     name: no-space-in-emphasis
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS047: ambiguous-emphasis
 

@@ -19,6 +19,7 @@ rumdl:
     default: true
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS020: required-structure
 

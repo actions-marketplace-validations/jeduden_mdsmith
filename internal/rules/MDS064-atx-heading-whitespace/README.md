@@ -58,6 +58,11 @@ mado:
     name: heading-start-left
     default: true
 panache: []
+obsidian-linter:
+  - id: headings-start-line
+    name: headings-start-line
+    partial: true
+    default: false
 ---
 # MDS064: atx-heading-whitespace
 

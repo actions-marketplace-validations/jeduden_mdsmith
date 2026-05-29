@@ -19,6 +19,7 @@ mado:
     name: fenced-code-language
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS011: fenced-code-language
 

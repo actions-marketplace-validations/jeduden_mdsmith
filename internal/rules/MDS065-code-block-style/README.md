@@ -21,6 +21,7 @@ mado:
     name: code-block-style
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS065: code-block-style
 

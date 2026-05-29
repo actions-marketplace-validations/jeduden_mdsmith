@@ -19,6 +19,7 @@ mado:
     name: no-emphasis-as-heading
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS018: no-emphasis-as-heading
 

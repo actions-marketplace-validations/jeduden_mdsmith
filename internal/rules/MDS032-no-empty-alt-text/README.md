@@ -16,6 +16,7 @@ rumdl:
     default: true
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS032: no-empty-alt-text
 

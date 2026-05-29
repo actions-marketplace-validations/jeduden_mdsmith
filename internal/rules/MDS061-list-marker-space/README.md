@@ -21,6 +21,10 @@ mado:
     name: list-marker-space
     default: true
 panache: []
+obsidian-linter:
+  - id: space-after-list-markers
+    name: space-after-list-markers
+    default: false
 ---
 # MDS061: list-marker-space
 

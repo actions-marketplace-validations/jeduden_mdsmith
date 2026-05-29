@@ -19,6 +19,7 @@ mado:
     name: first-line-h1
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS004: first-line-heading
 

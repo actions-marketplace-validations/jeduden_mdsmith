@@ -19,6 +19,10 @@ mado:
     name: ol-prefix
     default: true
 panache: []
+obsidian-linter:
+  - id: ordered-list-style
+    name: ordered-list-style
+    default: false
 ---
 # MDS046: ordered-list-numbering
 

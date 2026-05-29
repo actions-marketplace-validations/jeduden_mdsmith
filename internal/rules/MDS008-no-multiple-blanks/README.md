@@ -19,6 +19,10 @@ mado:
     name: no-multiple-blanks
     default: true
 panache: []
+obsidian-linter:
+  - id: consecutive-blank-lines
+    name: consecutive-blank-lines
+    default: false
 ---
 # MDS008: no-multiple-blanks
 

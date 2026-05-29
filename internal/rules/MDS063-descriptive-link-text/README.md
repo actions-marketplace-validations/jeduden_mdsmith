@@ -18,6 +18,7 @@ rumdl:
     default: true
 mado: []
 panache: []
+obsidian-linter: []
 ---
 # MDS063: descriptive-link-text
 

@@ -9,6 +9,7 @@ markdownlint: '[...{id: =~"^MD[0-9]{3}$", name: string & != "", partial?: bool |
 rumdl: '[...{id: =~"^MD[0-9]{3}$", name: string & != "", partial?: bool | *false, default: bool}]'
 mado: '[...{id: =~"^MD[0-9]{3}$", name: string & != "", partial?: bool | *false, default: bool}]'
 panache: '[...{id: =~"^[a-z][a-z0-9-]*$", name: string & != "", partial?: bool | *false, default: bool}]'
+obsidian-linter: '[...{id: =~"^[a-z][a-z0-9-]*$", name: string & != "", partial?: bool | *false, default: bool}]'
 category: '"accessibility" | "code" | "directive" | "heading" | "line" | "link" | "list" | "prose" | "structural" | "table" | "whitespace"'
 ---
 # {id}: {name}
@@ -21,13 +22,14 @@ category: '"accessibility" | "code" | "directive" | "heading" | "line" | "link" 
      by mdsmith check against the literal CUE union in this file's
      `category:` front matter, which is hand-kept in sync with
      config.ValidCategories.
-     The `markdownlint:`, `rumdl:`, `mado:`, and `panache:` keys
-     each list the peer linter's rules that this mdsmith rule
-     covers. Each entry has `id:`, `name:`, and a required
-     `default:` (whether the peer linter ships the rule enabled
-     by default upstream); `partial: true` marks an incomplete
-     cover. These per-rule front-matter blocks are the source
-     of truth — `mdsmith-release sync-coverage-matrix` renders
+     The `markdownlint:`, `rumdl:`, `mado:`, `panache:`, and
+     `obsidian-linter:` keys each list the peer linter's rules
+     that this mdsmith rule covers. Each entry has `id:`,
+     `name:`, and a required `default:` (whether the peer linter
+     ships the rule enabled by default upstream);
+     `partial: true` marks an incomplete cover. These per-rule
+     front-matter blocks are the source of truth —
+     `mdsmith-release sync-coverage-matrix` renders
      docs/research/markdownlint-coverage/README.md from them.
      Set the key to `[]` (empty list) for tools that have no
      analog rule; the schema no longer accepts `null` here.

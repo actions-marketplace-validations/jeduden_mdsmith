@@ -19,6 +19,10 @@ mado:
     name: blanks-around-fences
     default: true
 panache: []
+obsidian-linter:
+  - id: empty-line-around-code-fences
+    name: empty-line-around-code-fences
+    default: false
 ---
 # MDS015: blank-line-around-fenced-code
 

@@ -22,6 +22,10 @@ panache:
   - id: heading-hierarchy
     name: heading-hierarchy
     default: true
+obsidian-linter:
+  - id: header-increment
+    name: header-increment
+    default: false
 ---
 # MDS003: heading-increment
 

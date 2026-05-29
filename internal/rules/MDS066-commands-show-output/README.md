@@ -21,6 +21,7 @@ mado:
     name: commands-show-output
     default: true
 panache: []
+obsidian-linter: []
 ---
 # MDS066: commands-show-output
 

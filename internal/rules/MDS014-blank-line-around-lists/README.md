@@ -19,6 +19,11 @@ mado:
     name: blanks-around-lists
     default: false
 panache: []
+obsidian-linter:
+  - id: paragraph-blank-lines
+    name: paragraph-blank-lines
+    partial: true
+    default: false
 ---
 # MDS014: blank-line-around-lists
 
