@@ -129,11 +129,19 @@ func TestParseCache_ReloadConfigClearsOnRootChange(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dirA, ".mdsmith.yml"), []byte("{}\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dirB, ".mdsmith.yml"), []byte("{}\n"), 0o600))
 
+	// Sanity: the dirs are distinct workspace roots. If they
+	// collapse to one (impossible with t.TempDir, but the contract
+	// the test gates on), the configPath flip would be a no-op and
+	// the test would pass without exercising InvalidateAll.
+	require.NotEqual(t, dirA, dirB, "test setup: the two configs must live in different directories")
+
 	// Point reloadConfig at dirA's config and let it land.
 	h.srv.settingsMu.Lock()
 	h.srv.settings.ConfigPath = filepath.Join(dirA, ".mdsmith.yml")
 	h.srv.settingsMu.Unlock()
 	h.srv.reloadConfig()
+	_, _, rootA := h.srv.snapshotConfig()
+	require.Equal(t, dirA, rootA, "first reload must adopt dirA as the workspace root")
 
 	// Warm the cache with a synthetic entry keyed off dirA.
 	f, err := lint.NewFileFromSource("docs/foo.md", []byte("# Hi\n"), false)
@@ -146,6 +154,9 @@ func TestParseCache_ReloadConfigClearsOnRootChange(t *testing.T) {
 	h.srv.settings.ConfigPath = filepath.Join(dirB, ".mdsmith.yml")
 	h.srv.settingsMu.Unlock()
 	h.srv.reloadConfig()
+	_, _, rootB := h.srv.snapshotConfig()
+	require.Equal(t, dirB, rootB, "second reload must adopt dirB as the workspace root")
+	require.NotEqual(t, rootA, rootB, "the reload must change the workspace root for the InvalidateAll branch to fire")
 
 	_, ok := h.srv.parseCache.Get("docs/foo.md", 1)
 	assert.False(t, ok, "config-path change must drop every parse cache entry")

@@ -98,6 +98,15 @@ type Runner struct {
 	// re-use a Runner without a monotonic version key would observe
 	// stale results, so leave this nil for them). RunSource (no
 	// version) ignores this field and always parses.
+	//
+	// Pairs with RunCache. populateFileFields stores the per-call
+	// RunCache on the parsed *File before publishing it to the cache,
+	// so a cache hit reuses that same RunCache pointer. Every Runner
+	// that shares one ParseCache MUST also share one RunCache (the
+	// LSP wires both off the server). A second Runner with a different
+	// RunCache would see the first Runner's cached reads through the
+	// hit, and that RunCache's Invalidate seam would be the one
+	// driving correctness — easy to get wrong, so don't mix.
 	ParseCache *lint.ParseCache
 }
 

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/config"
@@ -115,6 +116,87 @@ func TestRunSource_NilCacheIsCold(t *testing.T) {
 	res := r.RunSource("docs/foo.md", []byte("# Title\n"))
 	require.Empty(t, res.Errors)
 	require.Len(t, res.Diagnostics, 1)
+}
+
+// lazyFieldsRule reaches into every lazily-memoised field on
+// *lint.File that the parse cache can hand to a concurrent reader:
+// LinkReferences (atomic.Bool + mutex), NewlineOffsets (same
+// pattern), code-block and PI-block index slices, and the gitignore
+// matcher. None of these are populated by NewFile / populateFileFields
+// — they fire the first time a rule asks — so two goroutines holding
+// the same cached *File contend on their first-access guards. Drives
+// the data-race surface the pointer-aliasing fix was meant to close.
+type lazyFieldsRule struct{}
+
+func (lazyFieldsRule) ID() string       { return "MDS998" }
+func (lazyFieldsRule) Name() string     { return "lazy-fields-probe" }
+func (lazyFieldsRule) Category() string { return "test" }
+func (lazyFieldsRule) Check(f *lint.File) []lint.Diagnostic {
+	_ = f.LinkReferences()
+	_ = f.LineOfOffset(0)
+	_ = lint.CollectCodeBlockLines(f)
+	_ = lint.CollectPIBlockLines(f)
+	_ = f.GetGitignore()
+	return nil
+}
+
+// TestRunSourceWithVersion_ConcurrentReadersAreRaceSafe drives two
+// goroutines through one cached *File and asserts every lazy
+// memoisation guard on lint.File holds. The pointer-aliasing fix
+// hinges on the cached *File being safe to share across the LSP's
+// dispatch goroutines, so this is the test the -race detector
+// catches a regression against.
+//
+// Source content is chosen to exercise each lazy field: a link
+// reference (LinkReferences), a fenced code block (CodeBlockLines),
+// a processing-instruction block (PIBlockLines), and enough lines to
+// make the newline-offsets walk worth memoising.
+func TestRunSourceWithVersion_ConcurrentReadersAreRaceSafe(t *testing.T) {
+	cache := lint.NewParseCache()
+	cfg := &config.Config{Rules: map[string]config.RuleCfg{"lazy-fields-probe": {Enabled: true}}}
+	r := &Runner{
+		Config:     cfg,
+		Rules:      []rule.Rule{lazyFieldsRule{}},
+		ParseCache: cache,
+		RootDir:    t.TempDir(),
+	}
+
+	src := []byte("# Heading\n" +
+		"\n" +
+		"Body text linking to [Ref][a-ref].\n" +
+		"\n" +
+		"```go\n" +
+		"package main\n" +
+		"```\n" +
+		"\n" +
+		"<?build outputs: foo ?>\n" +
+		"build body\n" +
+		"<?/build?>\n" +
+		"\n" +
+		"[a-ref]: https://example.com\n")
+
+	// Prime the cache so both goroutines hit instead of racing the
+	// parse itself. This pins the cached *File as the surface under
+	// test.
+	r.RunSourceWithVersion("docs/foo.md", src, 1)
+	primed, ok := cache.Get("docs/foo.md", 1)
+	require.True(t, ok, "cache must hold the primed entry before the concurrent run")
+	require.NotNil(t, primed)
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			r.RunSourceWithVersion("docs/foo.md", src, 1)
+		}()
+	}
+	wg.Wait()
+
+	after, ok := cache.Get("docs/foo.md", 1)
+	require.True(t, ok)
+	assert.Same(t, primed, after, "concurrent readers must not displace the cached entry")
 }
 
 // TestRunSource_AbsPathWiresGitignoreFromFileDir pins the
