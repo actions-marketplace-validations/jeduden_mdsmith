@@ -272,23 +272,22 @@ rule, so the manifest stays accurate.
 
 ## Risk
 
-Code-block skipping is the biggest hazard. A rule
-may *appear* Lines-only on audit fixtures and
-break when a real document puts the pattern
-inside a fence or code span. The phase-one
-perturbation probe routes such rules to Category
-B, where the AST projection owns the skipping.
+**Measured 2026-05-29: the ≥5 % wall-time target is
+not reachable by the available conversions.** The
+manifest found no AST-walking Category A rules. The
+Category B prose rules are opt-in, so they never run
+in `BenchmarkCheckCorpusLarge`. The one default rule,
+MDS054, contributes ~11 ms and ~0.3 % of allocs.
+`ProseRanges` landed regardless; the engine-wide lever
+this plan assumed was already harvested by plans
+175/195/196. See return notes.
 
-Projection memory is the second hazard. One
-`[]Range` per file lives until the file goes out
-of scope. Route the allocation through plan 198's
-arena; verify `BenchmarkCheckCorpusLarge` median
-allocs/op stays at or below 255 k.
-
-Node-derived positions may differ from the
-projection. The fixture-parity check gates byte-
-equal column numbers; any drift forces revert or
-amendment.
+Code-block skipping is the standing hazard for a
+future conversion. A rule may *appear* Lines-only on
+fixtures yet break on a pattern inside a fence. The
+perturbation probe routes such rules to Category B;
+`ProseRanges` owns the skipping. Node positions are
+gated byte-equal by parity fixtures.
 
 ## Acceptance Criteria
 
