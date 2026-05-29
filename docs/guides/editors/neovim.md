@@ -15,10 +15,11 @@ do in VS Code — without an extra plugin.
 ## Prerequisites
 
 - Neovim 0.10 or later (built-in `vim.lsp.start` API).
-- A `mdsmith` binary on `$PATH`. Install via the
-  [Quick start](../install.md#quick-start-cli-only) above,
-  or any of the channels in the
-  [install guide](../install.md).
+- A `mdsmith` binary on `$PATH`. The LSP server is this
+  binary's `lsp` subcommand, not a separate download —
+  install it via the
+  [Quick start](../install.md#quick-start-cli-only) or any
+  other channel in the [install guide](../install.md).
 
 ## Minimal config
 
