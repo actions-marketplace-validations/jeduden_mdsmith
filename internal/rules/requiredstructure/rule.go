@@ -1962,16 +1962,10 @@ func nextUnclaimed(candidates []int, claimed map[int]bool, minIdx int) int {
 // Invariant: req.compiled is non-nil whenever ContainsField(req.Text) is
 // true — buildSchemaHeading guarantees this.
 func matchesSchema(req schemaHeading, doc docHeading) bool {
-	// Wildcard heading: matches any text at any level.
 	if req.Text == "?" {
 		return true
 	}
-
-	// Check if the schema text contains {field} references.
-	if fieldinterp.ContainsField(req.Text) {
-		if req.compiled == nil {
-			return false
-		}
+	if req.compiled != nil {
 		return req.compiled.MatchString(doc.Text)
 	}
 	return doc.Text == req.Text
