@@ -249,21 +249,21 @@ rule, so the manifest stays accurate.
    exclusions (FencedCodeBlock, CodeBlock,
    HTMLBlock, CodeSpan, AutoLink, inline-HTML
    tags — but not the visible text those tags wrap).
-3. Convert the three highest-allocating Category
-   A candidates, one commit per rule.
+3. Convert the highest-impact candidates, one commit
+   per rule. The manifest shows Category A holds no
+   AST-walking rules left (plans 175/195/196 already
+   made the substring rules Lines-only).
 4. Convert Category B candidates against
-   `f.ProseRanges()`, one commit per rule.
+   `f.ProseRanges()`, one commit per rule. Live targets:
+   MDS047, MDS054. MDS050 is a hybrid (opt-in code/HTML
+   scan + AST Fix) — scope under review, see return.
 5. Run `BenchmarkCheckCorpusLarge` after each
-   conversion; record cumulative wall-time and
-   allocs delta. After Category A lands, tighten
-   `BenchmarkCheckCorpusLarge`'s `Time` and
-   `Allocs` budgets in
+   conversion; record cumulative wall-time and allocs
+   delta. After conversions land, tighten the `Time`
+   and `Allocs` budgets in
    [bench_test.go](../internal/engine/bench_test.go)
-   to the measured new ceiling (with the same
-   ~15-20 % headroom the existing budgets use) so
-   the wall-time and alloc gates actually enforce
-   the improvement rather than passing under the
-   loose post-196 budgets.
+   to the measured new ceiling (~15-20 % headroom, as
+   today) so the gates enforce the improvement.
 6. Land the regression gate from phase three.
 7. Update the perf guide at
    [high-performance-go.md](../docs/development/high-performance-go.md)
