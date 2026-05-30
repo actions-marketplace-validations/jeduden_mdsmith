@@ -160,6 +160,17 @@ func (r *Rule) checkLinkImageStyle(f *lint.File) []lint.Diagnostic {
 	}
 	lis := r.Links.Style.LinkImageStyle
 	var diags []lint.Diagnostic
+	add := func(line, col int, msg string) {
+		diags = append(diags, lint.Diagnostic{
+			File:     f.Path,
+			Line:     line,
+			Column:   col,
+			RuleID:   r.ID(),
+			RuleName: r.Name(),
+			Severity: lint.Warning,
+			Message:  msg,
+		})
+	}
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -168,42 +179,21 @@ func (r *Rule) checkLinkImageStyle(f *lint.File) []lint.Diagnostic {
 		case *ast.AutoLink:
 			if !lis.Autolink {
 				line, col := autolinkPosition(f, node)
-				diags = append(diags, lint.Diagnostic{
-					File:     f.Path,
-					Line:     line,
-					Column:   col,
-					RuleID:   r.ID(),
-					RuleName: r.Name(),
-					Severity: lint.Warning,
-					Message:  msgLISAutolink,
-				})
+				add(line, col, msgLISAutolink)
 			}
 		case *ast.Link:
-			msg := linkImageStyleMsg(lis, node)
-			if msg != "" {
+			if msg := linkImageStyleMsg(lis, node.Reference, false); msg != "" {
 				line, col := linkNodePosition(f, node)
-				diags = append(diags, lint.Diagnostic{
-					File:     f.Path,
-					Line:     line,
-					Column:   col,
-					RuleID:   r.ID(),
-					RuleName: r.Name(),
-					Severity: lint.Warning,
-					Message:  msg,
-				})
+				add(line, col, msg)
 			}
 		case *ast.Image:
-			if !lis.InlineImage {
+			// Images carry the same Reference sub-form as links, so a
+			// reference-style image (![alt][label], ![alt][], ![alt])
+			// is checked against full/collapsed/shortcut; only an
+			// inline image (![alt](src)) uses the inline-image toggle.
+			if msg := linkImageStyleMsg(lis, node.Reference, true); msg != "" {
 				line, col := linkNodePosition(f, node)
-				diags = append(diags, lint.Diagnostic{
-					File:     f.Path,
-					Line:     line,
-					Column:   col,
-					RuleID:   r.ID(),
-					RuleName: r.Name(),
-					Severity: lint.Warning,
-					Message:  msgLISInlineImage,
-				})
+				add(line, col, msg)
 			}
 		}
 		return ast.WalkContinue, nil
@@ -211,17 +201,27 @@ func (r *Rule) checkLinkImageStyle(f *lint.File) []lint.Diagnostic {
 	return diags
 }
 
-// linkImageStyleMsg returns the forbidden-style message for a Link
-// node, or "" if the node's form is allowed.
-func linkImageStyleMsg(lis LinkImageStyleConfig, l *ast.Link) string {
-	if l.Reference == nil {
-		// Inline link: [text](url)
+// linkImageStyleMsg returns the forbidden-style message for a link or
+// image node given its reference (nil for the inline form), or "" if
+// the form is allowed. isImage selects the inline-image vs inline
+// message for the non-reference case; the three reference sub-forms
+// (full/collapsed/shortcut) share their messages across links and
+// images, matching MD054.
+func linkImageStyleMsg(lis LinkImageStyleConfig, ref *ast.ReferenceLink, isImage bool) string {
+	if ref == nil {
+		// Inline form: [text](url) or ![alt](src).
+		if isImage {
+			if !lis.InlineImage {
+				return msgLISInlineImage
+			}
+			return ""
+		}
 		if !lis.Inline {
 			return msgLISInline
 		}
 		return ""
 	}
-	switch l.Reference.Type {
+	switch ref.Type {
 	case ast.ReferenceLinkFull:
 		if !lis.Full {
 			return msgLISFull
@@ -250,7 +250,13 @@ func autolinkPosition(f *lint.File, n *ast.AutoLink) (int, int) {
 	if len(url) == 0 {
 		return 1, 1
 	}
-	pat := append([]byte{'<'}, url...)
+	// Match the literal `<url>` including the closing `>`, so a short
+	// autolink whose URL is a prefix of a neighbour's (e.g. `<a.com>`
+	// beside `<a.com/x>` on one line) does not match the longer one.
+	pat := make([]byte, 0, len(url)+2)
+	pat = append(pat, '<')
+	pat = append(pat, url...)
+	pat = append(pat, '>')
 	// Walk up to the nearest block ancestor for a source range to
 	// search. Lines() panics on inline nodes, so skip any ancestor
 	// that is not a block (emphasis, link text, the document root).
@@ -258,10 +264,8 @@ func autolinkPosition(f *lint.File, n *ast.AutoLink) (int, int) {
 		if p.Type() != ast.TypeBlock {
 			continue
 		}
-		// Search each source line for `<` followed by the URL. A block
-		// with no lines, or a URL that does not appear verbatim (e.g.
-		// an email autolink whose URL() is mailto:-prefixed), falls
-		// through to the (1,1) fallback below.
+		// Search each source line for the literal `<url>`. If no block
+		// line contains it, fall through to the (1,1) fallback below.
 		lines := p.Lines()
 		for i := range lines.Len() {
 			seg := lines.At(i)

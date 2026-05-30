@@ -42,9 +42,9 @@ and `validate-reference-style` flow to MDS027, while `style` and
 | `links.style.link-image-style`              | map    | absent  | MD054 per-style toggles; absent means the axis is inactive (see below)                                                         |
 | `links.style.link-image-style.autolink`     | bool   | `true`  | Allow or forbid `<https://x>` autolinks                                                                                        |
 | `links.style.link-image-style.inline`       | bool   | `true`  | Allow or forbid `[t](u)` inline links                                                                                          |
-| `links.style.link-image-style.full`         | bool   | `true`  | Allow or forbid `[t][label]` full reference links                                                                              |
-| `links.style.link-image-style.collapsed`    | bool   | `true`  | Allow or forbid `[t][]` collapsed reference links                                                                              |
-| `links.style.link-image-style.shortcut`     | bool   | `true`  | Allow or forbid `[t]` shortcut reference links                                                                                 |
+| `links.style.link-image-style.full`         | bool   | `true`  | Allow or forbid `[t][label]` / `![alt][label]` full reference links and images                                                 |
+| `links.style.link-image-style.collapsed`    | bool   | `true`  | Allow or forbid `[t][]` / `![alt][]` collapsed reference links and images                                                      |
+| `links.style.link-image-style.shortcut`     | bool   | `true`  | Allow or forbid `[t]` / `![alt]` shortcut reference links and images                                                           |
 | `links.style.link-image-style.inline-image` | bool   | `true`  | Allow or forbid `![alt](src)` inline images                                                                                    |
 | `links.external-skip`                       | list   | `[]`    | Regex patterns reserved for the future external-link-check rule (issue #47); parsed here so users can declare it once per kind |
 
@@ -63,8 +63,11 @@ forced to migrate to `link-image-style`.
 
 External URLs (`http:`, `https:`, `mailto:`), local-anchor-only
 references are excluded from the `path`, `extension`, and `form`
-axes. The `link-image-style` axis checks `<url>` autolinks and inline
-images in addition to text links. The `path` and `form` axes apply to
+axes. The `link-image-style` axis checks `<url>` autolinks, inline and
+reference-style links, and inline and reference-style images. The
+reference sub-form toggles (`full`, `collapsed`, `shortcut`) apply to
+both links and images; `inline-image` governs only `![alt](src)`. The
+`path` and `form` axes apply to
 every local text link, including non-Markdown targets like `theme.css`.
 The `extension` axis is the only Markdown-shaped axis, described below.
 

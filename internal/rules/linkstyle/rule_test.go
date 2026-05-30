@@ -795,6 +795,119 @@ func TestAutolinkPosition_NotFoundFallsBack(t *testing.T) {
 	assert.Equal(t, 1, col)
 }
 
+// TestCheck_LinkImageStyle_ReferenceImagesUseReferenceToggles verifies
+// that reference-style images route to the full/collapsed/shortcut
+// toggles (shared with links), not the inline-image toggle.
+func TestCheck_LinkImageStyle_ReferenceImagesUseReferenceToggles(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		lis     LinkImageStyleConfig
+		wantMsg string
+	}{
+		{
+			"full reference image forbidden by full",
+			"# Doc\n\n![alt][label]\n\n[label]: img.png\n",
+			LinkImageStyleConfig{Active: true, Autolink: true, Inline: true,
+				Full: false, Collapsed: true, Shortcut: true, InlineImage: true},
+			"full",
+		},
+		{
+			"collapsed reference image forbidden by collapsed",
+			"# Doc\n\n![label][]\n\n[label]: img.png\n",
+			LinkImageStyleConfig{Active: true, Autolink: true, Inline: true,
+				Full: true, Collapsed: false, Shortcut: true, InlineImage: true},
+			"collapsed",
+		},
+		{
+			"shortcut reference image forbidden by shortcut",
+			"# Doc\n\n![label]\n\n[label]: img.png\n",
+			LinkImageStyleConfig{Active: true, Autolink: true, Inline: true,
+				Full: true, Collapsed: true, Shortcut: false, InlineImage: true},
+			"shortcut",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFile(t, tc.src)
+			r := &Rule{Links: LinksConfig{Style: StyleConfig{LinkImageStyle: tc.lis}}}
+			diags := r.Check(f)
+			require.Len(t, diags, 1)
+			assert.Contains(t, diags[0].Message, tc.wantMsg)
+		})
+	}
+}
+
+// TestCheck_LinkImageStyle_ReferenceImageIgnoresInlineImageToggle is the
+// regression guard for the bug where every *ast.Image used the
+// inline-image toggle: a reference-style image must NOT be flagged by
+// inline-image:false, which governs only inline ![alt](src) images.
+func TestCheck_LinkImageStyle_ReferenceImageIgnoresInlineImageToggle(t *testing.T) {
+	src := "# Doc\n\n![alt][label]\n\n[label]: img.png\n"
+	f := newFile(t, src)
+	r := &Rule{Links: LinksConfig{Style: StyleConfig{
+		LinkImageStyle: LinkImageStyleConfig{
+			Active: true, Autolink: true, Inline: true, Full: true, Collapsed: true, Shortcut: true,
+			InlineImage: false,
+		},
+	}}}
+	assert.Empty(t, r.Check(f), "reference-style image must not be flagged by inline-image:false")
+}
+
+// TestCheck_LinkImageStyle_AutolinkPositionDistinguishesPrefixURLs
+// verifies the search pattern includes the closing `>` so a short
+// autolink whose URL prefixes a neighbour's resolves to its own column.
+func TestCheck_LinkImageStyle_AutolinkPositionDistinguishesPrefixURLs(t *testing.T) {
+	src := "# Doc\n\n<https://a.com/x> and <https://a.com>\n"
+	f := newFile(t, src)
+	r := &Rule{Links: LinksConfig{Style: StyleConfig{
+		LinkImageStyle: LinkImageStyleConfig{Active: true, Autolink: false,
+			Inline: true, Full: true, Collapsed: true, Shortcut: true, InlineImage: true},
+	}}}
+	diags := r.Check(f)
+	require.Len(t, diags, 2)
+	// Document order: the longer URL at column 1, then the short URL
+	// after "> and " at column 23 — not column 1 (the prefix match).
+	assert.Equal(t, 1, diags[0].Column)
+	assert.Equal(t, 23, diags[1].Column, "short autolink resolves to its own column, not the prefix match")
+}
+
+// TestApplySettings_LinkImageStyle_DeepMergeAcrossLayers verifies the
+// link-image-style sub-map deep-merges across config layers: a base
+// rules: layer and a kind layer each set a different toggle, and both
+// survive in the effective config.
+func TestApplySettings_LinkImageStyle_DeepMergeAcrossLayers(t *testing.T) {
+	cfg := &config.Config{
+		Rules: map[string]config.RuleCfg{
+			"link-style": {Enabled: true, Settings: map[string]any{
+				"links": map[string]any{"style": map[string]any{
+					"link-image-style": map[string]any{"inline": false},
+				}},
+			}},
+		},
+		Kinds: map[string]config.KindBody{
+			"docs": {Rules: map[string]config.RuleCfg{
+				"link-style": {Enabled: true, Settings: map[string]any{
+					"links": map[string]any{"style": map[string]any{
+						"link-image-style": map[string]any{"full": false},
+					}},
+				}},
+			}},
+		},
+		KindAssignment: []config.KindAssignmentEntry{
+			{Files: []string{"docs/**/*.md"}, Kinds: []string{"docs"}},
+		},
+	}
+	rules := config.Effective(cfg, "docs/guides/foo.md", nil, nil)
+	r := &Rule{}
+	require.NoError(t, r.ApplySettings(rules["link-style"].Settings))
+	lis := r.Links.Style.LinkImageStyle
+	assert.True(t, lis.Active)
+	assert.False(t, lis.Inline, "base layer inline:false must survive the kind's full:false override")
+	assert.False(t, lis.Full, "kind layer full:false must apply")
+	assert.True(t, lis.Collapsed, "an untouched toggle stays at its default allow")
+}
+
 func newFile(t *testing.T, src string) *lint.File {
 	t.Helper()
 	f, err := lint.NewFile("doc.md", []byte(src))
