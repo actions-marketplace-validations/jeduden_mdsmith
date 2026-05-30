@@ -92,6 +92,20 @@ type File struct {
 	piBlockLinesDone   atomic.Bool
 	piBlockLinesMu     sync.Mutex
 
+	// proseRanges caches the byte-offset projection behind ProseRanges:
+	// the source spans inside prose nodes (paragraph, heading, list-item
+	// and blockquote text) with code blocks, code spans, HTML, autolinks
+	// and inline raw HTML excluded. It is a pure function of the
+	// immutable f.AST. Plan 215 routes every Lines-only prose rule
+	// (proper-name casing, forbidden text, …) through it instead of each
+	// rule re-walking the tree to rediscover the same code-skipping
+	// filter: one walk per file, amortized across all of them. atomic.Bool
+	// + mutex matches codeBlockLines above for the same closure-box reason
+	// (sync.Once would heap-allocate the build closure on the alloc gate).
+	proseRanges     []Range
+	proseRangesDone atomic.Bool
+	proseRangesMu   sync.Mutex
+
 	// parseCtx is the goldmark parser.Context produced by the one
 	// parse NewFile already runs. It is the source for LinkReferences
 	// so MDS053/MDS054 no longer each re-parse the whole document
