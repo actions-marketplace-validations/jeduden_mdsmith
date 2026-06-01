@@ -1,7 +1,7 @@
 ---
 id: 221
 title: Navigable schema diagnostics in the editor
-status: "🔲"
+status: "🔳"
 model: opus
 depends-on: [147, 133]
 summary: >-
