@@ -237,7 +237,7 @@ func runBuildFlatpak(_ string, args []string) int {
 		fmt.Fprintf(os.Stderr,
 			"Usage: mdsmith-release build-flatpak <artifacts-dir> <out-dir>\n\n"+
 				"Stage the flatpak-builder manifest for\n"+
-				"io.github.jeduden.mdsmith and the two Linux release binaries\n"+
+				"io.github.jeduden.mdsmith and the x86_64 Linux release binary\n"+
 				"it references from <artifacts-dir> into <out-dir>. The\n"+
 				"release.yml flatpak job then runs flatpak-builder and\n"+
 				"`flatpak build-bundle` to produce the single-file .flatpak\n"+

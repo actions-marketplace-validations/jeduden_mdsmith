@@ -42,8 +42,8 @@ not after `release`.
 ## In-repo work (this PR)
 
 1. [`mdsmith-release build-flatpak`](../internal/release/flatpak.go)
-   stages a flatpak-builder manifest with local `path:`
-   sources plus the two Linux binaries it references, so
+   stages a flatpak-builder manifest with a local `path:`
+   source plus the x86_64 Linux binary it references, so
    the bundle builds with no published download URL.
 2. A `flatpak` job (`needs: [build]`) in
    [release.yml](../.github/workflows/release.yml) builds
@@ -62,8 +62,8 @@ not after `release`.
 ## Tasks
 
 1. Add `build-flatpak` with a unit test that asserts the
-   manifest's local `path:` sources and that it stages the
-   binaries next to the manifest.
+   manifest's local `path:` source and that it stages the
+   binary next to the manifest.
 2. Wire the subcommand into
    [main.go](../cmd/mdsmith-release/main.go).
 3. Add the `flatpak` job and make `release` depend on it.
@@ -71,9 +71,9 @@ not after `release`.
 
 ## Acceptance Criteria
 
-- [x] `build-flatpak` stages a manifest pinning the two
-      Linux binaries by local path and copies those
-      binaries next to it.
+- [x] `build-flatpak` stages a manifest pinning the
+      x86_64 Linux binary by local path and copies that
+      binary next to it.
 - [ ] `mdsmith check .` passes, including the regenerated
       release-channel catalog.
 - [ ] All tests pass: `go test ./...`
