@@ -308,7 +308,8 @@ func nonBodyDiagLine(f *lint.File) int {
 // generated section would let engine.filterGeneratedDiags drop the
 // diagnostic — the very case NonBodyDiagLine's non-positive value
 // guards against. So this re-anchors at the insertion point only when
-// it is safe, and falls back to line 1 otherwise (plan 221).
+// it is safe, and falls back to the non-body anchor — the non-positive
+// NonBodyDiagLine value, not a literal line 1 — otherwise (plan 221).
 func MissingSectionAnchor(f *lint.File, candidate int) int {
 	if candidate > 0 && !lineInGeneratedRange(f, candidate) {
 		return candidate
