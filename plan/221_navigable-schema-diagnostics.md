@@ -179,11 +179,15 @@ Design rules:
    tooltip footer (Obsidian) and as native
    `relatedInformation` in VS Code.
 
-`cachedRuleInfo` already loads `RuleInfo`. Expose its
-`Summary` so the hover drops `info.Content` for the
-one-line form. Two calls to settle in code: whether to
-keep the plan-147 remediation line, and the `DocURL`
-scheme (a stable web route vs. a `command:` link).
+`cachedRuleInfo` already loads `RuleInfo`, which has a
+one-line `Description` from the README front matter
+(MDS020: "Document structure and front matter must
+match its schema"). The hover uses `Description`, not
+`info.Content`. Two calls to settle in code: whether
+to keep the plan-147 remediation line, and the
+`DocURL` scheme. `codeDescription.href` must be an
+`http(s)` URL; a `command:` link is valid only for the
+doc link inside the hover markdown.
 
 ### LSP wire and Obsidian
 
@@ -231,6 +235,9 @@ declaration's line — still navigable.
    diagnostic in
    [validate.go](../internal/schema/validate.go) and
    [the rule](../internal/rules/requiredstructure/rule.go).
+   Callers mutate the `Diagnostic` that `MakeDiag`
+   returns, so its `(file, line, msg)` signature stays
+   unchanged across its ~30 call sites.
 4. Add the insertion-point helper; re-anchor missing
    section and missing content off line 1. Unit-test
    each anchor.
@@ -243,7 +250,8 @@ declaration's line — still navigable.
    them in `toLSP`, resolving cross-file URIs.
 8. Redesign `ruleHoverContent`
    ([hover.go](../internal/lsp/hover.go)) to the
-   issue-first layout; expose `RuleInfo.Summary`.
+   issue-first layout, using `RuleInfo.Description`
+   for the one-line rule summary.
 9. Thread `yaml.Node` lines for kind files and
    `proto.md` into `Schema.FrontmatterLines`; add the
    `.mdsmith.yml` path or the kind-line fallback.
