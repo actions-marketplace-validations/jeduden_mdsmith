@@ -154,10 +154,10 @@
           "enumDescriptions": [
             "Re-lint on every keystroke (debounced). Live diagnostics as you type.",
             "Re-lint only when the file is saved.",
-            "Disable mdsmith entirely: no diagnostics, and fix-on-save is suppressed even if mdsmith.fixOnSave is on."
+            "Stop automatic linting: no diagnostics, and fix-on-save is suppressed even if mdsmith.fixOnSave is on. Explicit quick fixes still work when invoked."
           ],
           "default": "onType",
-          "description": "When mdsmith lints. `onType` (default) re-lints on each keystroke (debounced); `onSave` re-lints only on save; `off` disables mdsmith entirely — no diagnostics, and `mdsmith.fixOnSave` is ignored."
+          "description": "When mdsmith lints. `onType` (default) re-lints on each keystroke (debounced); `onSave` re-lints only on save; `off` stops automatic linting — no diagnostics, and `mdsmith.fixOnSave` is ignored (explicit quick fixes still work)."
         },
         "mdsmith.fixOnSave": {
           "type": "boolean",

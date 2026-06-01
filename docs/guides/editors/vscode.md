@@ -124,14 +124,14 @@ preferences go in your user settings. Changing any setting
 takes effect on the next document event, with no window
 reload.
 
-| Setting                | Default   | Purpose                                                                              |
-| ---------------------- | --------- | ------------------------------------------------------------------------------------ |
-| `mdsmith.run`          | `onType`  | When to lint: `onType` (default), `onSave`, or `off` (off disables mdsmith entirely) |
-| `mdsmith.fixOnSave`    | `false`   | Run `mdsmith fix` on save; ignored when `mdsmith.run` is `off`                       |
-| `mdsmith.previewFix`   | `false`   | Open Refactor Preview before applying any fix                                        |
-| `mdsmith.config`       | `""`      | Override the `.mdsmith.yml` path (absolute or workspace)                             |
-| `mdsmith.path`         | `mdsmith` | Pin a binary; the default runs the bundled per-platform one                          |
-| `mdsmith.trace.server` | `off`     | LSP trace verbosity: `off`, `messages`, or `verbose`                                 |
+| Setting                | Default   | Purpose                                                                            |
+| ---------------------- | --------- | ---------------------------------------------------------------------------------- |
+| `mdsmith.run`          | `onType`  | When to lint: `onType` (default), `onSave`, or `off` (off stops automatic linting) |
+| `mdsmith.fixOnSave`    | `false`   | Run `mdsmith fix` on save; ignored when `mdsmith.run` is `off`                     |
+| `mdsmith.previewFix`   | `false`   | Open Refactor Preview before applying any fix                                      |
+| `mdsmith.config`       | `""`      | Override the `.mdsmith.yml` path (absolute or workspace)                           |
+| `mdsmith.path`         | `mdsmith` | Pin a binary; the default runs the bundled per-platform one                        |
+| `mdsmith.trace.server` | `off`     | LSP trace verbosity: `off`, `messages`, or `verbose`                               |
 
 `mdsmith.run` defaults to `onType`, so diagnostics update
 live as you type. `mdsmith.fixOnSave` layers auto-fixing on
@@ -139,13 +139,13 @@ top, and `off` is a master switch: it stops diagnostics and
 suppresses fix-on-save, so a save never rewrites the buffer
 while `mdsmith.run` is `off`.
 
-| `mdsmith.run` | `mdsmith.fixOnSave` | Behavior                                          |
-| ------------- | ------------------- | ------------------------------------------------- |
-| `onType`      | `false`             | Diagnostics update live as you type (default)     |
-| `onType`      | `true`              | Live diagnostics; saving also auto-fixes the file |
-| `onSave`      | `false`             | Diagnostics update only when you save             |
-| `onSave`      | `true`              | Saving re-lints and auto-fixes the file           |
-| `off`         | either              | mdsmith is inert: no diagnostics, no fix-on-save  |
+| `mdsmith.run` | `mdsmith.fixOnSave` | Behavior                                              |
+| ------------- | ------------------- | ----------------------------------------------------- |
+| `onType`      | `false`             | Diagnostics update live as you type (default)         |
+| `onType`      | `true`              | Live diagnostics; saving also auto-fixes the file     |
+| `onSave`      | `false`             | Diagnostics update only when you save                 |
+| `onSave`      | `true`              | Saving re-lints and auto-fixes the file               |
+| `off`         | either              | No diagnostics or fix-on-save; quick fixes still work |
 
 To bind fix-on-save through `editor.codeActionsOnSave`
 instead of `mdsmith.fixOnSave`:

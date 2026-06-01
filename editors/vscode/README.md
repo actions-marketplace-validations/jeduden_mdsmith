@@ -48,7 +48,7 @@ code --install-extension mdsmith-<version>.vsix
 | ---------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `mdsmith.path`         | `"mdsmith"` | Binary path; default runs the bundled per-platform binary. Set an absolute path to override; falls back to PATH only if your platform was not bundled (e.g. `/go/bin/mdsmith`) |
 | `mdsmith.config`       | `""`        | Override `-c` config path                                                                                                                                                      |
-| `mdsmith.run`          | `"onType"`  | When to lint: `onType` (default), `onSave`, or `off` (off disables mdsmith entirely)                                                                                           |
+| `mdsmith.run`          | `"onType"`  | When to lint: `onType` (default), `onSave`, or `off` (off stops automatic linting)                                                                                             |
 | `mdsmith.fixOnSave`    | `false`     | Auto-fix on save; ignored when `mdsmith.run` is `off`                                                                                                                          |
 | `mdsmith.trace.server` | `"off"`     | LSP trace verbosity                                                                                                                                                            |
 
