@@ -64,12 +64,13 @@ row: "| {title} | `{command}` | {audience} |"
 | Flatpak         | `flatpak install ./mdsmith-x86_64.flatpak`                                                 | Sandboxed Linux x86_64 desktops via Flatpak       |
 <?/catalog?>
 
-The short `asdf plugin add mdsmith` and bare
-`mise use mdsmith@latest` forms — with no explicit URL or
-backend prefix — depend on registry submissions tracked in
-[plan/145](../../plan/145_asdf-mise-registry-submissions.md). The
-explicit-URL asdf install, Homebrew, and mise's `github:`,
-`asdf:`, `go:`, and `ubi:` backends all work today.
+A bare `mise use mdsmith@latest` needs a registry entry —
+"bare" meaning no backend prefix and no prior
+`mise plugins install`. The short `asdf plugin add mdsmith`
+needs one too. Both are tracked in
+[plan/145](../../plan/145_asdf-mise-registry-submissions.md).
+Everything else works today: the explicit-URL asdf install,
+Homebrew, and every backend-prefixed mise form below.
 
 The binary ships for linux x86_64, linux aarch64, macOS
 x86_64, macOS arm64, and Windows amd64. Other targets
@@ -193,12 +194,14 @@ it for new registry entries:
 mise use -g ubi:jeduden/mdsmith@latest
 ```
 
-Only the shortest form — `mise use mdsmith@latest`, with no
-backend prefix — needs an entry in mise's curated registry
-([`jdx/mise`](https://github.com/jdx/mise) `registry.toml`),
-tracked in
+The one gap is a bare `mise use mdsmith@latest`: no backend
+prefix, and no prior `mise plugins install` like the asdf
+step above. That form needs an entry in mise's curated
+registry ([`jdx/mise`](https://github.com/jdx/mise)
+`registry.toml`), tracked in
 [plan/145](../../plan/145_asdf-mise-registry-submissions.md).
-Until that merges, use a backend-prefixed form above.
+Until it merges, use a backend-prefixed form, or install the
+plugin first as shown above.
 
 ## Flatpak
 
