@@ -259,8 +259,9 @@ func TestLoadChannels_MissingExtractOutput(t *testing.T) {
 }
 
 func TestExtractAllChannels_BuildFails(t *testing.T) {
-	// An empty dir is not a Go module, so `go build ./cmd/mdsmith`
-	// fails — covering buildMdsmith's error path.
+	// t.TempDir() has no ./cmd/mdsmith package, so `go build
+	// ./cmd/mdsmith` (with cmd.Dir set to the temp dir) fails —
+	// covering buildMdsmith's error path.
 	_, err := extractAllChannels(t.TempDir(), []string{relKey("a.md")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "build mdsmith")

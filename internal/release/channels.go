@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -94,6 +95,9 @@ func buildMdsmith(root string) (string, func(), error) {
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 	bin := filepath.Join(dir, "mdsmith")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/mdsmith") //nolint:gosec // CI-only; constant args
 	cmd.Dir = root
 	if combined, err := cmd.CombinedOutput(); err != nil {
