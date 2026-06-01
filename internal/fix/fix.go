@@ -161,6 +161,8 @@ func (f *Fixer) Fix(paths []string) *Result {
 	const maxWorkspacePasses = 10
 	var first, last *Result
 	modified := make(map[string]struct{})
+	var errs []error
+	seenErr := make(map[string]struct{})
 	for pass := 0; pass < maxWorkspacePasses; pass++ {
 		r := f.fixOnce(paths)
 		if first == nil {
@@ -169,6 +171,17 @@ func (f *Fixer) Fix(paths []string) *Result {
 		last = r
 		for _, m := range r.Modified {
 			modified[m] = struct{}{}
+		}
+		// Aggregate errors across passes, deduped by message, so an
+		// error raised only in an earlier pass is not lost — Result.Errors
+		// is the union of everything encountered (like Modified), and a
+		// persistent error that recurs every pass is reported once.
+		for _, e := range r.Errors {
+			if _, dup := seenErr[e.Error()]; dup {
+				continue
+			}
+			seenErr[e.Error()] = struct{}{}
+			errs = append(errs, e)
 		}
 		// A pass that writes nothing means every file — including every
 		// cross-file generated section — already matched its fixed
@@ -181,16 +194,17 @@ func (f *Fixer) Fix(paths []string) *Result {
 	// Compose the aggregate Result:
 	//   - FilesChecked and Failures describe the input, so they come
 	//     from the first pass (the only pass that saw the unfixed tree).
-	//   - Diagnostics and Errors describe the converged tree, so they
-	//     come from the last pass, which re-checked every file against
-	//     the final state.
+	//   - Diagnostics describe the converged tree, so they come from the
+	//     last pass, which re-checked every file against the final state.
+	//   - Errors are aggregated across passes (deduped above) so a
+	//     pass-specific error is not dropped.
 	//   - Modified is the union across passes: a file fixed only after a
 	//     dependency settled is still a file this run changed.
 	out := &Result{
 		FilesChecked: first.FilesChecked,
 		Failures:     first.Failures,
 		Diagnostics:  last.Diagnostics,
-		Errors:       last.Errors,
+		Errors:       errs,
 	}
 	out.Modified = make([]string, 0, len(modified))
 	for m := range modified {

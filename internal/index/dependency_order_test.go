@@ -133,6 +133,25 @@ func TestDependencyOrder_IgnoresSelfInclude(t *testing.T) {
 	require.ElementsMatch(t, in, got, "self-include must not drop or duplicate a file")
 }
 
+// TestDependencyOrder_NormalizesInputPaths verifies that non-normalized
+// inputs (a leading "./") are matched against the index's normalized
+// edge targets, so an include constraint is not silently missed.
+func TestDependencyOrder_NormalizesInputPaths(t *testing.T) {
+	idx := New("/root")
+	idx.Update("top.md", include("leaf.md"))
+	idx.Update("leaf.md", []byte("# Leaf\n"))
+
+	in := []string{"./top.md", "./leaf.md"}
+	got := idx.DependencyOrder(in)
+	require.Len(t, got, 2)
+	pos := make(map[string]int, len(got))
+	for i, p := range got {
+		pos[p] = i
+	}
+	assert.Less(t, pos["leaf.md"], pos["top.md"],
+		"leaf must precede top even when inputs carry a leading ./")
+}
+
 // TestDependencyOrder_DeduplicatesRepeatedDependency verifies that a
 // file including the same target twice contributes one ordering
 // constraint, not two: the target still precedes the host.

@@ -1097,6 +1097,59 @@ func TestFix_WorkspaceFixpointBounded(t *testing.T) {
 		"workspace fixpoint must stay within maxWorkspacePasses*maxPasses")
 }
 
+// TestFix_WorkspaceFixpointAggregatesErrors verifies that Fix's Errors
+// is the union across passes (deduped by message), not just the last
+// pass's errors. A non-converging "driver" file keeps the workspace
+// loop running for several passes; a "persist" file errors on every
+// pass (must be reported once, not once per pass), and a "transient"
+// file errors only on the first pass (must still be surfaced, which a
+// last-pass-only result would drop).
+func TestFix_WorkspaceFixpointAggregatesErrors(t *testing.T) {
+	dir := t.TempDir()
+	driver := filepath.Join(dir, "driver.md")
+	persist := filepath.Join(dir, "persist.md")
+	transient := filepath.Join(dir, "transient.md")
+	for _, p := range []string{driver, persist, transient} {
+		require.NoError(t, os.WriteFile(p, []byte("A\n"), 0o644))
+	}
+
+	transientFailed := false
+	cfg := &config.Config{
+		Rules: map[string]config.RuleCfg{"mock-non-converging": {Enabled: true}},
+	}
+	fixer := &Fixer{
+		Config: cfg,
+		Rules:  []rule.Rule{&mockNonConvergingRule{id: "MDS999", name: "mock-non-converging"}},
+		WriteFile: func(path string, data []byte, perm os.FileMode) error {
+			switch {
+			case strings.HasSuffix(path, "persist.md"):
+				return errors.New("persist write failed")
+			case strings.HasSuffix(path, "transient.md") && !transientFailed:
+				transientFailed = true
+				return errors.New("transient write failed")
+			default:
+				return os.WriteFile(path, data, perm)
+			}
+		},
+	}
+
+	result := fixer.Fix([]string{driver, persist, transient})
+
+	var msgs strings.Builder
+	for _, e := range result.Errors {
+		msgs.WriteString(e.Error())
+		msgs.WriteByte('\n')
+	}
+	// A persistent error that recurs on every pass must be deduped to a
+	// single entry.
+	assert.Equal(t, 1, strings.Count(msgs.String(), "persist write failed"),
+		"recurring error must be reported once, not once per pass")
+	// An error from only the first pass must still be surfaced; a
+	// last-pass-only Result would have dropped it.
+	assert.Contains(t, msgs.String(), "transient write failed",
+		"an error from an earlier pass must not be lost")
+}
+
 // --- dry-run ---
 
 func TestFix_DryRun_LeavesFileUntouched(t *testing.T) {

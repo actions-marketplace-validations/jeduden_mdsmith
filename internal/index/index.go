@@ -484,12 +484,25 @@ func (i *Index) OutgoingEdges(file string) []Edge {
 // are read as-is and never fixed). Files in a dependency cycle, and
 // files with no constraint, keep their original relative order.
 //
-// The input slice is not mutated; a new slice with the same elements
-// is returned. Fewer than two paths are returned unchanged.
+// paths are normalized with NormalizePath before matching, so callers
+// may pass workspace-relative paths in any equivalent spelling (a
+// leading "./", OS-specific separators) without silently missing a
+// constraint; the returned slice is in that same normalized form. The
+// input slice is not mutated. Fewer than two paths are returned
+// unchanged.
 func (i *Index) DependencyOrder(paths []string) []string {
 	if i == nil || len(paths) < 2 {
 		return paths
 	}
+
+	// Match the index's edge targets (which are NormalizePath-normalized)
+	// regardless of how the caller spelled each path. A fresh slice keeps
+	// the caller's input intact.
+	norm := make([]string, len(paths))
+	for idx, p := range paths {
+		norm[idx] = NormalizePath(p)
+	}
+	paths = norm
 
 	indegree, dependents := i.dependencyEdges(paths)
 
