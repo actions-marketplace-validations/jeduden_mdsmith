@@ -64,7 +64,7 @@ type channelDoc struct {
 var channelExtractor = runChannelExtract
 
 func runChannelExtract(root, relPath string) ([]byte, error) {
-	cmd := exec.Command("go", "run", "./cmd/mdsmith", //nolint:gosec // CI-only; args are a constant verb plus a dir-listed filename
+	cmd := exec.Command("go", "run", "./cmd/mdsmith", //nolint:gosec // CI-only; constant verb + a dir-listed name
 		"extract", ChannelKind, relPath, "--format", "json")
 	cmd.Dir = root
 	out, err := cmd.Output()

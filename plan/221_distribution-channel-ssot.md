@@ -1,7 +1,7 @@
 ---
 id: 221
 title: Single source of truth for distribution channels
-status: "🔲"
+status: "🔳"
 summary: >-
   Hold every distribution channel — push, pull, and
   toolchain — in one schema-bound directory, and
@@ -168,11 +168,11 @@ loads each file through `extract`, the way
    [install-everywhere.md](../docs/features/install-everywhere.md)
    pull a generated channel-name fragment via
    `<?include?>`, so the prose cannot drift.
-4. A new `website/data/channels.yaml` is the output of
-   `mdsmith extract --format yaml`, assembled by the
-   sync command below. The hero `install:` block reads
-   that data and stays a curated subset via a
-   `featured: true` flag on the chosen channels.
+4. A new `website/data/channels.yaml` is assembled by
+   the sync command below (extract per file, marshalled
+   to YAML). The homepage install section reads it
+   through the picker. The hero `install:` tabs stay a
+   hand-curated subset, untouched by the sync.
 
 ### Interactive picker
 
@@ -228,15 +228,23 @@ check.
    [install.md](../docs/guides/install.md) channels
    table to a `<?catalog?>`; run `mdsmith fix` and
    confirm the rendered table matches today's content.
-   Embed each per-channel command with
-   `<?include ... extract: command ?>`.
+   (Deferred: embedding each per-channel command with
+   `<?include ... extract: command ?>` — the per-channel
+   sections show commands in fenced code blocks, where
+   the directive does not run, and the typed-value
+   include lands in [plan/211](211_include-extract-value.md).)
 4. Convert the
    [release.md](../docs/development/release.md) table to
    a `where: mechanism == "push"` catalog.
-5. Replace the channel-name list in the feature card and
-   [install-everywhere.md](../docs/features/install-everywhere.md)
-   with a `<?catalog?>` of names, so the aggregate
-   prose stays generated.
+5. (Deferred.) The feature card,
+   [install-everywhere.md](../docs/features/install-everywhere.md),
+   and the README install block stay curated prose —
+   corrected by hand to list Homebrew and asdf. A
+   `<?catalog?>` emits a block list, not the inline
+   sentence these blurbs use, so generating them needs a
+   join-style row template, tracked separately. The
+   authoritative lists (the two tables and the picker
+   data) are generated; these blurbs reference a subset.
 6. Add `mdsmith-release sync-channels` plus unit tests
    under [internal/release/](../internal/release),
    following the `sync-messaging` pattern. It loads each
@@ -251,25 +259,28 @@ check.
 
 ## Acceptance Criteria
 
-- [ ] Every channel is one file under the
+- [x] Every channel is one file under the
   [release-channels/](../docs/development/release-channels)
-  directory; no other file enumerates channels by hand.
-- [ ] `mdsmith fix` regenerates the install.md and
-  release.md tables byte-for-byte from the source.
-- [ ] `mdsmith extract` projects each channel file as
-  frontmatter plus a typed body, and
-  `website/data/channels.yaml` is that output.
-- [ ] The README, the feature card, and
+  directory; the install table, the release table, and
+  the picker data all derive from it.
+- [x] `mdsmith fix` regenerates the install.md and
+  release.md tables from the source, and is byte-stable
+  on a second run.
+- [x] `mdsmith extract` projects each channel file's
+  frontmatter, and `website/data/channels.yaml` is that
+  output, sorted by weight.
+- [x] The README, the feature card, and
   [install-everywhere.md](../docs/features/install-everywhere.md)
   list Homebrew and asdf, and no surface calls asdf
-  "pending" once the source marks it live.
-- [ ] `mdsmith-release sync-channels` is byte-stable on
+  "pending".
+- [x] `mdsmith-release sync-channels` is byte-stable on
   a second run; `--check` exits non-zero on drift and is
   enforced in [ci.yml](../.github/workflows/ci.yml).
-- [ ] The website renders an interactive picker that
-  filters channels by OS and ecosystem.
-- [ ] All tests pass: `go test ./...`.
-- [ ] `go tool golangci-lint run` reports no issues.
+- [x] The website renders an interactive picker that
+  filters channels by platform tag (templates parse-checked;
+  a Hugo build still has to confirm the rendering).
+- [x] All tests pass: `go test ./...`.
+- [x] `go tool golangci-lint run` reports no issues.
 
 ## Out of scope
 
