@@ -290,58 +290,54 @@ describe("forwardMdsmithConfigChange", () => {
 });
 
 describe("notifyConfigChangeToClient", () => {
-  // RunningClientLike doubles for the bits of LanguageClient we touch.
-  function fakeClient(opts: {
-    running: boolean;
-    onSend?: () => Promise<void>;
-  }) {
+  // A client double exposing just isRunning(), plus a send spy that
+  // stands in for the caller-supplied notification callback. Tracking
+  // sends on the spy (not the client) mirrors the real design, where the
+  // payload lives in the callback rather than in RunningClientLike.
+  function fixture(opts: { running: boolean; onSend?: () => Promise<void> }) {
     let sends = 0;
-    return {
-      sends: () => sends,
-      client: {
-        isRunning: () => opts.running,
-        sendNotification: () => {
-          sends++;
-          return opts.onSend ? opts.onSend() : Promise.resolve();
-        }
-      }
+    const client = { isRunning: () => opts.running };
+    const send = (_c: typeof client): Promise<void> => {
+      sends++;
+      return opts.onSend ? opts.onSend() : Promise.resolve();
     };
+    return { sends: () => sends, client, send };
   }
 
   test("sends when the client is running", () => {
-    const f = fakeClient({ running: true });
-    notifyConfigChangeToClient(f.client);
+    const f = fixture({ running: true });
+    notifyConfigChangeToClient(f.client, f.send);
     expect(f.sends()).toBe(1);
   });
 
   test("does not send when the client is undefined", () => {
     // No client yet (config edit racing activation): must be a no-op,
-    // never a throw.
-    expect(() => notifyConfigChangeToClient(undefined)).not.toThrow();
+    // never a throw. The send callback must not run.
+    const f = fixture({ running: true });
+    expect(() => notifyConfigChangeToClient(undefined, f.send)).not.toThrow();
+    expect(f.sends()).toBe(0);
   });
 
   test("does not send when the client is not running", () => {
     // vscode-languageclient@9 rejects sendNotification with
     // ConnectionInactive when the client is Stopping/Stopped/
     // StartFailed; calling it would surface an unhandled rejection.
-    // The isRunning() guard must prevent the call entirely.
-    const f = fakeClient({ running: false });
-    notifyConfigChangeToClient(f.client);
+    // The isRunning() guard must prevent the send entirely.
+    const f = fixture({ running: false });
+    notifyConfigChangeToClient(f.client, f.send);
     expect(f.sends()).toBe(0);
   });
 
-  test("swallows a rejected sendNotification without throwing", async () => {
+  test("swallows a rejected send without throwing", async () => {
     // Even past the guard, the client can transition to not-running
-    // between the isRunning() check and the send, so sendNotification
+    // between the isRunning() check and the send, so the callback
     // returns a rejected promise. notifyConfigChangeToClient must attach
-    // a .catch() so it never becomes an unhandledRejection. The
-    // rejection is produced inside onSend (when the send actually
-    // happens), matching how the real client rejects on call.
-    const f = fakeClient({
+    // a .catch() so it never becomes an unhandledRejection.
+    const f = fixture({
       running: true,
       onSend: () => Promise.reject(new Error("Client is not running"))
     });
-    expect(() => notifyConfigChangeToClient(f.client)).not.toThrow();
+    expect(() => notifyConfigChangeToClient(f.client, f.send)).not.toThrow();
     // Let the microtask queue drain; if the .catch() inside were missing
     // Bun would surface an unhandledRejection and fail the test here.
     await new Promise((r) => setTimeout(r, 0));

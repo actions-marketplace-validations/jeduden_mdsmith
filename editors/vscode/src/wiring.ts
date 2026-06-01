@@ -214,7 +214,6 @@ export function forwardMdsmithConfigChange(
 // guard can be unit-tested without constructing a real LanguageClient.
 export interface RunningClientLike {
   isRunning(): boolean;
-  sendNotification(...args: unknown[]): Promise<void>;
 }
 
 // notifyConfigChangeToClient pushes the didChangeConfiguration nudge to
@@ -230,19 +229,27 @@ export interface RunningClientLike {
 // those rejections escape as unhandledRejection. We therefore (1) skip
 // the send unless isRunning(), and (2) attach a .catch() to absorb the
 // residual race where the client stops between the check and the send.
-export function notifyConfigChangeToClient(
-  client: RunningClientLike | undefined,
-  send?: (c: RunningClientLike) => Promise<void>
+//
+// `send` is required and owns the actual notification payload: keeping
+// it here (rather than constructing a DidChangeConfigurationNotification
+// inside this helper) is what lets wiring.ts stay decoupled from the
+// vscode-languageclient protocol types so this guard is unit-testable
+// without the runtime. The generic preserves the caller's concrete
+// client type, so `send` receives the real LanguageClient (with its
+// typed sendNotification overloads) rather than the minimal
+// RunningClientLike — no cast needed at the call site.
+export function notifyConfigChangeToClient<T extends RunningClientLike>(
+  client: T | undefined,
+  send: (c: T) => Promise<void>
 ): void {
   if (!client || !client.isRunning()) {
     return;
   }
-  const p = send ? send(client) : client.sendNotification();
   // The send can still reject if the client stops in the gap between
   // isRunning() and here; swallow it so it never becomes an
   // unhandledRejection. Nothing actionable to do — the next initialize
   // (on the inevitable restart) re-pulls config anyway.
-  void p.catch(() => {});
+  void send(client).catch(() => {});
 }
 
 // Minimal shapes of the bits of vscode.CodeAction / WorkspaceEdit /
