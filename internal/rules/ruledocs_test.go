@@ -450,3 +450,14 @@ func TestParseFrontMatter_RejectsYAMLAliases(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "anchors/aliases")
 }
+
+// TestDocURL_KnownAndUnknown covers the canonical rule-doc URL builder:
+// a known ID resolves to its lowercased <ID-name> slug under the rules
+// section, an unknown ID returns "", and lookup is case-insensitive.
+func TestDocURL_KnownAndUnknown(t *testing.T) {
+	assert.Equal(t, "https://mdsmith.dev/rules/mds020-required-structure/",
+		DocURL("MDS020"))
+	assert.Equal(t, DocURL("MDS020"), DocURL("mds020"),
+		"lookup is case-insensitive")
+	assert.Equal(t, "", DocURL("MDSZZZ"), "unknown ID yields no URL")
+}

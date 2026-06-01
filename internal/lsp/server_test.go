@@ -1012,15 +1012,26 @@ func TestToLSP_RelatedInformationAndCodeDescription(t *testing.T) {
 	assert.Contains(t, ri.Location.URI, "proto.md")
 }
 
-// TestToLSP_NoRelatedNoCodeDescription confirms a plain diagnostic
-// gets neither field, so the wire form is unchanged for non-schema
-// rules.
+// TestToLSP_NoRelatedNoCodeDescription confirms a diagnostic with no
+// related locations and an unknown rule ID gets neither field.
 func TestToLSP_NoRelatedNoCodeDescription(t *testing.T) {
 	t.Parallel()
-	got := toLSP(lint.Diagnostic{Line: 1, Column: 1, RuleID: "MDS001"},
+	got := toLSP(lint.Diagnostic{Line: 1, Column: 1, RuleID: "MDSZZZ"},
 		[][]byte{[]byte("x")}, "/w")
 	assert.Nil(t, got.RelatedInformation)
 	assert.Nil(t, got.CodeDescription)
+}
+
+// TestToLSP_DerivesCodeDescriptionForKnownRule confirms a real rule ID
+// gets a codeDescription pointing at its website doc page, even without
+// an explicit DocURL override.
+func TestToLSP_DerivesCodeDescriptionForKnownRule(t *testing.T) {
+	t.Parallel()
+	got := toLSP(lint.Diagnostic{Line: 1, Column: 1, RuleID: "MDS001"},
+		[][]byte{[]byte("x")}, "/w")
+	require.NotNil(t, got.CodeDescription)
+	assert.Equal(t, "https://mdsmith.dev/rules/mds001-line-length/",
+		got.CodeDescription.Href)
 }
 
 // TestToLSPForwardsDeprecationData regresses plan 136: the
@@ -3693,6 +3704,42 @@ func TestRuleHoverContentFallback(t *testing.T) {
 	content := ruleHoverContent(d)
 	assert.Contains(t, content, "MDSZZZ")
 	assert.Contains(t, content, "mdsmith help rule MDSZZZ")
+}
+
+// TestRuleHoverContent_IssueFirst pins plan 221's hover layout: the
+// diagnostic message and the navigable schema link lead as the primary
+// block, a separator follows, then the condensed rule identity (code,
+// name, one-line description, docs link). The full README is not
+// inlined.
+func TestRuleHoverContent_IssueFirst(t *testing.T) {
+	t.Parallel()
+	d := Diagnostic{
+		Code:            "MDS020",
+		Message:         `status: got "draft", expected one of "open"`,
+		Data:            &diagnosticData{RuleName: "required-structure"},
+		CodeDescription: &codeDescription{Href: "https://mdsmith.dev/rules/MDS020"},
+		RelatedInformation: []diagnosticRelatedInformation{{
+			Location: Location{
+				URI:   "file:///w/plan/proto.md",
+				Range: Range{Start: Position{Line: 3}},
+			},
+			Message: "required by schema",
+		}},
+	}
+	got := ruleHoverContent(d)
+
+	sep := strings.Index(got, "\n---\n")
+	require.Positive(t, sep, "hover has an issue/rule separator")
+	issue, ruleBlock := got[:sep], got[sep:]
+
+	assert.Contains(t, issue, `status: got "draft"`, "issue leads")
+	assert.Contains(t, issue, "Schema: [proto.md:4](file:///w/plan/proto.md#L4)",
+		"navigable schema link sits in the issue block")
+	assert.Contains(t, ruleBlock, "`MDS020` · required-structure",
+		"rule identity is secondary")
+	assert.Contains(t, ruleBlock, "Document structure and front matter",
+		"one-line description, not the full README")
+	assert.Contains(t, ruleBlock, "https://mdsmith.dev/rules/MDS020")
 }
 
 // TestDirectiveHoverAtInRange covers the path where the cursor falls inside a

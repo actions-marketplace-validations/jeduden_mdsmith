@@ -7,6 +7,7 @@ import (
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/mdtext"
+	"github.com/jeduden/mdsmith/internal/rules"
 )
 
 // toLSP converts an mdsmith diagnostic to the LSP wire shape.
@@ -56,8 +57,16 @@ func toLSP(d lint.Diagnostic, lines [][]byte, root string) Diagnostic {
 	if ri := relatedInformation(d.RelatedLocations, root); len(ri) > 0 {
 		out.RelatedInformation = ri
 	}
-	if d.DocURL != "" {
-		out.CodeDescription = &codeDescription{Href: d.DocURL}
+	// codeDescription gives the rule code a clickable docs link. A
+	// diagnostic may carry an explicit DocURL override; otherwise the
+	// canonical rule-doc URL is derived from the rule ID. Unknown IDs
+	// (rules.DocURL returns "") leave codeDescription unset.
+	href := d.DocURL
+	if href == "" {
+		href = rules.DocURL(d.RuleID)
+	}
+	if href != "" {
+		out.CodeDescription = &codeDescription{Href: href}
 	}
 	return out
 }
