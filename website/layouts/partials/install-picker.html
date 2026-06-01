@@ -1,0 +1,31 @@
+{{- /* Interactive install picker. Reads the generated channel data
+       (website/data/channels.yaml, produced by `mdsmith-release
+       sync-channels` from docs/development/release-channels/*.md)
+       and renders every channel with platform-tag filter chips.
+       The copy buttons reuse the global [data-copy] handler in
+       baseof.html. With JS off, every row and an inert chip row
+       still render, so all commands stay reachable. */ -}}
+{{- $channels := site.Data.channels -}}
+{{- $order := slice "go" "node" "python" "macos" "linux" "windows" "editor" -}}
+{{- $labels := dict "go" "Go" "node" "Node" "python" "Python" "macos" "macOS" "linux" "Linux" "windows" "Windows" "editor" "Editor" -}}
+{{- $present := slice -}}
+{{- range $channels -}}
+  {{- range .platforms -}}{{- $present = $present | append . -}}{{- end -}}
+{{- end -}}
+<div class="install-picker" data-install-picker>
+  <div class="install-filters" role="group" aria-label="Filter channels by platform">
+    <button class="install-filter is-active" type="button" data-filter="all" aria-pressed="true">All</button>
+    {{- range $order }}{{ if in $present . }}
+    <button class="install-filter" type="button" data-filter="{{ . }}" aria-pressed="false">{{ index $labels . }}</button>
+    {{- end }}{{ end }}
+  </div>
+  <div class="install-list">
+    {{- range $channels }}
+    <div class="install-row" data-platforms="{{ delimit .platforms " " }}">
+      <span class="install-label">{{ .title }}</span>
+      <code class="install-cmd"><span class="prompt">$</span> <span class="cmd">{{ .command }}</span></code>
+      <button class="install-copy" type="button" aria-label="Copy {{ .title }} install command" data-copy="{{ .command }}">copy</button>
+    </div>
+    {{- end }}
+  </div>
+</div>
