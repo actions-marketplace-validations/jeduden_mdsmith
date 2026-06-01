@@ -19,15 +19,7 @@ to propagate the change to every tracked surface. CI runs
 
 ## Headline
 
-The website hero template renders the headline as
-`<h1>{pre}<em>{em}</em>{post}</h1>`. The raw Markdown source
-lives in the code block below; `mdsmith-release sync-messaging`
-parses the single emphasis span (`*…*`) to derive the pre / em
-/ post split.
-
-```markdown
 Mark*down*, smithed.
-```
 
 ## Eyebrow
 

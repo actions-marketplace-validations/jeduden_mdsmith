@@ -102,7 +102,7 @@ the release side. Just a typed walk over data.
    sibling keys; declare and document the default keys
    (`text` and `inline`) so a schema author can resolve a
    collision via `bind:`.
-5. **Adopt in messaging.** Switch
+5. [x] **Adopt in messaging.** Switch
    [`docs/brand/messaging.md`](../docs/brand/messaging.md)'s
    `## Headline` from a code block to a paragraph with
    `projection: inline`. Drop the
@@ -113,6 +113,11 @@ the release side. Just a typed walk over data.
    its `children` to text (rejecting non-text children), pre
    / em / post fall out from the sibling positions.
    `mdsmith-release sync-messaging --check` stays clean.
+
+   Note: `messaging.go` no longer imports `pkg/markdown`, and
+   the headline helper is deleted. `syncdocs.go` keeps its own
+   `pkg/markdown` use. That use is Hugo doc reconciliation, not
+   headline parsing, and is out of scope here.
 6. **Documentation.** Add an "Inline-span projection"
    subsection to the
    [extract reference](../docs/reference/cli/extract.md)
@@ -124,18 +129,20 @@ the release side. Just a typed walk over data.
 
 ## Acceptance Criteria
 
-- [ ] A paragraph content entry with `projection: inline`
+- [x] A paragraph content entry with `projection: inline`
   emits a `{inline: [...]}` object where each element is a
   typed span (text / emphasis / strong / code / link /
   autolink). Container spans carry `children`; leaf spans
   carry `value`.
-- [ ] Nested inline (`**`code`**`, `[**bold**](url)`, etc.)
+- [x] Nested inline (`**`code`**`, `[**bold**](url)`, etc.)
   round-trips through the projection without error; the
   consumer walks one uniform shape.
-- [ ] `internal/release/` no longer imports `pkg/markdown` or
-  parses Markdown itself. The headline parsing helper is
-  deleted; the release tool reads `headline.inline` directly.
-- [ ] `mdsmith extract` rejects an unsupported inline node
+- [x] `internal/release/messaging.go` no longer imports
+  `pkg/markdown` or parses Markdown itself. The headline parsing
+  helper is deleted; the release tool reads `headline.inline`
+  directly. (`syncdocs.go`'s unrelated `pkg/markdown` use for
+  Hugo doc reconciliation is out of scope.)
+- [x] `mdsmith extract` rejects an unsupported inline node
   (raw HTML, image, custom) when the schema asks for `inline`.
 - [ ] The mapping table is documented in the extract
   reference; the worked example in the guide shows both

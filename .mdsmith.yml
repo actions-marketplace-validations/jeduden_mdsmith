@@ -485,7 +485,7 @@ kinds:
         - heading: null
         - heading: { regex: '^Headline$' }
           content:
-            - { kind: code-block, required: true }
+            - { kind: paragraph, projection: inline, required: true }
         - heading: { regex: '^Eyebrow$' }
           content:
             - { kind: paragraph, required: true }
