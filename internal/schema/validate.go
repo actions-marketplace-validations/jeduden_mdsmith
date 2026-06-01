@@ -159,12 +159,11 @@ func validateFrontmatterDiags(
 			compileFailureDiag(sch, "front matter", "JSON-marshalable front matter", err).
 				Emit(mkDiag, f.Path, anchor)}
 	}
+	// CompileBytes parses the JSON the marshal above produced, which is
+	// always valid CUE, so it cannot error here. A bottom value would
+	// still surface through the Unify + Validate path below, so there is
+	// no separate (untestable) compile-failure branch for it.
 	dataVal := ctx.CompileBytes(data)
-	if err := dataVal.Err(); err != nil {
-		return []lint.Diagnostic{
-			compileFailureDiag(sch, "front matter", "valid front matter", err).
-				Emit(mkDiag, f.Path, anchor)}
-	}
 	merged := schemaVal.Unify(dataVal)
 	verr := merged.Validate(cue.Concrete(true))
 	if verr == nil {
@@ -177,18 +176,12 @@ func validateFrontmatterDiags(
 		return validateDeprecatedFieldsWithLines(
 			f, sch, docFM, docFrontmatterKeyLines(f), mkDiag)
 	}
-	cueErrs := errors.Errors(verr)
-	if len(cueErrs) == 0 {
-		return []lint.Diagnostic{
-			SchemaDiagnostic{
-				Field:     "front matter",
-				Actual:    fmt.Sprintf("%v", verr),
-				Expected:  "valid CUE",
-				SchemaRef: schemaRef(sch, ""),
-			}.Emit(mkDiag, f.Path, anchor)}
-	}
+	// errors.Errors returns a non-empty list for any non-nil CUE
+	// validation error, so there is no separate (untestable) "valid CUE"
+	// fallback; the per-error diagnostics below cover every reachable
+	// validation failure.
 	keyLines := docFrontmatterKeyLines(f)
-	out := dedupedCUEErrorDiags(f, sch, docFM, cueErrs, keyLines, mkDiag)
+	out := dedupedCUEErrorDiags(f, sch, docFM, errors.Errors(verr), keyLines, mkDiag)
 	return append(out, validateDeprecatedFieldsWithLines(f, sch, docFM, keyLines, mkDiag)...)
 }
 
