@@ -1,0 +1,153 @@
+package extract
+
+import (
+	"testing"
+
+	"github.com/jeduden/mdsmith/internal/schema"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// inlineScope builds a single-section schema whose body is one
+// paragraph projected as inline spans.
+func inlineScope() *schema.Schema {
+	return &schema.Schema{
+		RootLevel: 2,
+		Sections: []schema.Scope{{
+			Heading: "Headline",
+			Matcher: &schema.Matcher{Regex: "Headline"},
+			Content: []schema.ContentEntry{{
+				Kind:       schema.ContentKindParagraph,
+				Required:   true,
+				Projection: schema.ProjectionInline,
+			}},
+		}},
+	}
+}
+
+// TestExtract_InlineHeadline pins the worked example from plan 212:
+// `Mark*down*, smithed.` projects as text / emphasis / text.
+func TestExtract_InlineHeadline(t *testing.T) {
+	got, diags := run(t, "## Headline\n\nMark*down*, smithed.\n", inlineScope(), nil)
+	require.Empty(t, diags)
+	headline := got.(map[string]any)["headline"].(map[string]any)
+	spans := headline["inline"].([]any)
+	require.Len(t, spans, 3)
+	assert.Equal(t, map[string]any{"span": "text", "value": "Mark"}, spans[0])
+	em := spans[1].(map[string]any)
+	assert.Equal(t, "emphasis", em["span"])
+	assert.Equal(t, 1, em["level"])
+	assert.Equal(t, []any{map[string]any{"span": "text", "value": "down"}},
+		em["children"])
+	assert.Equal(t, map[string]any{"span": "text", "value": ", smithed."}, spans[2])
+}
+
+// TestExtract_InlineStrongLevel2 verifies `**bold**` becomes a
+// strong span at level 2.
+func TestExtract_InlineStrongLevel2(t *testing.T) {
+	got, diags := run(t, "## Headline\n\n**bold**\n", inlineScope(), nil)
+	require.Empty(t, diags)
+	spans := got.(map[string]any)["headline"].(map[string]any)["inline"].([]any)
+	require.Len(t, spans, 1)
+	strong := spans[0].(map[string]any)
+	assert.Equal(t, "strong", strong["span"])
+	assert.Equal(t, 2, strong["level"])
+	assert.Equal(t, []any{map[string]any{"span": "text", "value": "bold"}},
+		strong["children"])
+}
+
+// TestExtract_InlineCodeSpan verifies a code span emits a leaf with
+// its verbatim value.
+func TestExtract_InlineCodeSpan(t *testing.T) {
+	got, diags := run(t, "## Headline\n\nrun `mdsmith fix` now\n", inlineScope(), nil)
+	require.Empty(t, diags)
+	spans := got.(map[string]any)["headline"].(map[string]any)["inline"].([]any)
+	require.Len(t, spans, 3)
+	assert.Equal(t, map[string]any{"span": "text", "value": "run "}, spans[0])
+	assert.Equal(t, map[string]any{"span": "code", "value": "mdsmith fix"}, spans[1])
+	assert.Equal(t, map[string]any{"span": "text", "value": " now"}, spans[2])
+}
+
+// TestExtract_InlineNestedStrongCode pins the plan's nesting example:
+// a strong span containing a code span round-trips uniformly.
+func TestExtract_InlineNestedStrongCode(t *testing.T) {
+	got, diags := run(t, "## Headline\n\n**`mdsmith fix`**\n", inlineScope(), nil)
+	require.Empty(t, diags)
+	spans := got.(map[string]any)["headline"].(map[string]any)["inline"].([]any)
+	require.Len(t, spans, 1)
+	strong := spans[0].(map[string]any)
+	assert.Equal(t, "strong", strong["span"])
+	assert.Equal(t, 2, strong["level"])
+	assert.Equal(t, []any{
+		map[string]any{"span": "code", "value": "mdsmith fix"},
+	}, strong["children"])
+}
+
+// TestExtract_InlineLink verifies a `[text](url "title")` link emits
+// a container span carrying url, title, and children.
+func TestExtract_InlineLink(t *testing.T) {
+	got, diags := run(t,
+		"## Headline\n\nsee [the **docs**](https://example.com \"Docs\")\n",
+		inlineScope(), nil)
+	require.Empty(t, diags)
+	spans := got.(map[string]any)["headline"].(map[string]any)["inline"].([]any)
+	require.Len(t, spans, 2)
+	assert.Equal(t, map[string]any{"span": "text", "value": "see "}, spans[0])
+	link := spans[1].(map[string]any)
+	assert.Equal(t, "link", link["span"])
+	assert.Equal(t, "https://example.com", link["url"])
+	assert.Equal(t, "Docs", link["title"])
+	children := link["children"].([]any)
+	require.Len(t, children, 2)
+	assert.Equal(t, map[string]any{"span": "text", "value": "the "}, children[0])
+	strong := children[1].(map[string]any)
+	assert.Equal(t, "strong", strong["span"])
+	assert.Equal(t, []any{map[string]any{"span": "text", "value": "docs"}},
+		strong["children"])
+}
+
+// TestExtract_InlineLinkNoTitle omits the title key when the link has
+// no title.
+func TestExtract_InlineLinkNoTitle(t *testing.T) {
+	got, diags := run(t, "## Headline\n\n[home](https://example.com)\n",
+		inlineScope(), nil)
+	require.Empty(t, diags)
+	spans := got.(map[string]any)["headline"].(map[string]any)["inline"].([]any)
+	require.Len(t, spans, 1)
+	link := spans[0].(map[string]any)
+	assert.Equal(t, "link", link["span"])
+	assert.Equal(t, "https://example.com", link["url"])
+	assert.NotContains(t, link, "title")
+}
+
+// TestExtract_InlineAutolink verifies an `<https://…>` autolink emits
+// a leaf with both value and url.
+func TestExtract_InlineAutolink(t *testing.T) {
+	got, diags := run(t, "## Headline\n\nvisit <https://example.com>\n",
+		inlineScope(), nil)
+	require.Empty(t, diags)
+	spans := got.(map[string]any)["headline"].(map[string]any)["inline"].([]any)
+	require.Len(t, spans, 2)
+	assert.Equal(t, map[string]any{"span": "text", "value": "visit "}, spans[0])
+	auto := spans[1].(map[string]any)
+	assert.Equal(t, "autolink", auto["span"])
+	assert.Equal(t, "https://example.com", auto["value"])
+	assert.Equal(t, "https://example.com", auto["url"])
+}
+
+// TestExtract_InlineRejectsImage is a hard error: an image has no
+// inline-span representation in the mapping table.
+func TestExtract_InlineRejectsImage(t *testing.T) {
+	_, diags := run(t, "## Headline\n\n![alt](img.png)\n", inlineScope(), nil)
+	require.NotEmpty(t, diags)
+	assert.Contains(t, diags[0].Message, "image")
+}
+
+// TestExtract_InlineRejectsRawHTML is a hard error: inline raw HTML
+// is not in the mapping table.
+func TestExtract_InlineRejectsRawHTML(t *testing.T) {
+	_, diags := run(t, "## Headline\n\ntext <span>x</span> more\n",
+		inlineScope(), nil)
+	require.NotEmpty(t, diags)
+	assert.Contains(t, diags[0].Message, "raw HTML")
+}

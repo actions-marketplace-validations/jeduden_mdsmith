@@ -200,14 +200,21 @@ func (p *projector) projectContent(
 		case schema.ContentKindTable:
 			p.setKey(obj, nextKey(base), p.tableRows(cm.Node))
 		case schema.ContentKindParagraph:
-			p.setKey(obj, nextKey(base), p.nodeText(cm.Node))
+			if cm.Entry.Projection == schema.ProjectionInline {
+				p.setKey(obj, nextKey(base), p.inlineSpans(cm.Node))
+			} else {
+				p.setKey(obj, nextKey(base), p.nodeText(cm.Node))
+			}
 		}
 	}
 }
 
 // contentBaseKey returns the base projection key for a content
 // entry: the user-supplied bind value when set, otherwise the
-// kind's default name (`code`/`items`/`rows`/`text`).
+// kind's default name (`code`/`items`/`rows`/`text`). A paragraph
+// projected as inline spans defaults to `inline` instead of `text`,
+// so a scope can declare both a `text` and an `inline` projection of
+// the same paragraph without colliding (plan 212).
 func contentBaseKey(e *schema.ContentEntry) string {
 	if e.Bind != nil {
 		return *e.Bind
@@ -220,6 +227,9 @@ func contentBaseKey(e *schema.ContentEntry) string {
 	case schema.ContentKindTable:
 		return "rows"
 	case schema.ContentKindParagraph:
+		if e.Projection == schema.ProjectionInline {
+			return "inline"
+		}
 		return "text"
 	}
 	return ""

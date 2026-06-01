@@ -75,7 +75,7 @@ the release side. Just a typed walk over data.
    current default), `code` (for code blocks, already
    implicit), and `inline` (new). Validate at schema-load time;
    reject `projection: inline` on non-paragraph kinds.
-2. **AST → typed-span walker.** In
+2. [x] **AST → typed-span walker.** In
    [`internal/extract`](../internal/extract), implement the
    inline-span walker. Container spans (emphasis, strong,
    link) carry `children`; leaf spans (text, code, autolink)
