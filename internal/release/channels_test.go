@@ -146,12 +146,11 @@ func TestChannelValidate_RequiredFields(t *testing.T) {
 }
 
 func TestRenderChannelsYAML(t *testing.T) {
-	out, err := RenderChannelsYAML([]Channel{{
+	out := RenderChannelsYAML([]Channel{{
 		Title: "Go", Command: "go install", Mechanism: "toolchain",
 		Artifact: "cli", Audience: "devs", Platforms: []string{"go"},
 		URL: "https://example.test", Weight: 1,
 	}})
-	require.NoError(t, err)
 	s := string(out)
 	assert.Contains(t, s, "do not edit by hand")
 	assert.Contains(t, s, "- title: Go")
