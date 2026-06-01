@@ -990,3 +990,38 @@ func TestCheck_InlineSchema_PerScopeRequiredMentions(t *testing.T) {
 	// The diagnostic anchors at the Strict heading line (line 7).
 	assert.Equal(t, 7, mentions[0].Line)
 }
+
+// TestCheck_InlineKindSchema_RelatedLocationCarriesSourcePath pins
+// plan 221: an inline kind schema delivered as a schema-sources entry
+// with a `source` makes the violation's related location point at the
+// kind's defining file, not the bare "inline kind schema" label.
+func TestCheck_InlineKindSchema_RelatedLocationCarriesSourcePath(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"schema-sources": []any{
+			map[string]any{
+				"inline": map[string]any{
+					"closed": true,
+					"sections": []any{
+						map[string]any{"heading": "Goal"},
+						map[string]any{"heading": "Tasks"},
+					},
+				},
+				"source": "/work/.mdsmith.yml",
+			},
+		},
+	})
+	require.NoError(t, err)
+	f := newTestFile(t, "doc.md", "# My Plan\n\n## Goal\n\nText.\n")
+	diags := r.Check(f)
+	var found bool
+	for _, d := range diags {
+		for _, rl := range d.RelatedLocations {
+			if rl.File == "/work/.mdsmith.yml" {
+				found = true
+			}
+		}
+	}
+	require.True(t, found,
+		"inline kind violation points at the kind's source file, not a label")
+}

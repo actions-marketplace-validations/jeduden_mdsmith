@@ -251,7 +251,15 @@ func parseSchemaSources(v any) ([]SchemaSource, error) {
 				return nil, fmt.Errorf(
 					"schema-sources[%d].inline must be a non-empty mapping, got %T", i, inlineV)
 			}
-			sch, err := schema.ParseInline(im, "inline kind schema")
+			// The merge layer (config.applyInlineSchemaSource) attaches
+			// the kind's defining file as `source` so the schema
+			// reference is navigable; fall back to the generic label
+			// when it is absent (e.g. a direct `inline-schema:` setting).
+			label := "inline kind schema"
+			if src, ok := m["source"].(string); ok && src != "" {
+				label = src
+			}
+			sch, err := schema.ParseInline(im, label)
 			if err != nil {
 				return nil, fmt.Errorf("schema-sources[%d].inline: %w", i, err)
 			}
