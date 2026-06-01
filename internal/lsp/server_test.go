@@ -1034,6 +1034,24 @@ func TestToLSP_DerivesCodeDescriptionForKnownRule(t *testing.T) {
 		got.CodeDescription.Href)
 }
 
+// TestToLSP_RelatedFileOnlyAnchorsAtLineZero covers the clamp path: a
+// file-only related location (Line and Column unknown / 0) anchors at
+// the schema file's first line rather than underflowing to a negative
+// coordinate.
+func TestToLSP_RelatedFileOnlyAnchorsAtLineZero(t *testing.T) {
+	t.Parallel()
+	d := lint.Diagnostic{
+		Line: 1, Column: 1, RuleID: "MDS020",
+		RelatedLocations: []lint.RelatedLocation{
+			{File: "proto.md", Message: "required by schema"},
+		},
+	}
+	got := toLSP(d, [][]byte{[]byte("x")}, "/w")
+	require.Len(t, got.RelatedInformation, 1)
+	assert.Equal(t, 0, got.RelatedInformation[0].Location.Range.Start.Line)
+	assert.Equal(t, 0, got.RelatedInformation[0].Location.Range.Start.Character)
+}
+
 // TestToLSPForwardsDeprecationData regresses plan 136: the
 // lint.Diagnostic Deprecated / ReplacedBy fields must ride
 // through to LSP clients via the diagnostic Data payload so a

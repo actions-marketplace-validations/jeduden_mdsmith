@@ -278,3 +278,25 @@ func TestFormat_CaretWriterError(t *testing.T) {
 	err := f.Format(w, diagnostics)
 	assert.Error(t, err, "expected error from failing caret write")
 }
+
+// TestFormat_RelatedWriterError covers the writeRelated error return:
+// the header succeeds (write 1), the diagnostic has no SourceLines so
+// formatSnippet writes nothing, and the related-location trailer write
+// fails.
+func TestFormat_RelatedWriterError(t *testing.T) {
+	f := &TextFormatter{Color: false}
+	w := &limitedWriter{limit: 1}
+
+	diagnostics := []lint.Diagnostic{
+		{
+			File: "test.md", Line: 1, Column: 1,
+			RuleID: "MDS020", RuleName: "required-structure", Message: "test",
+			RelatedLocations: []lint.RelatedLocation{
+				{File: "proto.md", Line: 2, Message: "required by schema"},
+			},
+		},
+	}
+
+	err := f.Format(w, diagnostics)
+	assert.Error(t, err, "expected error from failing related-location write")
+}

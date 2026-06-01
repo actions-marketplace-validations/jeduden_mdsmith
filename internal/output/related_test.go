@@ -109,3 +109,21 @@ func TestJSONFormatter_RelatedOmittedWhenAbsent(t *testing.T) {
 	assert.False(t, strings.Contains(out, "related_locations"), "omitempty drops empty related list")
 	assert.False(t, strings.Contains(out, "doc_url"), "omitempty drops empty doc URL")
 }
+
+func TestTextFormatter_RelatedFileOnlyNoMessage(t *testing.T) {
+	d := relatedDiag()
+	d.RelatedLocations = []lint.RelatedLocation{{File: "plan/proto.md", Line: 7}}
+	var buf bytes.Buffer
+	require.NoError(t, (&TextFormatter{}).Format(&buf, []lint.Diagnostic{d}))
+	out := buf.String()
+	assert.Contains(t, out, "↳ plan/proto.md:7")
+	assert.NotContains(t, out, " — ", "no separator when the location has no message")
+}
+
+func TestTextFormatter_RelatedEmptyLocationSkipped(t *testing.T) {
+	d := relatedDiag()
+	d.RelatedLocations = []lint.RelatedLocation{{}} // neither file nor message
+	var buf bytes.Buffer
+	require.NoError(t, (&TextFormatter{}).Format(&buf, []lint.Diagnostic{d}))
+	assert.NotContains(t, buf.String(), "↳", "an empty related location renders nothing")
+}
