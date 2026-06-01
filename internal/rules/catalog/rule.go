@@ -135,6 +135,23 @@ func (r *Rule) Generate(f *lint.File, filePath string, line int,
 			fmt.Sprintf("generated section template execution failed: %v", err))}
 	}
 
+	// Defensive guard: refuse to silently empty a previously-populated
+	// catalog when the glob matched zero files and no `empty:` fallback
+	// applies. Emptying a non-empty section in that case is almost always
+	// a misconfiguration (a wrong working directory, a stale glob, or an
+	// ignore rule that swept up the whole tree) rather than an intentional
+	// edit, so destroying the rows would discard real content. Returning a
+	// diagnostic both surfaces the problem in `check` and, via the engine's
+	// generation-error path, leaves the body untouched in `fix`. An
+	// already-empty body is left alone (no rows to protect); an `empty:`
+	// fallback renders non-empty content and so never reaches this branch.
+	if len(entries) == 0 && content == "" && sectionBodyNonEmpty(f, line) {
+		return "", []lint.Diagnostic{makeDiag(filePath, line,
+			"catalog glob matched zero files but the section is non-empty; "+
+				"refusing to empty it — check the working directory, the glob, "+
+				"and ignore rules, or set an \"empty:\" fallback to clear it intentionally")}
+	}
+
 	// Format tables this rule generates using its own pad / separator
 	// settings; see Rule's doc comment for why catalog carries its own
 	// table-format knobs instead of consulting MDS025.
@@ -144,6 +161,24 @@ func (r *Rule) Generate(f *lint.File, filePath string, line int,
 	})
 
 	return content, nil
+}
+
+// sectionBodyNonEmpty reports whether the catalog section whose start
+// marker is on the given 1-based line currently has any non-whitespace
+// body content. It powers the destructive-empty guard in Generate: a
+// body of only blank lines (or no body at all) carries nothing worth
+// protecting, so the guard must not fire for it. Returns false when the
+// marker pair cannot be located, matching the conservative "nothing to
+// protect" default.
+func sectionBodyNonEmpty(f *lint.File, line int) bool {
+	pairs, _ := gensection.FindMarkerPairs(f, "catalog", "MDS019", "catalog")
+	for _, mp := range pairs {
+		if mp.StartLine != line {
+			continue
+		}
+		return strings.TrimSpace(gensection.ExtractContent(f, mp)) != ""
+	}
+	return false
 }
 
 // ApplySettings implements rule.Configurable.

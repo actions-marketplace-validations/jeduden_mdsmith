@@ -783,6 +783,107 @@ glob: "*.md"
 	}
 }
 
+func TestFix_DoesNotEmptyPopulatedCatalogWhenGlobMatchesZeroFiles(t *testing.T) {
+	// Defensive guard: a previously-populated catalog body must not be
+	// silently emptied when the glob resolves to zero files. This is the
+	// failure mode the worktree bug produced; even if some future regression
+	// makes every file read as filtered/ignored, fix must refuse to destroy
+	// existing rows rather than wipe them.
+	src := `<?catalog
+glob: "*.md"
+?>
+- [a.md](a.md)
+- [b.md](b.md)
+<?/catalog?>
+`
+	// Empty FS: the glob matches nothing.
+	f := newTestFile(t, "index.md", src, fstest.MapFS{})
+	r := &Rule{}
+	result := r.Fix(f)
+	assert.Equal(t, src, string(result),
+		"Fix must not empty a populated catalog when the glob matches zero files")
+}
+
+func TestCheck_FlagsPopulatedCatalogThatWouldBeEmptied(t *testing.T) {
+	// The companion check: when the glob matches zero files but the body
+	// is non-empty, Check surfaces a diagnostic instead of silently
+	// accepting (and `fix` later silently wiping) the rows.
+	src := `<?catalog
+glob: "*.md"
+?>
+- [a.md](a.md)
+- [b.md](b.md)
+<?/catalog?>
+`
+	f := newTestFile(t, "index.md", src, fstest.MapFS{})
+	r := &Rule{}
+	diags := r.Check(f)
+	require.NotEmpty(t, diags, "expected a diagnostic when a populated catalog would be emptied")
+	found := false
+	for _, d := range diags {
+		if strings.Contains(d.Message, "matched zero files") {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected a 'matched zero files' diagnostic, got: %v", diags)
+}
+
+func TestFix_StillEmptiesAlreadyEmptyCatalogBody(t *testing.T) {
+	// The guard must not change the legitimate case: an already-empty
+	// body with zero matches stays empty and produces no diagnostic.
+	src := `<?catalog
+glob: "nonexistent/*.md"
+?>
+<?/catalog?>
+`
+	f := newTestFile(t, "index.md", src, fstest.MapFS{})
+	r := &Rule{}
+	result := r.Fix(f)
+	assert.Equal(t, src, string(result), "already-empty catalog must remain a no-op")
+	diags := r.Check(f)
+	expectDiags(t, diags, 0)
+}
+
+func TestSectionBodyNonEmpty_PopulatedBody(t *testing.T) {
+	src := `<?catalog
+glob: "*.md"
+?>
+- [a.md](a.md)
+<?/catalog?>
+`
+	f := newTestFile(t, "index.md", src, fstest.MapFS{})
+	// The catalog start marker is on line 1.
+	assert.True(t, sectionBodyNonEmpty(f, 1),
+		"a body with a list row must be reported non-empty")
+}
+
+func TestSectionBodyNonEmpty_WhitespaceOnlyBody(t *testing.T) {
+	src := "<?catalog\nglob: \"*.md\"\n?>\n   \n\n<?/catalog?>\n"
+	f := newTestFile(t, "index.md", src, fstest.MapFS{})
+	assert.False(t, sectionBodyNonEmpty(f, 1),
+		"a body of only blank/whitespace lines must be reported empty")
+}
+
+func TestSectionBodyNonEmpty_EmptyBody(t *testing.T) {
+	src := "<?catalog\nglob: \"*.md\"\n?>\n<?/catalog?>\n"
+	f := newTestFile(t, "index.md", src, fstest.MapFS{})
+	assert.False(t, sectionBodyNonEmpty(f, 1),
+		"a body with no content lines must be reported empty")
+}
+
+func TestSectionBodyNonEmpty_NoMarkerAtLine(t *testing.T) {
+	src := `<?catalog
+glob: "*.md"
+?>
+- [a.md](a.md)
+<?/catalog?>
+`
+	f := newTestFile(t, "index.md", src, fstest.MapFS{})
+	// No marker pair starts on line 99; conservative default is false.
+	assert.False(t, sectionBodyNonEmpty(f, 99),
+		"a line with no matching start marker must report false")
+}
+
 func TestFix_LeavesTemplateErrorSectionsUnchanged(t *testing.T) {
 	// Invalid template syntax -> fix leaves section unchanged.
 	src := `<?catalog
