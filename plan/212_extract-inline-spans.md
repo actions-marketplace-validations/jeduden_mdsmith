@@ -70,7 +70,7 @@ the release side. Just a typed walk over data.
 
 ## Tasks
 
-1. **Content-projection field on schema.** Add a `projection:`
+1. [x] **Content-projection field on schema.** Add a `projection:`
    key to schema content entries. Allowed values: `text` (the
    current default), `code` (for code blocks, already
    implicit), and `inline` (new). Validate at schema-load time;

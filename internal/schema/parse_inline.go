@@ -1052,9 +1052,38 @@ func applyContentField(k string, vv any, ce *ContentEntry, path string) error {
 		return setContentItemBound(&ce.MaxItems, vv, path, k, ce.Kind)
 	case "bind":
 		return setContentBind(ce, vv, path)
+	case "projection":
+		return setContentProjection(ce, vv, path)
 	default:
 		return fmt.Errorf("%s: unknown content key %q", path, k)
 	}
+}
+
+// setContentProjection reads the optional `projection:` mode for a
+// content entry (`text` / `code` / `inline`). An empty value is the
+// implicit default and is never written explicitly. `inline` emits a
+// paragraph's typed inline spans and is rejected on any non-paragraph
+// kind, since code blocks, lists, and tables have no inline tree to
+// project. Plan 212.
+func setContentProjection(ce *ContentEntry, v any, path string) error {
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("%s.projection must be a string, got %T", path, v)
+	}
+	switch s {
+	case ProjectionText, ProjectionCode, ProjectionInline:
+	default:
+		return fmt.Errorf(
+			"%s.projection: unknown projection %q (valid: text, code, inline)",
+			path, s)
+	}
+	if s == ProjectionInline && ce.Kind != ContentKindParagraph {
+		return fmt.Errorf(
+			"%s.projection: `projection: inline` is only valid on "+
+				"`kind: paragraph`, not `kind: %s`", path, ce.Kind)
+	}
+	ce.Projection = s
+	return nil
 }
 
 // setContentBind reads the optional `bind:` override for a content

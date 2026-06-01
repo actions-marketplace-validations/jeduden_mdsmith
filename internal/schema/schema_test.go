@@ -376,6 +376,78 @@ func TestParseInline_ContentEntryParses(t *testing.T) {
 	assert.False(t, entries[4].Required)
 }
 
+func TestParseInline_ContentProjectionInline(t *testing.T) {
+	sch, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading": "Headline",
+			"content": []any{map[string]any{
+				"kind": "paragraph", "projection": "inline",
+			}},
+		}},
+	}, "kind x")
+	require.NoError(t, err)
+	require.Len(t, sch.Sections, 1)
+	require.Len(t, sch.Sections[0].Content, 1)
+	assert.Equal(t, "inline", sch.Sections[0].Content[0].Projection)
+}
+
+func TestParseInline_ContentProjectionTextAndCode(t *testing.T) {
+	sch, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading": "Examples",
+			"content": []any{
+				map[string]any{"kind": "paragraph", "projection": "text"},
+				map[string]any{"kind": "code-block", "projection": "code"},
+			},
+		}},
+	}, "kind x")
+	require.NoError(t, err)
+	entries := sch.Sections[0].Content
+	require.Len(t, entries, 2)
+	assert.Equal(t, "text", entries[0].Projection)
+	assert.Equal(t, "code", entries[1].Projection)
+}
+
+func TestParseInline_ContentProjectionWrongType(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading": "Headline",
+			"content": []any{map[string]any{
+				"kind": "paragraph", "projection": 42,
+			}},
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "projection must be a string")
+}
+
+func TestParseInline_ContentProjectionUnknownValue(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading": "Headline",
+			"content": []any{map[string]any{
+				"kind": "paragraph", "projection": "html",
+			}},
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown projection")
+}
+
+func TestParseInline_ContentProjectionInlineOnNonParagraph(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading": "Examples",
+			"content": []any{map[string]any{
+				"kind": "code-block", "projection": "inline",
+			}},
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"`projection: inline` is only valid on `kind: paragraph`")
+}
+
 func TestParseInline_ContentUnknownKind(t *testing.T) {
 	_, err := ParseInline(map[string]any{
 		"sections": []any{map[string]any{
