@@ -937,6 +937,39 @@ func (s *Server) runMode() string {
 	}
 }
 
+// clearOpenDiagnostics drops every published diagnostic for open
+// documents and asks the client to remove the squiggles. Used when
+// mdsmith.run flips to off: scheduleLint publishes nothing in off
+// mode, so diagnostics shown before the switch would otherwise linger
+// until the buffer is closed. Any armed debounce timer is cancelled
+// first so a lint scheduled just before the switch cannot re-publish
+// after the clear.
+func (s *Server) clearOpenDiagnostics() {
+	for _, uri := range s.docs.openURIs() {
+		// Collect the pending timer under pendingMu, then Stop outside
+		// the lock — Stop hits the runtime timer heap and can block,
+		// and holding pendingMu across it would serialize scheduleLint.
+		s.pendingMu.Lock()
+		pending, hadPending := s.pending[uri]
+		if hadPending {
+			delete(s.pending, uri)
+		}
+		s.pendingMu.Unlock()
+		if hadPending && pending.timer != nil {
+			pending.timer.Stop()
+		}
+		s.diagsMu.Lock()
+		delete(s.diags, uri)
+		s.diagsMu.Unlock()
+		version := 0
+		if doc, ok := s.docs.get(uri); ok {
+			version = doc.version
+		}
+		_ = s.t.writeNotification("textDocument/publishDiagnostics",
+			publishDiagnosticsParams{URI: uri, Version: version, Diagnostics: []Diagnostic{}})
+	}
+}
+
 // runLint executes one lint pass on the buffer and publishes the
 // resulting diagnostics. Safe to call from any goroutine.
 //
@@ -1719,8 +1752,16 @@ func (s *Server) fetchClientSettings(ctx context.Context) {
 		// applied settings rather than whatever was in effect when
 		// handleDidChangeConfiguration fired.
 		s.reloadConfig()
-		for _, uri := range s.docs.openURIs() {
-			s.scheduleLint(uri, lintTriggerConfig)
+		if s.runMode() == runOff {
+			// off is a master switch: scheduleLint publishes nothing
+			// in off mode, so squiggles shown before the switch would
+			// linger until the buffer closes. Drop them and tell the
+			// client to clear them.
+			s.clearOpenDiagnostics()
+		} else {
+			for _, uri := range s.docs.openURIs() {
+				s.scheduleLint(uri, lintTriggerConfig)
+			}
 		}
 	case <-timeout.C:
 		// Client never replied; defaults stand.

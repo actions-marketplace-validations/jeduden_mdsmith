@@ -1555,6 +1555,38 @@ func TestFetchClientSettingsAppliesResponse(t *testing.T) {
 	assert.Equal(t, "/tmp/x.yml", s.settings.ConfigPath)
 }
 
+func TestFetchClientSettingsOffClearsDiagnostics(t *testing.T) {
+	t.Parallel()
+	var buf safeBuffer
+	s := New(Options{Reader: nil, Writer: &buf, Rules: rule.All()})
+	// Seed an open document with a previously published diagnostic, as
+	// if an onType/onSave lint had already run and shown a squiggle.
+	uri := "file:///x.md"
+	s.docs.set(uri, &document{
+		uri: uri, path: "x.md", text: []byte("# Hi\n"), version: 1,
+	})
+	s.diagsMu.Lock()
+	s.diags[uri] = []Diagnostic{{Message: "stale"}}
+	s.diagsMu.Unlock()
+
+	// Client switches mdsmith.run to off.
+	done := make(chan struct{})
+	go func() { defer close(done); s.fetchClientSettings(context.Background()) }()
+	deliverPendingResponse(t, s, json.RawMessage(`[{"run":"off"}]`), nil)
+	awaitDone(t, done)
+
+	// off is a master switch: cached diagnostics for the open document
+	// must be dropped and an empty publishDiagnostics sent so the editor
+	// removes the squiggles instead of leaving them until the buffer is
+	// closed.
+	s.diagsMu.RLock()
+	got := s.diags[uri]
+	s.diagsMu.RUnlock()
+	assert.Empty(t, got, "switching to run=off must clear cached diagnostics")
+	assert.Contains(t, buf.String(), `"diagnostics":[]`,
+		"switching to run=off must publish empty diagnostics")
+}
+
 func TestFetchClientSettingsIgnoresErrorResponse(t *testing.T) {
 	t.Parallel()
 	var buf safeBuffer
