@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"bytes"
+	"path/filepath"
 	"unicode/utf8"
 
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -29,7 +30,7 @@ import (
 // on the same line, which clamps every input to [0, line's UTF-16
 // length], so endCol is always >= startCol — no end-before-start
 // guard is needed.
-func toLSP(d lint.Diagnostic, lines [][]byte) Diagnostic {
+func toLSP(d lint.Diagnostic, lines [][]byte, root string) Diagnostic {
 	startLine := d.Line - 1
 	if startLine < 0 {
 		startLine = 0
@@ -37,7 +38,7 @@ func toLSP(d lint.Diagnostic, lines [][]byte) Diagnostic {
 	line := currentLineBytes(lines, d.Line)
 	startCol := mdtext.UTF16FromByteOffset(line, d.Column-1)
 	endCol := utf16Length(line)
-	return Diagnostic{
+	out := Diagnostic{
 		Range: Range{
 			Start: Position{Line: startLine, Character: startCol},
 			End:   Position{Line: startLine, Character: endCol},
@@ -52,15 +53,63 @@ func toLSP(d lint.Diagnostic, lines [][]byte) Diagnostic {
 			ReplacedBy: d.ReplacedBy,
 		},
 	}
+	if ri := relatedInformation(d.RelatedLocations, root); len(ri) > 0 {
+		out.RelatedInformation = ri
+	}
+	if d.DocURL != "" {
+		out.CodeDescription = &codeDescription{Href: d.DocURL}
+	}
+	return out
+}
+
+// relatedInformation converts structured related locations to the LSP
+// wire form, resolving each file to a file:// URI against root
+// (a workspace-relative schema path becomes absolute first). A related
+// location with no File — an inline-schema label that names no source
+// file — cannot become a navigable URI and is dropped here; the CLI
+// still surfaces it as a trailer line. Coordinates flip 1-based →
+// 0-based and clamp at 0, so a file-only ref (Line 0) anchors at the
+// schema's first line.
+func relatedInformation(locs []lint.RelatedLocation, root string) []diagnosticRelatedInformation {
+	var out []diagnosticRelatedInformation
+	for _, loc := range locs {
+		if loc.File == "" {
+			continue
+		}
+		path := loc.File
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		pos := Position{
+			Line:      clampZero(loc.Line - 1),
+			Character: clampZero(loc.Column - 1),
+		}
+		out = append(out, diagnosticRelatedInformation{
+			Location: Location{URI: pathToURI(path), Range: Range{Start: pos, End: pos}},
+			Message:  loc.Message,
+		})
+	}
+	return out
+}
+
+// clampZero returns n, or 0 when n is negative. Used to flip 1-based
+// schema coordinates to 0-based LSP coordinates without underflowing
+// when the line or column is unknown (0).
+func clampZero(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
 }
 
 // toLSPAll maps a slice. Returns an empty (non-nil) slice for empty
-// input so the JSON wire form is `[]`, never `null`.
-func toLSPAll(diags []lint.Diagnostic, source []byte) []Diagnostic {
+// input so the JSON wire form is `[]`, never `null`. root resolves
+// cross-file related-location URIs (see relatedInformation).
+func toLSPAll(diags []lint.Diagnostic, source []byte, root string) []Diagnostic {
 	out := make([]Diagnostic, 0, len(diags))
 	lines := splitLines(source)
 	for _, d := range diags {
-		out = append(out, toLSP(d, lines))
+		out = append(out, toLSP(d, lines, root))
 	}
 	return out
 }

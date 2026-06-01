@@ -184,6 +184,35 @@ type Diagnostic struct {
 	Source   string             `json:"source,omitempty"`
 	Message  string             `json:"message"`
 	Data     *diagnosticData    `json:"data,omitempty"`
+	// RelatedInformation surfaces secondary locations (plan 221): for
+	// MDS020, the proto.md / kind-file line that declares the violated
+	// constraint, which the editor renders as a navigable entry.
+	// Omitted when the diagnostic carries no navigable related
+	// location (e.g. an inline-schema label with no file).
+	RelatedInformation []diagnosticRelatedInformation `json:"relatedInformation,omitempty"`
+	// CodeDescription, when set, gives the rule code a clickable link
+	// to its documentation. Href must be an http(s) URL per the LSP
+	// spec; clients render it next to the code.
+	CodeDescription *codeDescription `json:"codeDescription,omitempty"`
+}
+
+// Location is an LSP source location: a document URI plus a range.
+type Location struct {
+	URI   string `json:"uri"`
+	Range Range  `json:"range"`
+}
+
+// diagnosticRelatedInformation is one entry of Diagnostic.relatedInformation
+// (LSP §3.18.6): a location and a human message describing the relation.
+type diagnosticRelatedInformation struct {
+	Location Location `json:"location"`
+	Message  string   `json:"message"`
+}
+
+// codeDescription is Diagnostic.codeDescription (LSP §3.18.6): a single
+// href that points the code at its documentation.
+type codeDescription struct {
+	Href string `json:"href"`
 }
 
 // diagnosticData carries the rule name through to code-action handlers.

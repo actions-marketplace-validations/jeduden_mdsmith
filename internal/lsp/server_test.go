@@ -981,8 +981,46 @@ func TestComputeCodeActionsCachesNilEdits(t *testing.T) {
 func TestToLSPClampsZeroLine(t *testing.T) {
 	t.Parallel()
 	got := toLSP(lint.Diagnostic{Line: 0, Column: 1, RuleID: "MDS001", Severity: lint.Error},
-		[][]byte{[]byte("a")})
+		[][]byte{[]byte("a")}, "")
 	assert.Equal(t, 0, got.Range.Start.Line)
+}
+
+// TestToLSP_RelatedInformationAndCodeDescription pins plan 221's wire
+// mapping: a navigable related location becomes a relatedInformation
+// entry with a resolved file:// URI and 0-based coordinates, a doc URL
+// becomes codeDescription.href, and a file-less label is dropped.
+func TestToLSP_RelatedInformationAndCodeDescription(t *testing.T) {
+	t.Parallel()
+	d := lint.Diagnostic{
+		Line: 2, Column: 1, RuleID: "MDS020", RuleName: "required-structure",
+		Severity: lint.Error, Message: `status: got "x"`,
+		DocURL: "https://mdsmith.dev/rules/MDS020",
+		RelatedLocations: []lint.RelatedLocation{
+			{File: "proto.md", Line: 4, Column: 3, Message: "required by schema"},
+			{Message: "inline kind schema"}, // no file → dropped
+		},
+	}
+	got := toLSP(d, [][]byte{[]byte("a"), []byte("status: x")}, "/work")
+	require.NotNil(t, got.CodeDescription)
+	assert.Equal(t, "https://mdsmith.dev/rules/MDS020", got.CodeDescription.Href)
+	require.Len(t, got.RelatedInformation, 1, "the file-less label is dropped")
+	ri := got.RelatedInformation[0]
+	assert.Equal(t, "required by schema", ri.Message)
+	assert.Equal(t, 3, ri.Location.Range.Start.Line, "1-based line 4 → 0-based 3")
+	assert.Equal(t, 2, ri.Location.Range.Start.Character, "1-based col 3 → 0-based 2")
+	assert.True(t, strings.HasPrefix(ri.Location.URI, "file://"))
+	assert.Contains(t, ri.Location.URI, "proto.md")
+}
+
+// TestToLSP_NoRelatedNoCodeDescription confirms a plain diagnostic
+// gets neither field, so the wire form is unchanged for non-schema
+// rules.
+func TestToLSP_NoRelatedNoCodeDescription(t *testing.T) {
+	t.Parallel()
+	got := toLSP(lint.Diagnostic{Line: 1, Column: 1, RuleID: "MDS001"},
+		[][]byte{[]byte("x")}, "/w")
+	assert.Nil(t, got.RelatedInformation)
+	assert.Nil(t, got.CodeDescription)
 }
 
 // TestToLSPForwardsDeprecationData regresses plan 136: the
@@ -1001,7 +1039,7 @@ func TestToLSPForwardsDeprecationData(t *testing.T) {
 		Deprecated: true,
 		ReplacedBy: "owner",
 		Message:    "legacy_owner: deprecated field",
-	}, [][]byte{[]byte("---")})
+	}, [][]byte{[]byte("---")}, "")
 	require.NotNil(t, got.Data)
 	assert.True(t, got.Data.Deprecated)
 	assert.Equal(t, "owner", got.Data.ReplacedBy)
@@ -1015,6 +1053,7 @@ func TestToLSPEmptyLineProducesZeroWidthRange(t *testing.T) {
 	got := toLSP(
 		lint.Diagnostic{Line: 2, Column: 1, RuleID: "MDS001", Severity: lint.Error},
 		[][]byte{[]byte("first"), []byte("")},
+		"",
 	)
 	assert.Equal(t, 1, got.Range.Start.Line)
 	assert.Equal(t, 0, got.Range.Start.Character)
@@ -2166,6 +2205,7 @@ func TestToLSPMultiByteRuneBeforeColumn(t *testing.T) {
 	got := toLSP(
 		lint.Diagnostic{Line: 1, Column: 3, RuleID: "MDS001", Severity: lint.Error},
 		[][]byte{line},
+		"",
 	)
 	assert.Equal(t, 1, got.Range.Start.Character,
 		"Column 3 (byte offset 2 = after é) should map to UTF-16 character 1")
@@ -2181,6 +2221,7 @@ func TestToLSPSurrogatePairBeforeColumn(t *testing.T) {
 	got := toLSP(
 		lint.Diagnostic{Line: 1, Column: 5, RuleID: "MDS001", Severity: lint.Error},
 		[][]byte{line},
+		"",
 	)
 	assert.Equal(t, 2, got.Range.Start.Character,
 		"after a non-BMP rune the start character should advance by 2 UTF-16 units")
