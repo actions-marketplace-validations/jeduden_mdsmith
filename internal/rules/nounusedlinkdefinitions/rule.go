@@ -10,6 +10,7 @@ import (
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
+	"github.com/jeduden/mdsmith/internal/setutil"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/util"
 )
@@ -22,7 +23,7 @@ func init() {
 type Rule struct {
 	// ignoredLabels is the CommonMark-normalized set of labels that are
 	// never flagged as unused or duplicate, regardless of whether they are consumed.
-	ignoredLabels map[string]bool
+	ignoredLabels map[string]struct{}
 }
 
 // ID implements rule.Rule.
@@ -39,7 +40,7 @@ func (r *Rule) EnabledByDefault() bool { return true }
 
 // ApplySettings implements rule.Configurable.
 func (r *Rule) ApplySettings(settings map[string]any) error {
-	r.ignoredLabels = map[string]bool{}
+	r.ignoredLabels = map[string]struct{}{}
 	for k, v := range settings {
 		switch k {
 		case "ignored-labels":
@@ -51,7 +52,7 @@ func (r *Rule) ApplySettings(settings map[string]any) error {
 				)
 			}
 			for _, s := range list {
-				r.ignoredLabels[normalizeLabel(s)] = true
+				r.ignoredLabels[normalizeLabel(s)] = struct{}{}
 			}
 		default:
 			return fmt.Errorf("no-unused-link-definitions: unknown setting %q", k)
@@ -106,7 +107,10 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 // allocation-free walk here — plan 195 task 6.
 func (r *Rule) checkSingleDef(f *lint.File, d referenceDefinition) []lint.Diagnostic {
 	norm := util.ToLinkReference(d.rawLabel)
-	if r.ignoredLabels[norm] || isLabelUsedInAST(f.AST, norm) {
+	if setutil.Contains(r.ignoredLabels, norm) {
+		return nil
+	}
+	if isLabelUsedInAST(f.AST, norm) {
 		return nil
 	}
 	return []lint.Diagnostic{{
@@ -128,13 +132,13 @@ func (r *Rule) checkMultiDefs(f *lint.File, defs []referenceDefinition) []lint.D
 	ignored := r.ignoredLabels
 	seen := make(map[string]int, len(defs))
 	var (
-		usedLabels     map[string]bool
+		usedLabels     map[string]struct{}
 		usedLabelsDone bool
 	)
 	var diags []lint.Diagnostic
 	for _, d := range defs {
 		norm := util.ToLinkReference(d.rawLabel)
-		if ignored[norm] {
+		if setutil.Contains(ignored, norm) {
 			continue
 		}
 		if firstLine, exists := seen[norm]; exists {
@@ -154,7 +158,7 @@ func (r *Rule) checkMultiDefs(f *lint.File, defs []referenceDefinition) []lint.D
 			usedLabels = collectUsedLabels(f)
 			usedLabelsDone = true
 		}
-		if !usedLabels[norm] {
+		if !setutil.Contains(usedLabels, norm) {
 			diags = append(diags, lint.Diagnostic{
 				File:     f.Path,
 				Line:     d.line,
@@ -211,16 +215,16 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	ignored := r.ignoredLabels
 	source := f.Source
 
-	seen := map[string]bool{}
+	seen := map[string]struct{}{}
 	var cuts []fixCut
 	for _, d := range defs {
 		norm := util.ToLinkReference(d.rawLabel)
-		if ignored[norm] {
+		if setutil.Contains(ignored, norm) {
 			continue
 		}
-		isDuplicate := seen[norm]
-		seen[norm] = true
-		if !isDuplicate && usedLabels[norm] {
+		alreadySeen := setutil.Contains(seen, norm)
+		seen[norm] = struct{}{}
+		if !alreadySeen && setutil.Contains(usedLabels, norm) {
 			continue
 		}
 		start := d.start
@@ -445,8 +449,8 @@ func isASCIIWhitespace(b byte) bool {
 // open-coded with a recursive helper (collectUsedLabelsInto) rather than
 // ast.Walk so the per-Check closure box that ast.Walk would otherwise
 // require does not heap-allocate — plan 195 task 6.
-func collectUsedLabels(f *lint.File) map[string]bool {
-	used := map[string]bool{}
+func collectUsedLabels(f *lint.File) map[string]struct{} {
+	used := map[string]struct{}{}
 	collectUsedLabelsInto(f.AST, used)
 	return used
 }
@@ -456,18 +460,18 @@ func collectUsedLabels(f *lint.File) map[string]bool {
 // A package-level recursion sidesteps the ast.Walk callback's
 // heap-allocated closure: the helper closes over nothing, so each
 // frame is plain stack work.
-func collectUsedLabelsInto(n ast.Node, used map[string]bool) {
+func collectUsedLabelsInto(n ast.Node, used map[string]struct{}) {
 	if n == nil {
 		return
 	}
 	switch v := n.(type) {
 	case *ast.Link:
 		if v.Reference != nil {
-			used[util.ToLinkReference(v.Reference.Value)] = true
+			used[util.ToLinkReference(v.Reference.Value)] = struct{}{}
 		}
 	case *ast.Image:
 		if v.Reference != nil {
-			used[util.ToLinkReference(v.Reference.Value)] = true
+			used[util.ToLinkReference(v.Reference.Value)] = struct{}{}
 		}
 	}
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {

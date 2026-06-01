@@ -169,15 +169,15 @@ func ExtractImages(f *lint.File) []Link {
 // set of produced anchors so a sequence like "Intro" / "Intro" /
 // "Intro-1" yields three distinct keys (`intro`, `intro-1`,
 // `intro-1-1`) rather than two distinct ones with a collision.
-// The set keys are the slugified anchor names; values are always true
-// so callers can use map-lookup.
-func CollectAnchors(f *lint.File) map[string]bool {
-	anchors := make(map[string]bool)
+// The set keys are the slugified anchor names; values are struct{}
+// so callers must use the comma-ok idiom: _, ok := anchors[key].
+func CollectAnchors(f *lint.File) map[string]struct{} {
+	anchors := make(map[string]struct{})
 	if f == nil || f.AST == nil {
 		return anchors
 	}
 	for _, item := range mdtext.CollectTOCItems(f.AST, f.Source) {
-		anchors[item.Anchor] = true
+		anchors[item.Anchor] = struct{}{}
 	}
 	return anchors
 }

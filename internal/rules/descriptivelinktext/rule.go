@@ -10,6 +10,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/jeduden/mdsmith/internal/rules/settings"
+	"github.com/jeduden/mdsmith/internal/setutil"
 	"github.com/yuin/goldmark/ast"
 )
 
@@ -38,7 +39,7 @@ func init() {
 type Rule struct {
 	Banned []string
 
-	bannedSetPtr atomic.Pointer[map[string]bool]
+	bannedSetPtr atomic.Pointer[map[string]struct{}]
 	bannedSetMu  sync.Mutex
 }
 
@@ -108,7 +109,7 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 	}
 
 	text := collectLinkText(link, f.Source)
-	if !r.cachedBannedSet()[normalizeText(text)] {
+	if !setutil.Contains(r.cachedBannedSet(), normalizeText(text)) {
 		return nil
 	}
 	line := linkLine(link, f)
@@ -138,15 +139,15 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 // per-File memo paid every Check (build the map + normalise
 // 4 strings) to "once per rule instance for the program's
 // lifetime, plus at most one redundant build on the race".
-func (r *Rule) cachedBannedSet() map[string]bool {
+func (r *Rule) cachedBannedSet() map[string]struct{} {
 	if p := r.bannedSetPtr.Load(); p != nil {
 		return *p
 	}
 	r.bannedSetMu.Lock()
 	defer r.bannedSetMu.Unlock()
-	m := make(map[string]bool, len(r.Banned))
+	m := make(map[string]struct{}, len(r.Banned))
 	for _, b := range r.Banned {
-		m[normalizeText(b)] = true
+		m[normalizeText(b)] = struct{}{}
 	}
 	r.bannedSetPtr.Store(&m)
 	return m
