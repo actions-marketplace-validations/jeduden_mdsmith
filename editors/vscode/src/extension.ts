@@ -18,6 +18,7 @@ import {
   buildServerOptions,
   collectFixAllEdits,
   forwardMdsmithConfigChange,
+  notifyConfigChangeToClient,
   startupErrorMessage
 } from "./wiring";
 import { findBinaryCandidates, resolveBinary } from "./binary";
@@ -85,9 +86,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) =>
       forwardMdsmithConfigChange(event, () => {
-        void client?.sendNotification(
-          DidChangeConfigurationNotification.type,
-          { settings: null }
+        notifyConfigChangeToClient(client, (c) =>
+          c.sendNotification(DidChangeConfigurationNotification.type, {
+            settings: null
+          })
         );
       })
     )

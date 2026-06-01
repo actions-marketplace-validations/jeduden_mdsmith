@@ -18,6 +18,7 @@ import {
   buildServerOptions,
   collectFixAllEdits,
   forwardMdsmithConfigChange,
+  notifyConfigChangeToClient,
   startupErrorMessage,
   type CodeActionLike,
   type FileSystemWatcherLike,
@@ -285,6 +286,66 @@ describe("forwardMdsmithConfigChange", () => {
       () => {}
     );
     expect(asked).toEqual(["mdsmith"]);
+  });
+});
+
+describe("notifyConfigChangeToClient", () => {
+  // RunningClientLike doubles for the bits of LanguageClient we touch.
+  function fakeClient(opts: {
+    running: boolean;
+    onSend?: () => Promise<void>;
+  }) {
+    let sends = 0;
+    return {
+      sends: () => sends,
+      client: {
+        isRunning: () => opts.running,
+        sendNotification: () => {
+          sends++;
+          return opts.onSend ? opts.onSend() : Promise.resolve();
+        }
+      }
+    };
+  }
+
+  test("sends when the client is running", () => {
+    const f = fakeClient({ running: true });
+    notifyConfigChangeToClient(f.client);
+    expect(f.sends()).toBe(1);
+  });
+
+  test("does not send when the client is undefined", () => {
+    // No client yet (config edit racing activation): must be a no-op,
+    // never a throw.
+    expect(() => notifyConfigChangeToClient(undefined)).not.toThrow();
+  });
+
+  test("does not send when the client is not running", () => {
+    // vscode-languageclient@9 rejects sendNotification with
+    // ConnectionInactive when the client is Stopping/Stopped/
+    // StartFailed; calling it would surface an unhandled rejection.
+    // The isRunning() guard must prevent the call entirely.
+    const f = fakeClient({ running: false });
+    notifyConfigChangeToClient(f.client);
+    expect(f.sends()).toBe(0);
+  });
+
+  test("swallows a rejected sendNotification without throwing", async () => {
+    // Even past the guard, the client can transition to not-running
+    // between the isRunning() check and the send, so sendNotification
+    // returns a rejected promise. notifyConfigChangeToClient must attach
+    // a .catch() so it never becomes an unhandledRejection. The
+    // rejection is produced inside onSend (when the send actually
+    // happens), matching how the real client rejects on call.
+    const f = fakeClient({
+      running: true,
+      onSend: () => Promise.reject(new Error("Client is not running"))
+    });
+    expect(() => notifyConfigChangeToClient(f.client)).not.toThrow();
+    // Let the microtask queue drain; if the .catch() inside were missing
+    // Bun would surface an unhandledRejection and fail the test here.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(f.sends()).toBe(1);
   });
 });
 
