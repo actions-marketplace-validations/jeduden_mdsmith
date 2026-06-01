@@ -16,8 +16,9 @@ depends-on: []
 ## Goal
 
 [internal/lint](../internal/lint/) violates
-SRP. The package comment answers nine or
-more distinct questions:
+SRP. The package has no doc comment, but
+its nine or more source files cover distinct
+concerns:
 
 - `File` / `Diagnostic` / `Range` value
   types — the core.
@@ -72,10 +73,15 @@ two.
    [internal/lint/file.go](../internal/lint/file.go)
    explaining the coupling. Document the
    decision here.
-5. Verify `internal/lint` now answers
+5. Add `internal/lint/doc.go` with the
+   package doc: "lint defines the File
+   and Diagnostic types that represent a
+   parsed Markdown file and its
+   diagnostics."
+6. Verify `internal/lint` now answers
    one question: "what is a parsed
    Markdown file and its diagnostics?"
-6. Run `go build ./...` and
+7. Run `go build ./...` and
    `go test ./...`.
 
 ## Acceptance Criteria
@@ -86,8 +92,9 @@ two.
   focused package doc.
 - [ ] `internal/piparser` exists with a
   focused package doc.
-- [ ] `internal/lint` package doc no
-  longer needs "and" to describe it.
+- [ ] `internal/lint/doc.go` exists with
+  a focused package doc that needs no
+  "and" to describe it.
 - [ ] `go build ./...` clean.
 - [ ] `go test ./...` passes.
 - [ ] `go tool golangci-lint run` clean.
