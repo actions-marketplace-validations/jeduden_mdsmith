@@ -64,11 +64,12 @@ row: "| {title} | `{command}` | {audience} |"
 | Flatpak         | `flatpak install ./mdsmith-x86_64.flatpak`                                                 | Sandboxed Linux x86_64 desktops via Flatpak       |
 <?/catalog?>
 
-The short `asdf plugin add mdsmith` and `mise use mdsmith@latest`
-forms — without an explicit URL — depend on registry submissions
-tracked in
+The short `asdf plugin add mdsmith` and bare
+`mise use mdsmith@latest` forms — with no explicit URL or
+backend prefix — depend on registry submissions tracked in
 [plan/145](../../plan/145_asdf-mise-registry-submissions.md). The
-explicit-URL asdf install, Homebrew, and `ubi:` mise all work today.
+explicit-URL asdf install, Homebrew, and mise's `github:`,
+`asdf:`, `go:`, and `ubi:` backends all work today.
 
 The binary ships for linux x86_64, linux aarch64, macOS
 x86_64, macOS arm64, and Windows amd64. Other targets
@@ -161,21 +162,43 @@ brew install mdsmith
 ## mise
 
 ```bash
-mise use -g ubi:jeduden/mdsmith@latest
+mise use -g github:jeduden/mdsmith
 mdsmith version
 ```
 
-mise's `ubi` backend reads our GitHub release assets directly, so
-this command works today without any registry submission. Once
-the registry PR for mdsmith merges into
-[`mise-plugins/registry`](https://github.com/mise-plugins/registry),
-the shorter form
+mise installs mdsmith through any of its tool backends —
+all of these resolve today, none need a registry submission.
+The `github` backend above reads our release assets directly
+and auto-selects the build for your OS and architecture; pin
+a version with `github:jeduden/mdsmith@0.13.2`.
+
+To reuse the same plugin the asdf install uses:
 
 ```bash
-mise use mdsmith@latest
+mise plugins install mdsmith https://github.com/jeduden/asdf-mdsmith.git
+mise use -g mdsmith@latest
 ```
 
-resolves on its own.
+To build from source with the Go backend (needs a Go
+toolchain):
+
+```bash
+mise use -g go:github.com/jeduden/mdsmith/cmd/mdsmith
+```
+
+The `ubi` backend still works too, though mise has deprecated
+it for new registry entries:
+
+```bash
+mise use -g ubi:jeduden/mdsmith@latest
+```
+
+Only the shortest form — `mise use mdsmith@latest`, with no
+backend prefix — needs an entry in mise's curated registry
+([`jdx/mise`](https://github.com/jdx/mise) `registry.toml`),
+tracked in
+[plan/145](../../plan/145_asdf-mise-registry-submissions.md).
+Until that merges, use a backend-prefixed form above.
 
 ## Flatpak
 
