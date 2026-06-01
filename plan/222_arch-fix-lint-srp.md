@@ -17,8 +17,8 @@ depends-on: []
 
 [internal/lint](../internal/lint/) violates
 SRP. The package has no doc comment, but
-its nine or more source files cover distinct
-concerns:
+its twelve non-test source files cover
+distinct concerns:
 
 - `File` / `Diagnostic` / `Range` value
   types — the core.
