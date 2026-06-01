@@ -484,12 +484,13 @@ func (i *Index) OutgoingEdges(file string) []Edge {
 // are read as-is and never fixed). Files in a dependency cycle, and
 // files with no constraint, keep their original relative order.
 //
-// paths are normalized with NormalizePath before matching, so callers
-// may pass workspace-relative paths in any equivalent spelling (a
-// leading "./", OS-specific separators) without silently missing a
-// constraint; the returned slice is in that same normalized form. The
-// input slice is not mutated. Fewer than two paths are returned
-// unchanged.
+// When two or more paths are given and the receiver is non-nil, they
+// are normalized with NormalizePath before matching, so callers may
+// pass workspace-relative paths in any equivalent spelling (a leading
+// "./", OS-specific separators) without silently missing a constraint,
+// and the returned slice is in that same normalized form. The input
+// slice is never mutated. A nil receiver or fewer than two paths is a
+// no-op: the input slice is returned unchanged (not re-normalized).
 func (i *Index) DependencyOrder(paths []string) []string {
 	if i == nil || len(paths) < 2 {
 		return paths
