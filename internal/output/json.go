@@ -27,12 +27,12 @@ type jsonDiagnostic struct {
 	// deprecation diagnostics stay unchanged on the wire.
 	Deprecated bool   `json:"deprecated,omitempty"`
 	ReplacedBy string `json:"replaced_by,omitempty"`
-	// RelatedLocations and DocURL mirror lint.Diagnostic's plan-221
-	// fields so CI scripts can read the schema-constraint location and
-	// the rule-doc URL without parsing the message. Both omitempty so
-	// diagnostics that carry neither stay unchanged on the wire.
+	// RelatedLocations mirrors lint.Diagnostic's plan-221 field so CI
+	// scripts can read the schema-constraint location without parsing
+	// the message. omitempty so diagnostics that carry none stay
+	// unchanged on the wire. The rule-doc URL is not emitted here — it
+	// is derivable from the `rule` field and is an editor (LSP) concern.
 	RelatedLocations []jsonRelatedLocation `json:"related_locations,omitempty"`
-	DocURL           string                `json:"doc_url,omitempty"`
 }
 
 type jsonRelatedLocation struct {
@@ -72,7 +72,6 @@ func (f *JSONFormatter) Format(w io.Writer, diagnostics []lint.Diagnostic) error
 			Deprecated:       d.Deprecated,
 			ReplacedBy:       d.ReplacedBy,
 			RelatedLocations: relatedToJSON(d.RelatedLocations),
-			DocURL:           d.DocURL,
 		})
 	}
 	enc := json.NewEncoder(w)

@@ -17,7 +17,6 @@ func relatedDiag() lint.Diagnostic {
 		RuleID: "MDS020", RuleName: "required-structure",
 		Severity: lint.Error,
 		Message:  `status: got "draft", expected one of "open"`,
-		DocURL:   "https://mdsmith.dev/rules/MDS020",
 		RelatedLocations: []lint.RelatedLocation{{
 			File: "plan/proto.md", Line: 4,
 			Message: `schema requires one of: "open", "in-progress"`,
@@ -82,14 +81,14 @@ func TestTextFormatter_NoRelatedNoTrailer(t *testing.T) {
 	assert.NotContains(t, buf.String(), "↳")
 }
 
-func TestJSONFormatter_RelatedAndDocURL(t *testing.T) {
+func TestJSONFormatter_RelatedLocations(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, (&JSONFormatter{}).Format(&buf, []lint.Diagnostic{relatedDiag()}))
 
 	var got []map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &got))
 	require.Len(t, got, 1)
-	assert.Equal(t, "https://mdsmith.dev/rules/MDS020", got[0]["doc_url"])
+	assert.NotContains(t, got[0], "doc_url", "doc URL is an LSP concern, not in JSON")
 	rls, ok := got[0]["related_locations"].([]any)
 	require.True(t, ok, "related_locations present")
 	require.Len(t, rls, 1)
@@ -102,12 +101,10 @@ func TestJSONFormatter_RelatedAndDocURL(t *testing.T) {
 func TestJSONFormatter_RelatedOmittedWhenAbsent(t *testing.T) {
 	d := relatedDiag()
 	d.RelatedLocations = nil
-	d.DocURL = ""
 	var buf bytes.Buffer
 	require.NoError(t, (&JSONFormatter{}).Format(&buf, []lint.Diagnostic{d}))
 	out := buf.String()
 	assert.False(t, strings.Contains(out, "related_locations"), "omitempty drops empty related list")
-	assert.False(t, strings.Contains(out, "doc_url"), "omitempty drops empty doc URL")
 }
 
 func TestTextFormatter_RelatedFileOnlyNoMessage(t *testing.T) {

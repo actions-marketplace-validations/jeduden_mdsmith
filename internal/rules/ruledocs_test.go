@@ -461,3 +461,29 @@ func TestDocURL_KnownAndUnknown(t *testing.T) {
 		"lookup is case-insensitive")
 	assert.Equal(t, "", DocURL("MDSZZZ"), "unknown ID yields no URL")
 }
+
+// TestDocURL_DirMatchesIDName guards the invariant rules.DocURL relies
+// on: each embedded rule directory is named exactly <ID>-<name> (the
+// website serves it at /rules/<lower(dir)>/). If a future rule's dir
+// diverges from its README id/name, DocURL would emit a 404 link in
+// the editor while the site publishes under the dir name — this test
+// catches that at build time.
+func TestDocURL_DirMatchesIDName(t *testing.T) {
+	entries, err := rulesFS.ReadDir(".")
+	require.NoError(t, err)
+	var dirs int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dirs++
+		data, err := rulesFS.ReadFile(e.Name() + "/README.md")
+		require.NoError(t, err, "rule dir %q has no README", e.Name())
+		info, err := parseFrontMatter(string(data))
+		require.NoError(t, err)
+		want := strings.ToLower(info.ID + "-" + info.Name)
+		assert.Equal(t, want, strings.ToLower(e.Name()),
+			"rule dir must equal lower(id-name) so DocURL resolves")
+	}
+	assert.Positive(t, dirs, "expected embedded rule directories")
+}

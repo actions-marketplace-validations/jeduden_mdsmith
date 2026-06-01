@@ -987,14 +987,14 @@ func TestToLSPClampsZeroLine(t *testing.T) {
 
 // TestToLSP_RelatedInformationAndCodeDescription pins plan 221's wire
 // mapping: a navigable related location becomes a relatedInformation
-// entry with a resolved file:// URI and 0-based coordinates, a doc URL
-// becomes codeDescription.href, and a file-less label is dropped.
+// entry with a resolved file:// URI and 0-based coordinates, the rule
+// code gets a derived codeDescription.href, and a file-less label is
+// dropped.
 func TestToLSP_RelatedInformationAndCodeDescription(t *testing.T) {
 	t.Parallel()
 	d := lint.Diagnostic{
 		Line: 2, Column: 1, RuleID: "MDS020", RuleName: "required-structure",
 		Severity: lint.Error, Message: `status: got "x"`,
-		DocURL: "https://mdsmith.dev/rules/MDS020",
 		RelatedLocations: []lint.RelatedLocation{
 			{File: "proto.md", Line: 4, Column: 3, Message: "required by schema"},
 			{Message: "inline kind schema"}, // no file → dropped
@@ -1002,7 +1002,8 @@ func TestToLSP_RelatedInformationAndCodeDescription(t *testing.T) {
 	}
 	got := toLSP(d, [][]byte{[]byte("a"), []byte("status: x")}, "/work")
 	require.NotNil(t, got.CodeDescription)
-	assert.Equal(t, "https://mdsmith.dev/rules/MDS020", got.CodeDescription.Href)
+	assert.Equal(t, "https://mdsmith.dev/rules/mds020-required-structure/",
+		got.CodeDescription.Href, "derived from the rule ID")
 	require.Len(t, got.RelatedInformation, 1, "the file-less label is dropped")
 	ri := got.RelatedInformation[0]
 	assert.Equal(t, "required by schema", ri.Message)
@@ -1023,8 +1024,7 @@ func TestToLSP_NoRelatedNoCodeDescription(t *testing.T) {
 }
 
 // TestToLSP_DerivesCodeDescriptionForKnownRule confirms a real rule ID
-// gets a codeDescription pointing at its website doc page, even without
-// an explicit DocURL override.
+// gets a codeDescription pointing at its website doc page.
 func TestToLSP_DerivesCodeDescriptionForKnownRule(t *testing.T) {
 	t.Parallel()
 	got := toLSP(lint.Diagnostic{Line: 1, Column: 1, RuleID: "MDS001"},
@@ -1050,6 +1050,25 @@ func TestToLSP_RelatedFileOnlyAnchorsAtLineZero(t *testing.T) {
 	require.Len(t, got.RelatedInformation, 1)
 	assert.Equal(t, 0, got.RelatedInformation[0].Location.Range.Start.Line)
 	assert.Equal(t, 0, got.RelatedInformation[0].Location.Range.Start.Character)
+}
+
+// TestToLSP_RelatedURIGuards covers relatedURI's safety branches: a
+// relative file with no workspace root, and a "../" path that escapes
+// the root, both drop the entry; an absolute path is kept.
+func TestToLSP_RelatedURIGuards(t *testing.T) {
+	t.Parallel()
+	mk := func(file, root string) []diagnosticRelatedInformation {
+		d := lint.Diagnostic{
+			Line: 1, Column: 1, RuleID: "MDS020",
+			RelatedLocations: []lint.RelatedLocation{{File: file, Line: 2, Message: "x"}},
+		}
+		return toLSP(d, [][]byte{[]byte("x")}, root).RelatedInformation
+	}
+	assert.Empty(t, mk("proto.md", ""), "relative file, no root → dropped")
+	assert.Empty(t, mk("../../etc/passwd", "/work/project"), "escaping root → dropped")
+	abs := mk("/abs/proto.md", "/work")
+	require.Len(t, abs, 1, "absolute path → kept")
+	assert.Contains(t, abs[0].Location.URI, "/abs/proto.md")
 }
 
 // TestToLSPForwardsDeprecationData regresses plan 136: the

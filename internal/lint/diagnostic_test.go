@@ -34,7 +34,6 @@ func TestDiagnosticRelatedLocations(t *testing.T) {
 		RuleName: "required-structure",
 		Severity: Error,
 		Message:  `status: got "draft", expected one of "open"`,
-		DocURL:   "https://mdsmith.dev/rules/MDS020",
 		RelatedLocations: []RelatedLocation{{
 			File:    "plan/proto.md",
 			Line:    4,
@@ -43,7 +42,6 @@ func TestDiagnosticRelatedLocations(t *testing.T) {
 		}},
 	}
 
-	assert.Equal(t, "https://mdsmith.dev/rules/MDS020", d.DocURL)
 	if assert.Len(t, d.RelatedLocations, 1) {
 		rl := d.RelatedLocations[0]
 		assert.Equal(t, "plan/proto.md", rl.File)
@@ -54,11 +52,10 @@ func TestDiagnosticRelatedLocations(t *testing.T) {
 }
 
 func TestDiagnosticZeroValueHasNoRelatedLocations(t *testing.T) {
-	// A diagnostic built without the new fields keeps the old shape:
-	// a nil related-locations slice and an empty doc URL.
+	// A diagnostic built without the new field keeps the old shape:
+	// a nil related-locations slice.
 	d := Diagnostic{File: "README.md", Line: 10, RuleID: "MDS001"}
 	assert.Nil(t, d.RelatedLocations)
-	assert.Empty(t, d.DocURL)
 }
 
 func TestSeverityConstants(t *testing.T) {

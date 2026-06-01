@@ -3,6 +3,7 @@ package lsp
 import (
 	"bytes"
 	"path/filepath"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -57,15 +58,10 @@ func toLSP(d lint.Diagnostic, lines [][]byte, root string) Diagnostic {
 	if ri := relatedInformation(d.RelatedLocations, root); len(ri) > 0 {
 		out.RelatedInformation = ri
 	}
-	// codeDescription gives the rule code a clickable docs link. A
-	// diagnostic may carry an explicit DocURL override; otherwise the
-	// canonical rule-doc URL is derived from the rule ID. Unknown IDs
-	// (rules.DocURL returns "") leave codeDescription unset.
-	href := d.DocURL
-	if href == "" {
-		href = rules.DocURL(d.RuleID)
-	}
-	if href != "" {
+	// codeDescription gives the rule code a clickable docs link,
+	// derived from the rule ID. Unknown IDs (rules.DocURL returns "")
+	// leave it unset.
+	if href := rules.DocURL(d.RuleID); href != "" {
 		out.CodeDescription = &codeDescription{Href: href}
 	}
 	return out
@@ -82,23 +78,46 @@ func toLSP(d lint.Diagnostic, lines [][]byte, root string) Diagnostic {
 func relatedInformation(locs []lint.RelatedLocation, root string) []diagnosticRelatedInformation {
 	var out []diagnosticRelatedInformation
 	for _, loc := range locs {
-		if loc.File == "" {
+		uri, ok := relatedURI(loc.File, root)
+		if !ok {
 			continue
-		}
-		path := loc.File
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(root, path)
 		}
 		pos := Position{
 			Line:      clampZero(loc.Line - 1),
 			Character: clampZero(loc.Column - 1),
 		}
 		out = append(out, diagnosticRelatedInformation{
-			Location: Location{URI: pathToURI(path), Range: Range{Start: pos, End: pos}},
+			Location: Location{URI: uri, Range: Range{Start: pos, End: pos}},
 			Message:  loc.Message,
 		})
 	}
 	return out
+}
+
+// relatedURI resolves a related-location file to a file:// URI, or
+// reports ok=false when no safe, navigable URI exists. A label-only
+// location (empty File) is dropped. An absolute path is used as-is. A
+// relative path needs a workspace root to become absolute, and must
+// stay within it — a "../" escape is dropped rather than pointing the
+// editor outside the workspace. Because every path reaching pathToURI
+// is absolute, the URI is always non-empty, so no empty-URI ever
+// reaches the wire.
+func relatedURI(file, root string) (string, bool) {
+	if file == "" {
+		return "", false
+	}
+	if filepath.IsAbs(file) {
+		return pathToURI(file), true
+	}
+	if root == "" {
+		return "", false
+	}
+	path := filepath.Join(root, file)
+	if rel, _ := filepath.Rel(root, path); rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return pathToURI(path), true
 }
 
 // clampZero returns n, or 0 when n is negative. Used to flip 1-based

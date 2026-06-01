@@ -54,12 +54,11 @@ type Diagnostic struct {
 	// file, or .mdsmith.yml). The CLI prints these as trailer lines;
 	// the LSP maps them onto DiagnosticRelatedInformation. Nil on
 	// diagnostics that carry no secondary location.
+	//
+	// The rule-documentation link surfaced as the LSP codeDescription
+	// is not stored here: it is fully derived from RuleID at the LSP
+	// surface (see rules.DocURL), so there is no per-diagnostic field.
 	RelatedLocations []RelatedLocation
-
-	// DocURL, when non-empty, is the canonical documentation URL for the
-	// rule that fired. The LSP maps it onto Diagnostic.codeDescription
-	// so the rule code renders as a clickable link; the CLI ignores it.
-	DocURL string
 }
 
 // RelatedLocation is a secondary source location attached to a
