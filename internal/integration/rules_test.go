@@ -155,6 +155,15 @@ func parseFixtureFrontMatter(
 				"diagnostic %d sets both message: and message-prefix:; choose one",
 				i)
 		}
+		// Same mutual-exclusion guard on each related-location entry:
+		// assertRelated picks the prefix silently, so fail loudly here.
+		for j, r := range d.Related {
+			if r.Message != "" && r.MessagePrefix != "" {
+				t.Fatalf(
+					"diagnostic %d related %d sets both message: and message-prefix:; choose one",
+					i, j)
+			}
+		}
 	}
 
 	return fm.Settings, fm.Diagnostics, content

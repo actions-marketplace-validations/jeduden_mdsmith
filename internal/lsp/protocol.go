@@ -196,16 +196,12 @@ type Diagnostic struct {
 	CodeDescription *codeDescription `json:"codeDescription,omitempty"`
 }
 
-// Location is an LSP source location: a document URI plus a range.
-type Location struct {
-	URI   string `json:"uri"`
-	Range Range  `json:"range"`
-}
-
 // diagnosticRelatedInformation is one entry of Diagnostic.relatedInformation
 // (LSP §3.18.6): a location and a human message describing the relation.
+// It reuses the package's existing unexported `location` type (see
+// symbol_types.go).
 type diagnosticRelatedInformation struct {
-	Location Location `json:"location"`
+	Location location `json:"location"`
 	Message  string   `json:"message"`
 }
 

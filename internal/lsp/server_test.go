@@ -3756,7 +3756,7 @@ func TestRuleHoverContent_IssueFirst(t *testing.T) {
 		Data:            &diagnosticData{RuleName: "required-structure"},
 		CodeDescription: &codeDescription{Href: "https://mdsmith.dev/rules/MDS020"},
 		RelatedInformation: []diagnosticRelatedInformation{{
-			Location: Location{
+			Location: location{
 				URI:   "file:///w/plan/proto.md",
 				Range: Range{Start: Position{Line: 3}},
 			},

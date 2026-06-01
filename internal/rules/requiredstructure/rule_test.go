@@ -2237,6 +2237,24 @@ status: '"open" | "done"'
 	assert.True(t, found, "a related location points at schema line 3")
 }
 
+// TestCheck_EveryMDS020DiagnosticCarriesRelatedLocation pins plan 221's
+// invariant: every MDS020 diagnostic surfaces the schema reference as a
+// related location. One document here triggers several distinct emit
+// paths (unexpected section + two missing sections); reverting any of
+// them to the old message-trailer form would drop the navigation and
+// fail this test.
+func TestCheck_EveryMDS020DiagnosticCarriesRelatedLocation(t *testing.T) {
+	schemaPath := writeSchema(t, "---\n---\n# ?\n\n## Goal\n\n## Tasks\n")
+	r := &Rule{Schema: schemaPath}
+	f := newTestFile(t, "doc.md", "# Title\n\n## Random\n\nbody\n")
+	diags := r.Check(f)
+	require.GreaterOrEqual(t, len(diags), 2, "expected several violations")
+	for i, d := range diags {
+		assert.Len(t, d.RelatedLocations, 1,
+			"diagnostic %d %q must carry a related location", i, d.Message)
+	}
+}
+
 // TestCheck_FrontMatter_DiagnosticLineAtKey regresses the
 // Copilot review comment: a FM violation should anchor its
 // diagnostic at the offending key's line, not at the start of

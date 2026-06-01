@@ -87,7 +87,7 @@ func relatedInformation(locs []lint.RelatedLocation, root string) []diagnosticRe
 			Character: clampZero(loc.Column - 1),
 		}
 		out = append(out, diagnosticRelatedInformation{
-			Location: Location{URI: uri, Range: Range{Start: pos, End: pos}},
+			Location: location{URI: uri, Range: Range{Start: pos, End: pos}},
 			Message:  loc.Message,
 		})
 	}
