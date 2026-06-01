@@ -255,17 +255,18 @@ export function notifyConfigChangeToClient<T extends RunningClientLike>(
 // Run modes for `mdsmith.run`. Mirror the enum declared in
 // package.json and the runMode constants in the Go server
 // (internal/lsp/server.go): onType lints live as you type, onSave
-// lints only on save, and off disables mdsmith entirely.
+// lints only on save, and off stops automatic linting (no
+// diagnostics; explicit code actions still work when invoked).
 export const RUN_ON_TYPE = "onType";
 export const RUN_ON_SAVE = "onSave";
 export const RUN_OFF = "off";
 
 // shouldFixOnSave decides whether the willSave handler runs the
 // whole-file fix. `mdsmith.fixOnSave` is subordinate to `mdsmith.run`:
-// when run is "off" mdsmith is inert, so a save must not rewrite the
-// buffer even if fixOnSave was left on — matching the server, which
-// publishes no diagnostics in off mode. onType and onSave both allow
-// fix-on-save when fixOnSave is enabled.
+// when run is "off" automatic linting is disabled, so a save must not
+// rewrite the buffer even if fixOnSave was left on — matching the
+// server, which publishes no diagnostics in off mode. onType and
+// onSave both allow fix-on-save when fixOnSave is enabled.
 export function shouldFixOnSave(run: string, fixOnSave: boolean): boolean {
   return fixOnSave && run !== RUN_OFF;
 }

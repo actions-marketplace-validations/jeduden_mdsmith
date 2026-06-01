@@ -958,15 +958,20 @@ func (s *Server) clearOpenDiagnostics() {
 		if hadPending && pending.timer != nil {
 			pending.timer.Stop()
 		}
-		s.diagsMu.Lock()
-		delete(s.diags, uri)
-		s.diagsMu.Unlock()
 		version := 0
 		if doc, ok := s.docs.get(uri); ok {
 			version = doc.version
 		}
+		// Delete and publish the empty set under diagsMu so this clear
+		// serializes with runLint's mode-checked publish (which holds
+		// the same lock across its check and write). Once mdsmith.run is
+		// off, an in-flight lint either skips publishing or is ordered
+		// before this clear — so the empty set is always the last word.
+		s.diagsMu.Lock()
+		delete(s.diags, uri)
 		_ = s.t.writeNotification("textDocument/publishDiagnostics",
 			publishDiagnosticsParams{URI: uri, Version: version, Diagnostics: []Diagnostic{}})
+		s.diagsMu.Unlock()
 	}
 }
 
@@ -1041,16 +1046,6 @@ func (s *Server) runLint(uri string) {
 	if _, ok := s.docs.get(uri); !ok {
 		return
 	}
-	// run mode can flip to off while the CPU-bound RunSource above was
-	// in flight (the user toggled mdsmith.run mid-lint).
-	// fetchClientSettings already cleared the squiggles for that switch
-	// via clearOpenDiagnostics; re-check here so this in-flight pass
-	// does not re-publish them and undo the master switch. Normal
-	// scheduling never reaches runLint in off mode — scheduleLint
-	// returns early — so this only guards the race.
-	if s.runMode() == runOff {
-		return
-	}
 	// Mirror `mdsmith check`: surface lint pipeline errors (parse
 	// failures, oversized buffers, config-target rule errors) to
 	// the editor instead of silently dropping them. Otherwise the
@@ -1070,11 +1065,22 @@ func (s *Server) runLint(uri string) {
 	docDiags, otherDiags := partitionDocDiagnostics(res.Diagnostics, relPath)
 	s.surfaceForeignDiagnostics(uri, otherDiags)
 	lspDiags := toLSPAll(docDiags, doc.text)
-	// Cache before publishing so hover requests that arrive after the
-	// client observes the notification always find current diagnostics.
+	// Cache and publish under diagsMu, re-checking the run mode inside
+	// the lock. mdsmith.run can flip to off while the CPU-bound
+	// RunSource above is in flight; clearOpenDiagnostics deletes and
+	// publishes the empty set under the same lock when that happens.
+	// Holding diagsMu across the check, the cache, and the wire write
+	// serializes the two: an in-flight lint either sees off and
+	// publishes nothing, or publishes under the lock before the clear —
+	// whose empty publish is then ordered last — so off stays a true
+	// master switch with no stale squiggles. Caching before the write
+	// also keeps hover consistent with what the client just received.
 	s.diagsMu.Lock()
+	defer s.diagsMu.Unlock()
+	if s.runMode() == runOff {
+		return
+	}
 	s.diags[uri] = lspDiags
-	s.diagsMu.Unlock()
 	_ = s.t.writeNotification("textDocument/publishDiagnostics",
 		publishDiagnosticsParams{URI: uri, Version: doc.version, Diagnostics: lspDiags})
 }
