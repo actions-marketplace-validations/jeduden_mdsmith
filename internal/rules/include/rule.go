@@ -1,6 +1,7 @@
 package include
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"path"
@@ -14,6 +15,9 @@ import (
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/yuin/goldmark/ast"
 )
+
+// sourceDirKey is hoisted to avoid allocating a new slice on each inner-loop iteration.
+var sourceDirKey = []byte("source-dir:")
 
 func init() {
 	rule.Register(&Rule{})
@@ -482,7 +486,7 @@ func injectSourceDir(text, sourceDir string) string {
 		already := false
 		for i := 1; i < pi.Lines().Len(); i++ {
 			seg := pi.Lines().At(i)
-			if strings.Contains(string(seg.Value([]byte(text))), "source-dir:") {
+			if bytes.Contains(seg.Value(parsed.Source), sourceDirKey) {
 				already = true
 				break
 			}

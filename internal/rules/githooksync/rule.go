@@ -5,6 +5,7 @@
 package githooksync
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
 )
+
+// preMergeMarkerBytes is the package-level byte slice of PreMergeCommitMarker,
+// hoisted to avoid re-converting the marker constant to []byte on every call.
+var preMergeMarkerBytes = []byte(githooks.PreMergeCommitMarker)
 
 func init() {
 	rule.Register(&Rule{})
@@ -173,7 +178,7 @@ func peekHookSource(repoRoot string) hookSource {
 		}
 		return hookSourceUnreadable
 	}
-	if strings.Contains(string(data), githooks.PreMergeCommitMarker) {
+	if bytes.Contains(data, preMergeMarkerBytes) {
 		return hookSourceManaged
 	}
 	return hookSourceUnmanaged
@@ -291,10 +296,12 @@ func (r *Rule) preMergeCommitHookDrift(repoRoot string) string {
 			hookPath, err,
 		)
 	}
-	hook := string(data)
-	if !strings.Contains(hook, githooks.PreMergeCommitMarker) {
+	// Cheap bytes check before the string conversion; avoids allocating the
+	// full hook file content as a string for unmanaged hooks.
+	if !bytes.Contains(data, preMergeMarkerBytes) {
 		return ""
 	}
+	hook := string(data)
 	// The canonical hook content depends on the absolute path of the
 	// mdsmith binary that originally installed it. Comparing only the
 	// portions that are independent of that path (the marker plus the

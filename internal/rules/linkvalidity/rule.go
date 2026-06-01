@@ -244,6 +244,11 @@ func (r *Rule) Fix(f *lint.File) []byte {
 // boundary guards read orig at the same offsets — the mask preserves
 // length and position.
 func reversedInLine(orig, masked []byte) []revMatch {
+	// Reversed links always start with '('; skip regex on lines without it.
+	// bytes.IndexByte takes a bare byte — zero allocation vs []byte{'('}.
+	if bytes.IndexByte(masked, '(') < 0 {
+		return nil
+	}
 	idx := reversedRe.FindAllSubmatchIndex(masked, -1)
 	if idx == nil {
 		return nil
