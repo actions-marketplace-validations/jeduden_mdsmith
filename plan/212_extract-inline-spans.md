@@ -118,7 +118,7 @@ the release side. Just a typed walk over data.
    the headline helper is deleted. `syncdocs.go` keeps its own
    `pkg/markdown` use. That use is Hugo doc reconciliation, not
    headline parsing, and is out of scope here.
-6. **Documentation.** Add an "Inline-span projection"
+6. [x] **Documentation.** Add an "Inline-span projection"
    subsection to the
    [extract reference](../docs/reference/cli/extract.md)
    showing the mapping table and a nesting example, and a
@@ -144,7 +144,7 @@ the release side. Just a typed walk over data.
   Hugo doc reconciliation is out of scope.)
 - [x] `mdsmith extract` rejects an unsupported inline node
   (raw HTML, image, custom) when the schema asks for `inline`.
-- [ ] The mapping table is documented in the extract
+- [x] The mapping table is documented in the extract
   reference; the worked example in the guide shows both
   schema and JSON output (including one nested case).
 - [ ] `mdsmith check .` clean; `mdsmith-release sync-messaging

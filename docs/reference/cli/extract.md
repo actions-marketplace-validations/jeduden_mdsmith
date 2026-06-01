@@ -56,12 +56,76 @@ Content entries project under default keys:
 - `list` → `items`.
 - `table` with columns → `rows` (row objects keyed by
   column header).
-- `paragraph` → `text`.
+- `paragraph` → `text` (plain text), or `inline` when
+  the entry sets `projection: inline` (see below).
 
 Two sibling projections that resolve to the same key
 are a schema error. It is reported at extract time.
 Optional sections that did not match are omitted, not
 emitted as null.
+
+## Inline-span projection
+
+A paragraph entry projects its plain text by default.
+Set `projection: inline` on the entry to project the
+paragraph's inline structure instead. The result is a
+typed, recursive list of spans under the `inline` key:
+
+```yaml
+sections:
+  - heading: { regex: '^Headline$' }
+    content:
+      - { kind: paragraph, projection: inline, required: true }
+```
+
+Each AST node maps to one span object:
+
+| AST node           | Emitted span                                  |
+| ------------------ | --------------------------------------------- |
+| text               | `{span: text, value}`                         |
+| code span          | `{span: code, value}`                         |
+| autolink (`<url>`) | `{span: autolink, value, url}`                |
+| emphasis (`*…*`)   | `{span: emphasis, level: 1, children: [...]}` |
+| strong (`**…**`)   | `{span: strong, level: 2, children: [...]}`   |
+| link (`[t](url)`)  | `{span: link, url, title?, children: [...]}`  |
+
+Leaf spans (text, code, autolink) carry a `value`;
+container spans (emphasis, strong, link) carry a
+`children` list and recurse through the same mapping,
+so nesting composes uniformly. A link omits `title`
+when the Markdown link has none.
+
+For the headline `Mark*down*, smithed.`:
+
+```json
+"headline": {
+  "inline": [
+    { "span": "text", "value": "Mark" },
+    { "span": "emphasis", "level": 1, "children": [
+      { "span": "text", "value": "down" }
+    ]},
+    { "span": "text", "value": ", smithed." }
+  ]
+}
+```
+
+A nested example — a strong span wrapping a code span,
+`**`mdsmith fix`**` — projects with no mode switch:
+
+```json
+{ "span": "strong", "level": 2, "children": [
+    { "span": "code", "value": "mdsmith fix" }
+] }
+```
+
+`projection: inline` is rejected at schema-load time on
+any non-paragraph kind. Anything outside the mapping
+table — an image, inline raw HTML, or a custom inline
+node — is a hard error at extract time, with the same
+exit code as a non-conformant file. The `text` and
+`inline` default keys differ, so one paragraph entry
+can project `text` and another `inline` without
+colliding; a `bind:` override renames either key.
 
 ## Custom binding with `bind`
 
