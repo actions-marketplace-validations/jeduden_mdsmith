@@ -53,10 +53,10 @@ func (f *TextFormatter) Format(w io.Writer, diagnostics []lint.Diagnostic) error
 		var err error
 		if f.Color {
 			_, err = fmt.Fprintf(w, "\033[36m%s:%d:%d\033[0m \033[33m%s\033[0m %s\n",
-				safeFile, d.Line, d.Column, d.RuleID, safeMsg)
+				safeFile, d.DisplayLine(), d.Column, d.RuleID, safeMsg)
 		} else {
 			_, err = fmt.Fprintf(w, "%s:%d:%d %s %s\n",
-				safeFile, d.Line, d.Column, d.RuleID, safeMsg)
+				safeFile, d.DisplayLine(), d.Column, d.RuleID, safeMsg)
 		}
 		if err != nil {
 			return err

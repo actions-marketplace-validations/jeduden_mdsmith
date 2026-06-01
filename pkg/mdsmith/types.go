@@ -93,7 +93,7 @@ func toDiagnostics(in []lint.Diagnostic) []Diagnostic {
 	for _, d := range in {
 		out = append(out, Diagnostic{
 			File:             d.File,
-			Line:             d.Line,
+			Line:             d.DisplayLine(),
 			Column:           d.Column,
 			Rule:             d.RuleID,
 			RuleID:           d.RuleID,

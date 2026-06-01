@@ -61,6 +61,21 @@ type Diagnostic struct {
 	RelatedLocations []RelatedLocation
 }
 
+// DisplayLine returns Line clamped to at least 1 for user-facing output
+// (CLI text, JSON, and the public API). plan 221 may anchor a diagnostic
+// at a non-positive line internally so it survives generated-section
+// filtering when no safe positive anchor exists (a wholly generated
+// file); that sentinel must never surface as line 0 in 1-based output.
+// Column is not clamped: 0 is the established "column unknown" value
+// (the text formatter prints it and omits the caret), and
+// RelatedLocation lines keep their own 0 = "unknown" semantics too.
+func (d Diagnostic) DisplayLine() int {
+	if d.Line < 1 {
+		return 1
+	}
+	return d.Line
+}
+
 // RelatedLocation is a secondary source location attached to a
 // Diagnostic. It points the reader at the thing that explains the
 // finding — for a schema violation, the line of the schema constraint.

@@ -60,7 +60,7 @@ func (f *JSONFormatter) Format(w io.Writer, diagnostics []lint.Diagnostic) error
 	for _, d := range diagnostics {
 		items = append(items, jsonDiagnostic{
 			File:             d.File,
-			Line:             d.Line,
+			Line:             d.DisplayLine(),
 			Column:           d.Column,
 			Rule:             d.RuleID,
 			Name:             d.RuleName,

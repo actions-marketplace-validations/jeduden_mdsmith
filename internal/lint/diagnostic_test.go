@@ -71,3 +71,12 @@ func TestLineRange_Contains(t *testing.T) {
 	assert.False(t, r.Contains(4), "before range")
 	assert.False(t, r.Contains(9), "after range")
 }
+
+// TestDiagnostic_DisplayLineClamp covers DisplayLine: a non-positive
+// sentinel (plan 221's wholly-generated anchor) clamps to 1 for 1-based
+// output, while a real line passes through unchanged.
+func TestDiagnostic_DisplayLineClamp(t *testing.T) {
+	assert.Equal(t, 1, Diagnostic{Line: 0}.DisplayLine(), "zero clamps to 1")
+	assert.Equal(t, 1, Diagnostic{Line: -3}.DisplayLine(), "negative clamps to 1")
+	assert.Equal(t, 7, Diagnostic{Line: 7}.DisplayLine(), "real line passes through")
+}
