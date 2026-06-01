@@ -97,7 +97,7 @@ a wavy underline. Severity classes live in
 
 A hover tooltip is issue-first (plan 221): the
 message leads, then the schema constraint from
-`relatedLocations` (a navigable link when it has
+`related_locations` (a navigable link when it has
 a file/line, else plain text), then the rule code
 and a docs link. The "Fix" link runs the same flow
 as the palette command.

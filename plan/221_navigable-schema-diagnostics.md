@@ -208,7 +208,7 @@ the one new input to its signature.
 contract. Its tooltip adopts the issue-first layout
 and renders the schema location as a link, since
 CodeMirror has no native `relatedInformation`. The
-WASM payload carries `relatedLocations`
+WASM payload carries `related_locations`
 (`pkg/mdsmith.Diagnostic`); the rule-doc link is
 derived from the rule ID, not stored. This plan
 updates 217's text; the rendering stays there.
