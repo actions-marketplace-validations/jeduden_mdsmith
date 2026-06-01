@@ -127,7 +127,7 @@ func (s *Server) handleHover(msg *requestMessage) {
 
 // ruleHoverContent builds the hover body for a diagnostic, issue-first
 // (plan 221): the diagnostic message — what is wrong in this file —
-// leads as the primary block, followed by any navigable schema
+// leads as the primary block, followed by any navigable related
 // location, a separator, then a condensed rule-identity block (the
 // rule code, its one-line description, and a docs link). The full rule
 // README is no longer inlined, so the issue is not buried under
@@ -137,22 +137,29 @@ func ruleHoverContent(d Diagnostic) string {
 	b.WriteString(d.Message)
 	for _, ri := range d.RelatedInformation {
 		b.WriteString("\n\n")
-		b.WriteString(schemaHoverLink(ri))
+		b.WriteString(relatedHoverLink(ri))
 	}
 	b.WriteString("\n\n---\n\n")
 	b.WriteString(ruleIdentityBlock(d))
 	return b.String()
 }
 
-// schemaHoverLink renders a related location as a markdown link, e.g.
-// "Schema: [proto.md:5](file:///…/proto.md#L5)", so a reader can jump
-// to the constraint straight from the hover. This is the Obsidian
-// path; VS Code additionally surfaces the same location natively as
-// relatedInformation.
-func schemaHoverLink(ri diagnosticRelatedInformation) string {
+// relatedHoverLink renders a related location as a markdown link the
+// reader can jump to, e.g. "[proto.md:5](file:///…/proto.md#L5) —
+// required by schema". RelatedLocations is rule-agnostic, so the link
+// is rendered generically and the entry's own message (the reason the
+// location is related, "required by schema" for MDS020) trails it
+// rather than a hard-coded "Schema:" label. The em-dash form mirrors
+// the CLI trailer. This is the Obsidian path; VS Code additionally
+// surfaces the same location natively as relatedInformation.
+func relatedHoverLink(ri diagnosticRelatedInformation) string {
 	line := ri.Location.Range.Start.Line + 1
-	return fmt.Sprintf("Schema: [%s:%d](%s#L%d)",
+	link := fmt.Sprintf("[%s:%d](%s#L%d)",
 		path.Base(ri.Location.URI), line, ri.Location.URI, line)
+	if ri.Message != "" {
+		return link + " — " + ri.Message
+	}
+	return link
 }
 
 // ruleIdentityBlock renders the secondary block: the rule code, its

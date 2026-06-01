@@ -3770,8 +3770,9 @@ func TestRuleHoverContent_IssueFirst(t *testing.T) {
 	issue, ruleBlock := got[:sep], got[sep:]
 
 	assert.Contains(t, issue, `status: got "draft"`, "issue leads")
-	assert.Contains(t, issue, "Schema: [proto.md:4](file:///w/plan/proto.md#L4)",
-		"navigable schema link sits in the issue block")
+	assert.Contains(t, issue,
+		"[proto.md:4](file:///w/plan/proto.md#L4) — required by schema",
+		"navigable related link with its message sits in the issue block")
 	assert.Contains(t, ruleBlock, "`MDS020` · required-structure",
 		"rule identity is secondary")
 	assert.Contains(t, ruleBlock, "Document structure and front matter",
@@ -4024,4 +4025,24 @@ func TestRelatedURI_CrossPlatformAbsolute(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, uri, "/lin/root/plan/proto.md",
 		"a workspace-relative path still joins to root")
+}
+
+// TestRelatedHoverLink covers the rule-agnostic related-link renderer:
+// the entry's own message trails the link, and an entry with no message
+// renders the bare link.
+func TestRelatedHoverLink(t *testing.T) {
+	t.Parallel()
+	ri := diagnosticRelatedInformation{
+		Location: location{
+			URI:   "file:///w/proto.md",
+			Range: Range{Start: Position{Line: 4}},
+		},
+		Message: "required by schema",
+	}
+	assert.Equal(t,
+		"[proto.md:5](file:///w/proto.md#L5) — required by schema",
+		relatedHoverLink(ri))
+
+	ri.Message = ""
+	assert.Equal(t, "[proto.md:5](file:///w/proto.md#L5)", relatedHoverLink(ri))
 }
