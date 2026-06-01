@@ -4,9 +4,10 @@ title: Split internal/lint along question boundaries
 status: "🔲"
 summary: >-
   internal/lint answers too many questions.
-  Move gitignore, limits, PI, yamlsafe,
-  parsecache, and runcache into sibling
+  Move gitignore, limits, and PI into sibling
   packages each named for their question.
+  parsecache and runcache stay in lint due to
+  a circular-import constraint.
 model: ""
 depends-on: []
 ---
