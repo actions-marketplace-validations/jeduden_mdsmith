@@ -88,7 +88,6 @@ func TestJSONFormatter_RelatedLocations(t *testing.T) {
 	var got []map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &got))
 	require.Len(t, got, 1)
-	assert.NotContains(t, got[0], "doc_url", "doc URL is an LSP concern, not in JSON")
 	rls, ok := got[0]["related_locations"].([]any)
 	require.True(t, ok, "related_locations present")
 	require.Len(t, rls, 1)

@@ -7,18 +7,16 @@ depends-on: [147, 133]
 summary: >-
   Make MDS020 schema violations navigable and
   readable in editors. Add structured
-  `RelatedLocations` and a doc URL to
-  `lint.Diagnostic` so each diagnostic points at the
-  `proto.md` or kind-file line that declares the
-  violated constraint. Anchor missing-section,
-  filename, and schema-level diagnostics at the body
-  insertion point instead of file line 1. Redesign
+  `RelatedLocations` to `lint.Diagnostic` so each
+  diagnostic points at the `proto.md` or kind-file
+  line that declares the violated constraint. Redesign
   the LSP hover so the file's issue is the primary
   content and the rule docs sit below a separator as
   a one-line summary plus a link. Map
-  `RelatedLocations` to LSP `relatedInformation` and
-  the doc URL to `codeDescription`, and fix the same
-  contract for the Obsidian tooltip.
+  `RelatedLocations` to LSP `relatedInformation`, and
+  derive a `codeDescription` doc link from the rule
+  ID, and fix the same contract for the Obsidian
+  tooltip.
 ---
 # Navigable schema diagnostics in the editor
 
@@ -110,13 +108,15 @@ type RelatedLocation struct {
 
 // On Diagnostic:
 //   RelatedLocations []RelatedLocation
-//   DocURL           string // canonical rule-doc URL
 ```
 
 `RelatedLocations` is rule-agnostic. Any rule may
 attach them. `lint.Diagnostic` stays the single shared
 seam. The schema package is the first producer; the
-LSP and CLI consume.
+LSP and CLI consume. The rule-doc link (LSP
+`codeDescription`) is not a diagnostic field — it is
+derived from the rule ID via `rules.DocURL` at the LSP
+surface.
 
 The schema reference stops being baked into the
 message. `SchemaDiagnostic.Format()`
@@ -188,11 +188,11 @@ Design rules:
 one-line `Description` from the README front matter
 (MDS020: "Document structure and front matter must
 match its schema"). The hover uses `Description`, not
-`info.Content`. Two calls to settle in code: whether
-to keep the plan-147 remediation line, and the
-`DocURL` scheme. `codeDescription.href` must be an
-`http(s)` URL; a `command:` link is valid only for the
-doc link inside the hover markdown.
+`info.Content`. The doc link comes from
+`rules.DocURL(RuleID)` (rule-ID → website page), mapped
+to `codeDescription.href`, which must be an `http(s)`
+URL. One call to settle in code: whether to keep the
+plan-147 remediation line.
 
 ### LSP wire and Obsidian
 
@@ -229,8 +229,7 @@ declaration's line — still navigable.
 
 ## Tasks
 
-1. Add `RelatedLocation`, `RelatedLocations`, and
-   `DocURL` to
+1. Add `RelatedLocation` and `RelatedLocations` to
    [diagnostic.go](../internal/lint/diagnostic.go),
    with a test that zero values stay compatible.
 2. Drop the `schema:` trailer from
@@ -247,8 +246,9 @@ declaration's line — still navigable.
 4. (Follow-up) Re-anchor missing section / content
    off line 1. Deferred to keep the
    `filterGeneratedDiags` guarantee (see Design).
-5. Populate `DocURL` for MDS020 via a reusable
-   rule→URL lookup.
+5. Add `rules.DocURL` (a reusable rule-ID → doc-page
+   URL lookup) and derive `codeDescription` from it in
+   `toLSP`. No `DocURL` field on the diagnostic.
 6. CLI: print `RelatedLocations` as trailer lines in
    `check` / `fix`. Update surface tests.
 7. LSP: add `relatedInformation` and
@@ -274,8 +274,10 @@ declaration's line — still navigable.
 
 ## Acceptance Criteria
 
-- [x] `lint.Diagnostic` carries `RelatedLocations` and
-      `DocURL`; old diagnostics serialize unchanged.
+- [x] `lint.Diagnostic` carries `RelatedLocations`;
+      old diagnostics serialize unchanged. The rule-doc
+      link is derived from the rule ID at the LSP
+      surface, not stored on the diagnostic.
 - [x] An MDS020 FM violation has a `RelatedLocation`
       naming the schema file and line.
 - [ ] An inline-kind violation gets a real file/line

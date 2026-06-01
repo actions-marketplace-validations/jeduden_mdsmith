@@ -96,10 +96,11 @@ a wavy underline. Severity classes live in
 `styles.css`.
 
 A hover tooltip is issue-first (plan 221): the
-message leads, then a navigable link to the
-schema constraint (from `relatedLocations`),
-then the rule code and a docs link. The "Fix"
-link runs the same flow as the palette command.
+message leads, then the schema constraint from
+`relatedLocations` (a navigable link when it has
+a file/line, else plain text), then the rule code
+and a docs link. The "Fix" link runs the same flow
+as the palette command.
 
 A "mdsmith Diagnostics" [`ItemView`][iv]
 lists every workspace diagnostic in a sortable
@@ -265,7 +266,8 @@ artifact.
       file on desktop, 2 s on a modern
       iPad.
 - [ ] Hover tooltip is issue-first: message,
-      then a navigable schema-constraint link,
+      then the schema constraint (a navigable link
+      when it has a file/line, else plain text),
       then rule code and a docs link. The "Fix"
       link applies the quick-fix.
 - [ ] `mdsmith: Fix file` produces the
