@@ -1,7 +1,7 @@
 ---
 id: 212
 title: "`mdsmith extract` projects paragraph inline spans as data"
-status: "🔲"
+status: "🔳"
 summary: >-
   Add a content-entry projection mode that emits a paragraph's
   inline spans (text, emphasis, strong, code, link) as a
