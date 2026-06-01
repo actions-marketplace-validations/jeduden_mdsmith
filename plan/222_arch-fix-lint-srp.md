@@ -63,12 +63,15 @@ two.
    instructions from Markdown."
 4. Assess `parsecache.go` and
    `runcache.go`: `lint.File` embeds
-   `*RunCache` (file.go:136), so moving
-   `runcache.go` to `internal/runcache`
-   creates a circular import and is not
-   viable. Keep both in `lint` and add a
-   comment in file.go explaining the
-   coupling. Document the decision here.
+   `*RunCache`
+   ([internal/lint/file.go](../internal/lint/file.go):136),
+   so moving `runcache.go` to
+   `internal/runcache` creates a circular
+   import and is not viable. Keep both in
+   `lint` and add a comment in
+   [internal/lint/file.go](../internal/lint/file.go)
+   explaining the coupling. Document the
+   decision here.
 5. Verify `internal/lint` now answers
    one question: "what is a parsed
    Markdown file and its diagnostics?"
