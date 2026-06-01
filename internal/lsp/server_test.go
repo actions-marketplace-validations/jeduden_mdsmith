@@ -1066,6 +1066,7 @@ func TestToLSP_RelatedURIGuards(t *testing.T) {
 		return toLSP(d, [][]byte{[]byte("x")}, root).RelatedInformation
 	}
 	assert.Empty(t, mk("proto.md", ""), "relative file, no root → dropped")
+	assert.Empty(t, mk("/abs/proto.md", ""), "absolute file, no root → dropped")
 	assert.Empty(t, mk("../../etc/passwd", "/work/project"), "escaping root → dropped")
 	assert.Empty(t, mk("/etc/passwd", "/work/project"),
 		"absolute path outside root → dropped")
@@ -4007,25 +4008,16 @@ func TestInvalidateCachedRead_DropsEntry(t *testing.T) {
 	}
 }
 
-// TestRelatedURI_CrossPlatformAbsolute pins that relatedURI treats
-// Windows drive-letter and UNC paths as absolute even on a non-Windows
-// host (matching pathToURI). With no workspace root to bound it, such a
-// path is passed straight through rather than mis-joined.
-func TestRelatedURI_CrossPlatformAbsolute(t *testing.T) {
+// TestIsAbsPath covers the cross-platform absolute-path classification
+// relatedURI relies on: POSIX absolute, Windows drive-letter, and UNC
+// paths are absolute on any host (so they are bounded against the root,
+// not mis-joined to it); a relative path is not.
+func TestIsAbsPath(t *testing.T) {
 	t.Parallel()
-	uri, ok := relatedURI(`C:\work\proto.md`, "")
-	require.True(t, ok)
-	assert.Equal(t, "file:///C:/work/proto.md", uri)
-
-	uri, ok = relatedURI(`\\server\share\proto.md`, "")
-	require.True(t, ok)
-	assert.True(t, strings.HasPrefix(uri, "file://"))
-	assert.Contains(t, uri, "server")
-
-	uri, ok = relatedURI("plan/proto.md", "/lin/root")
-	require.True(t, ok)
-	assert.Contains(t, uri, "/lin/root/plan/proto.md",
-		"a workspace-relative path joins to root and stays inside it")
+	assert.True(t, isAbsPath("/abs/proto.md"), "posix absolute")
+	assert.True(t, isAbsPath(`C:\work\proto.md`), "windows drive-letter")
+	assert.True(t, isAbsPath(`\\server\share\proto.md`), "UNC")
+	assert.False(t, isAbsPath("plan/proto.md"), "relative")
 }
 
 // TestRelatedHoverLink covers the rule-agnostic related-link renderer:

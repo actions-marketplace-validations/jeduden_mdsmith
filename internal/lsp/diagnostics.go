@@ -95,27 +95,25 @@ func relatedInformation(locs []lint.RelatedLocation, root string) []diagnosticRe
 }
 
 // relatedURI resolves a related-location file to a file:// URI, or
-// reports ok=false when no safe, navigable URI exists. A label-only
-// location (empty File) is dropped. Both absolute and relative paths
-// must resolve inside the workspace root when one is known, so a config
-// that points a schema source at an arbitrary local file (e.g.
-// /etc/passwd from a malicious repo) is never turned into a navigable
-// editor link; a "../" escape is dropped for the same reason. With no
-// root there is nothing to bound an absolute path against, so it is
-// used as-is. Because every path reaching pathToURI is absolute, the
-// URI is always non-empty, so no empty-URI ever reaches the wire.
+// reports ok=false when no safe, navigable URI exists. A navigable URI
+// requires a bounded workspace root: without one (a rootless session)
+// no related location becomes a link, because nothing can vouch that a
+// path — absolute or relative — stays inside the project, and a config
+// could point a schema source at an arbitrary local file (e.g.
+// /etc/passwd from a malicious repo). With a root, both absolute and
+// relative paths must resolve inside it; a "../" escape or an absolute
+// path outside the root is dropped. Every path reaching pathToURI is
+// absolute, so the URI is always non-empty and no empty-URI reaches
+// the wire.
 func relatedURI(file, root string) (string, bool) {
-	if file == "" {
+	if file == "" || root == "" {
 		return "", false
 	}
 	if isAbsPath(file) {
-		if root != "" && !withinRoot(root, file) {
+		if !withinRoot(root, file) {
 			return "", false
 		}
 		return pathToURI(file), true
-	}
-	if root == "" {
-		return "", false
 	}
 	path := filepath.Join(root, filepath.FromSlash(file))
 	if !withinRoot(root, path) {
