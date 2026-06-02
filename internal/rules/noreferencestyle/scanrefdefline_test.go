@@ -8,8 +8,8 @@ import (
 
 // TestScanRefDefLine exercises the byte scanner's reject branches that the
 // rule-level fixtures don't reach: a missing/empty bracket, a missing colon,
-// over-indentation, an empty destination, and a non-ASCII-space destination
-// byte (e.g. a trailing carriage return).
+// over-indentation, an empty destination, and a whitespace destination
+// byte other than space or tab (e.g. a trailing carriage return).
 func TestScanRefDefLine(t *testing.T) {
 	tests := []struct {
 		name               string

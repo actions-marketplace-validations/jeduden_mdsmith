@@ -224,9 +224,9 @@ restated below to match this.
       catalogs as stale. This is an environment-level glob-resolution
       issue, not content this plan changed; PLAN.md is kept in its
       populated form with plan 188 marked ✅.
-- [x] All tests pass: `go test ./...`, except the pre-existing
+- [x] No new test failures: `go test ./...` passes. The
       `pkg/mdsmith` `TestInvalidateRewritesDependentFile` failure
-      present on the untouched branch base (catalog session API,
-      unrelated to this plan).
+      seen earlier was the same worktree-only catalog
+      glob-resolution artifact and passes on a normal checkout.
 - [x] `go tool golangci-lint run` reports no issues on the touched
       packages.
