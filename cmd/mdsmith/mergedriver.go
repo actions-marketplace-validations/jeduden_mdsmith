@@ -53,12 +53,12 @@ Subcommands:
         .gitattributes is missing, has no managed block, or has
         drifted it exits before registering the driver or
         installing the hook, so a drift error leaves the
-        repository untouched. Use it in CI
-        and the merge queue, where rewriting a tracked file mid-run
-        would dirty the worktree and abort the merge. Takes no glob
-        arguments; it always compares against the canonical default
-        include set, so it is incompatible with custom-glob installs
-        (same as MDS048).
+        repository untouched. Use it in CI and the merge queue,
+        where rewriting a tracked file mid-run would dirty the
+        worktree and abort the merge. Takes no glob arguments; it
+        always compares against the canonical default include set,
+        so it is incompatible with custom-glob installs (same as
+        MDS048).
 
 Git config (set by install / ci-install):
   merge.mdsmith.driver = '/absolute/path/to/mdsmith' merge-driver run %O %A %B %P

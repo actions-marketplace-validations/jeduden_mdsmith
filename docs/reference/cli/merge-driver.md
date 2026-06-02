@@ -72,7 +72,7 @@ Driver entrypoint, invoked by Git. Not normally called by
 hand. After `install`, Git will dispatch to it whenever
 merging a file marked `merge=mdsmith`.
 
-## Git config (set by `install`)
+## Git config (set by `install` / `ci-install`)
 
 ```text
 merge.mdsmith.driver = '/abs/path/to/mdsmith' merge-driver run %O %A %B %P
@@ -86,6 +86,7 @@ at install time, shell-quoted so paths with spaces work.
 ```bash
 mdsmith merge-driver install
 mdsmith merge-driver install 'docs/**/*.md'
+mdsmith merge-driver ci-install   # CI / merge queue: verify, don't write
 ```
 
 After `install`, a merge with conflicts inside a
