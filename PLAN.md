@@ -114,7 +114,7 @@ footer: |
 | 185 | ✅     |        | [Expose extended-syntax parsers and the flavor model in pkg/markdown](plan/185_public-markdown-flavor-library.md)                       |
 | 186 | ✅     |        | [Centralize UTF-16 column helpers in internal/mdtext](plan/186_arch-fix-utf16-centralize.md)                                            |
 | 187 | ✅     | opus   | [Neutral-corpus engine lever — shared AST walk and Punkt cost](plan/187_neutral-corpus-engine-lever.md)                                 |
-| 188 | 🔲     | opus   | [Regex-over-source rules — inventory and AST-resident replacements](plan/188_regex-vs-ast-inventory.md)                                 |
+| 188 | ✅     | opus   | [Regex-over-source rules — inventory and AST-resident replacements](plan/188_regex-vs-ast-inventory.md)                                 |
 | 189 | ✅     | opus   | [Finish the multiplex migration for pure per-node rules](plan/189_multiplex-finish.md)                                                  |
 | 190 | ✅     | opus   | [Intra-file rule parallelism for non-NodeChecker rules](plan/190_intra-file-rule-parallelism.md)                                        |
 | 191 | ✅     | opus   | [Hand-rolled DFA for Punkt's `reAbbr` to skip regex backtracking](plan/191_punkt-reabbr-dfa.md)                                         |
