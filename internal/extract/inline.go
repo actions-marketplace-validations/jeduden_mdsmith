@@ -144,7 +144,7 @@ func (p *projector) unsupportedInline(n ast.Node) {
 	p.emit(schema.SchemaDiagnostic{
 		Field:    "inline",
 		Actual:   what,
-		Expected: "one of: text, code, autolink, emphasis, strong, link",
+		Expected: "one of: text, break, code, autolink, emphasis, strong, link",
 		Hint: "the `projection: inline` mapping covers only those " +
 			"spans; remove the node or drop the inline projection",
 		SchemaRef: schema.FormatSchemaRef(p.sch, ""),
