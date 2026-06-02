@@ -17,9 +17,16 @@ func findRepoRoot(t *testing.T) string {
 	dir, err := os.Getwd()
 	require.NoError(t, err)
 	for {
-		if _, err := os.Stat(filepath.Join(dir, ".mdsmith.yml")); err == nil {
+		marker := filepath.Join(dir, ".mdsmith.yml")
+		_, statErr := os.Stat(marker)
+		if statErr == nil {
 			return dir
 		}
+		// Only "does not exist" means "keep climbing". Any other stat
+		// error (e.g. a permission problem on a parent directory) is a
+		// real failure and must surface with its own message instead of
+		// being masked by the eventual "reached the filesystem root".
+		require.True(t, os.IsNotExist(statErr), "stat %s: %v", marker, statErr)
 		parent := filepath.Dir(dir)
 		require.NotEqual(t, parent, dir,
 			"reached the filesystem root without finding .mdsmith.yml")
