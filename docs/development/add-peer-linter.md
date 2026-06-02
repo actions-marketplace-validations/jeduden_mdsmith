@@ -72,8 +72,9 @@ Add the `newtool` column to every peer-coverage block
 (all sections except the directive one), two edits
 each:
 
-- Append `newtool` to the `header:` row and its
-  `---` separator row.
+- Add `newtool` to the `header:` block: extend both
+  the column-names row and the alignment row of
+  dashes (`| --- |`) below it.
 - Append a peer cell to `row-expr:`. Copy an existing
   peer's cell and read the new key: `for m in
   newtool` when the key is a bare identifier, or the
