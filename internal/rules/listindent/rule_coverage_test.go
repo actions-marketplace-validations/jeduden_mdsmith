@@ -188,31 +188,6 @@ func TestIsInlineNode_Heading(t *testing.T) {
 	assert.False(t, isInlineNode(node))
 }
 
-// --- itoa coverage ---
-
-func TestItoa_Zero(t *testing.T) {
-	assert.Equal(t, "0", itoa(0))
-}
-
-func TestItoa_Positive(t *testing.T) {
-	assert.Equal(t, "42", itoa(42))
-}
-
-func TestItoa_SingleDigit(t *testing.T) {
-	assert.Equal(t, "7", itoa(7))
-}
-
-func TestItoa_Negative(t *testing.T) {
-	assert.Equal(t, "-5", itoa(-5))
-}
-
-func TestItoa_LargeNumber(t *testing.T) {
-	assert.Equal(t, "1234", itoa(1234))
-}
-
-func TestItoa_NegativeLarge(t *testing.T) {
-	assert.Equal(t, "-100", itoa(-100))
-}
 
 // --- Check with zero/negative Spaces defaults to 2 ---
 

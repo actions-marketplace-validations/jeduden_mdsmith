@@ -3,7 +3,7 @@ package listindent
 import (
 	"bytes"
 	"fmt"
-	"strings"
+	"strconv"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -70,7 +70,7 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 		RuleID:   r.ID(),
 		RuleName: r.Name(),
 		Severity: lint.Warning,
-		Message:  "list indent should be " + itoa(expectedIndent) + " spaces, found " + itoa(actualIndent),
+		Message:  "list indent should be " + strconv.Itoa(expectedIndent) + " spaces, found " + strconv.Itoa(actualIndent),
 	}}
 }
 
@@ -155,25 +155,6 @@ func countLeadingSpaces(line []byte) int {
 	return count
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	s := ""
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	for n > 0 {
-		s = string(rune('0'+n%10)) + s
-		n /= 10
-	}
-	if neg {
-		s = "-" + s
-	}
-	return s
-}
 
 // Fix implements rule.FixableRule.
 func (r *Rule) Fix(f *lint.File) []byte {
@@ -190,19 +171,24 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		return result
 	}
 
-	var resultLines []string
+	var out bytes.Buffer
+	out.Grow(len(f.Source))
 	for i, line := range f.Lines {
+		if i > 0 {
+			out.WriteByte('\n')
+		}
 		lineNum := i + 1
 		if expected, ok := adjMap[lineNum]; ok {
 			trimmed := bytes.TrimLeft(line, " ")
-			newLine := strings.Repeat(" ", expected) + string(trimmed)
-			resultLines = append(resultLines, newLine)
+			for j := 0; j < expected; j++ {
+				out.WriteByte(' ')
+			}
+			out.Write(trimmed)
 		} else {
-			resultLines = append(resultLines, string(line))
+			out.Write(line)
 		}
 	}
-
-	return []byte(strings.Join(resultLines, "\n"))
+	return out.Bytes()
 }
 
 // collectIndentAdjustments walks the AST and returns a map from 1-based line

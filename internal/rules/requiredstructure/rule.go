@@ -1325,10 +1325,10 @@ func collectBodySyncPoints(
 	content []byte, headings []docHeading,
 	syncPoints map[int][]syncPoint,
 ) {
-	lines := strings.Split(string(content), "\n")
+	lines := bytes.Split(content, []byte("\n"))
 	currentHeading := -1
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
+	for _, lineB := range lines {
+		trimmed := strings.TrimSpace(string(lineB))
 		if strings.HasPrefix(trimmed, "#") {
 			for j, h := range headings {
 				if headingMatchesLine(h, trimmed) {
