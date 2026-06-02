@@ -80,6 +80,8 @@ func TestDiagnostic_DisplayLineClamp(t *testing.T) {
 	assert.Equal(t, 1, Diagnostic{Line: 0}.DisplayLine(), "zero clamps to 1")
 	assert.Equal(t, 1, Diagnostic{Line: -3}.DisplayLine(), "negative clamps to 1")
 	assert.Equal(t, 7, Diagnostic{Line: 7}.DisplayLine(), "real line passes through")
+}
+
 func TestDedupeDiagnostics_nil(t *testing.T) {
 	assert.Nil(t, DedupeDiagnostics(nil))
 }
