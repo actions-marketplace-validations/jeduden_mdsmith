@@ -1819,6 +1819,10 @@ func walkRequiredHeadings(
 		if claimed[schIdx] {
 			continue
 		}
+		// Save the position before the scan so that a missing-section
+		// anchor uses the last correctly-placed heading, not the last
+		// heading consumed (which may be an out-of-order entry).
+		preScanIdx := docIdx
 		reqDiags, newIdx, found := matchRequired(
 			f, sch, docHeadings, docIdx, schIdx,
 			requiredByText, claimed, allowExtra, ref,
@@ -1830,7 +1834,7 @@ func walkRequiredHeadings(
 		}
 		if !found && !claimed[schIdx] {
 			diags = append(diags, missingSectionDiagLegacy(
-				f, req, ref, legacyPrecedingLine(docHeadings, docIdx)))
+				f, req, ref, legacyPrecedingLine(docHeadings, preScanIdx)))
 		}
 	}
 	return diags, docIdx, allowExtra
