@@ -3,7 +3,6 @@
 package toc
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,6 +80,7 @@ func (r *Rule) Generate(f *lint.File, filePath string, line int,
 	items := mdtext.CollectTOCItems(f.AST, f.Source)
 
 	var sb strings.Builder
+	sb.Grow(len(items) * 80)
 	// stack tracks heading levels of included ancestors for depth computation.
 	stack := make([]int, 0, 8)
 
@@ -95,10 +95,16 @@ func (r *Rule) Generate(f *lint.File, filePath string, line int,
 		depth := len(stack)
 		stack = append(stack, item.Level)
 
-		indent := strings.Repeat("  ", depth)
-		// Escape special characters in link text to avoid breaking Markdown syntax.
+		// Write indent without allocating a temporary string.
+		for i := 0; i < depth; i++ {
+			sb.WriteString("  ")
+		}
 		escapedText := escapeLinkText(item.Text)
-		sb.WriteString(fmt.Sprintf("%s- [%s](#%s)\n", indent, escapedText, item.Anchor))
+		sb.WriteString("- [")
+		sb.WriteString(escapedText)
+		sb.WriteString("](#")
+		sb.WriteString(item.Anchor)
+		sb.WriteString(")\n")
 	}
 
 	content := sb.String()

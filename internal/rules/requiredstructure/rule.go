@@ -1327,11 +1327,15 @@ func collectBodySyncPoints(
 	content []byte, headings []docHeading,
 	syncPoints map[int][]syncPoint,
 ) {
-	lines := strings.Split(string(content), "\n")
+	lines := bytes.Split(content, []byte("\n"))
 	currentHeading := -1
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") {
+	for _, lineB := range lines {
+		trimmedB := bytes.TrimSpace(lineB)
+		if len(trimmedB) == 0 {
+			continue
+		}
+		if trimmedB[0] == '#' {
+			trimmed := string(trimmedB)
 			for j, h := range headings {
 				if headingMatchesLine(h, trimmed) {
 					currentHeading = j
@@ -1340,7 +1344,8 @@ func collectBodySyncPoints(
 			}
 			continue
 		}
-		if currentHeading >= 0 && trimmed != "" {
+		if currentHeading >= 0 {
+			trimmed := string(trimmedB)
 			fields := fieldinterp.Fields(trimmed)
 			if len(fields) > 0 {
 				compiled := buildFieldPattern(trimmed)
@@ -1821,6 +1826,10 @@ func walkRequiredHeadings(
 		if claimed[schIdx] {
 			continue
 		}
+		// Save the position before the scan so that a missing-section
+		// anchor uses the last correctly-placed heading, not the last
+		// heading consumed (which may be an out-of-order entry).
+		preScanIdx := docIdx
 		reqDiags, newIdx, found := matchRequired(
 			f, sch, docHeadings, docIdx, schIdx,
 			requiredByText, claimed, allowExtra, ref,
@@ -1832,7 +1841,7 @@ func walkRequiredHeadings(
 		}
 		if !found && !claimed[schIdx] {
 			diags = append(diags, missingSectionDiagLegacy(
-				f, req, ref, legacyPrecedingLine(docHeadings, docIdx)))
+				f, req, ref, legacyPrecedingLine(docHeadings, preScanIdx)))
 		}
 	}
 	return diags, docIdx, allowExtra
