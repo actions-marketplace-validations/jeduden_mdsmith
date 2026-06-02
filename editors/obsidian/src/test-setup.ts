@@ -280,11 +280,18 @@ mock.module("@codemirror/state", () => ({
 
 mock.module("@codemirror/view", () => ({
   Decoration: {
-    mark: (spec: unknown) => ({ spec }),
-    none: { items: [] },
+    mark: (spec: unknown) => ({
+      spec,
+      range: (from: number, to: number) => ({ from, to, spec }),
+    }),
+    set: (ranges: unknown) => ({ ranges }),
+    none: { ranges: [] },
   },
   EditorView: {
-    decorations: { from: (_a: unknown, _b: unknown) => ({}) },
+    decorations: {
+      from: (_a: unknown, _b: unknown) => ({}),
+      compute: (_deps: unknown, _get: unknown) => ({ compute: true }),
+    },
   },
   hoverTooltip: (cb: unknown) => ({ cb }),
 }));
