@@ -33,6 +33,17 @@ import (
 // length], so endCol is always >= startCol — no end-before-start
 // guard is needed.
 func toLSP(d lint.Diagnostic, lines [][]byte, root string) Diagnostic {
+	return toLSPWithRoot(d, lines, root, resolveSymlinks(root))
+}
+
+// toLSPWithRoot is toLSP with the workspace root's symlink-resolved form
+// precomputed. toLSPAll resolves the (constant) root once per publish and
+// passes it here, so the EvalSymlinks syscall in withinRoot does not
+// repeat once per related location on the keystroke hot path — only each
+// target path is resolved per entry. root stays the configured root for
+// the join and emitted URI; resolvedRoot is used only for the
+// symlink-safe containment check.
+func toLSPWithRoot(d lint.Diagnostic, lines [][]byte, root, resolvedRoot string) Diagnostic {
 	startLine := d.Line - 1
 	if startLine < 0 {
 		startLine = 0
@@ -55,7 +66,7 @@ func toLSP(d lint.Diagnostic, lines [][]byte, root string) Diagnostic {
 			ReplacedBy: d.ReplacedBy,
 		},
 	}
-	if ri := relatedInformation(d.RelatedLocations, root); len(ri) > 0 {
+	if ri := relatedInformation(d.RelatedLocations, root, resolvedRoot); len(ri) > 0 {
 		out.RelatedInformation = ri
 	}
 	// codeDescription gives the rule code a clickable docs link,
@@ -75,10 +86,10 @@ func toLSP(d lint.Diagnostic, lines [][]byte, root string) Diagnostic {
 // still surfaces it as a trailer line. Coordinates flip 1-based →
 // 0-based and clamp at 0, so a file-only ref (Line 0) anchors at the
 // schema's first line.
-func relatedInformation(locs []lint.RelatedLocation, root string) []diagnosticRelatedInformation {
+func relatedInformation(locs []lint.RelatedLocation, root, resolvedRoot string) []diagnosticRelatedInformation {
 	var out []diagnosticRelatedInformation
 	for _, loc := range locs {
-		uri, ok := relatedURI(loc.File, root)
+		uri, ok := relatedURI(loc.File, root, resolvedRoot)
 		if !ok {
 			continue
 		}
@@ -105,31 +116,34 @@ func relatedInformation(locs []lint.RelatedLocation, root string) []diagnosticRe
 // path outside the root is dropped. Every path reaching pathToURI is
 // absolute, so the URI is always non-empty and no empty-URI reaches
 // the wire.
-func relatedURI(file, root string) (string, bool) {
+func relatedURI(file, root, resolvedRoot string) (string, bool) {
 	if file == "" || root == "" {
 		return "", false
 	}
 	if isAbsPath(file) {
-		if !withinRoot(root, file) {
+		if !withinRoot(resolvedRoot, file) {
 			return "", false
 		}
 		return pathToURI(file), true
 	}
 	path := filepath.Join(root, filepath.FromSlash(file))
-	if !withinRoot(root, path) {
+	if !withinRoot(resolvedRoot, path) {
 		return "", false
 	}
 	return pathToURI(path), true
 }
 
-// withinRoot reports whether path resolves inside root (root itself
-// counts). Both sides are absolutised and symlink-resolved first, so an
-// in-root symlink that points outside the workspace cannot bypass the
-// containment check — matching the symlink-safe guard the schema index
-// writer uses (internal/schema.resolveDir). A "../" escape, or a path
-// on a different volume that Rel cannot relate, is treated as outside.
-func withinRoot(root, path string) bool {
-	rel, err := filepath.Rel(resolveSymlinks(root), resolveSymlinks(path))
+// withinRoot reports whether path resolves inside resolvedRoot (the root
+// itself counts). resolvedRoot must already be absolute and symlink-
+// resolved (see resolveSymlinks); path is absolutised and symlink-
+// resolved here, so an in-root symlink that points outside the workspace
+// cannot bypass the containment check — matching the symlink-safe guard
+// the schema index writer uses (internal/schema.resolveDir). The caller
+// resolves the constant root once per publish rather than once per
+// related location. A "../" escape, or a path on a different volume that
+// Rel cannot relate, is treated as outside.
+func withinRoot(resolvedRoot, path string) bool {
+	rel, err := filepath.Rel(resolvedRoot, resolveSymlinks(path))
 	return err == nil && rel != ".." &&
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
@@ -176,8 +190,12 @@ func clampZero(n int) int {
 func toLSPAll(diags []lint.Diagnostic, source []byte, root string) []Diagnostic {
 	out := make([]Diagnostic, 0, len(diags))
 	lines := splitLines(source)
+	// The workspace root is constant across the publish, so resolve its
+	// symlinks once here instead of once per related location inside
+	// withinRoot (EvalSymlinks is a syscall on the keystroke hot path).
+	resolvedRoot := resolveSymlinks(root)
 	for _, d := range diags {
-		out = append(out, toLSP(d, lines, root))
+		out = append(out, toLSPWithRoot(d, lines, root, resolvedRoot))
 	}
 	return out
 }
