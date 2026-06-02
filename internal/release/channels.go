@@ -257,7 +257,11 @@ func channelsDataPath(root string) string {
 func WriteChannelsData(root string, chs []Channel) (bool, error) {
 	out := RenderChannelsYAML(chs)
 	path := channelsDataPath(root)
-	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, out) {
+	old, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("read %s: %w", ChannelsDataFile, err)
+	}
+	if bytes.Equal(old, out) {
 		return false, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

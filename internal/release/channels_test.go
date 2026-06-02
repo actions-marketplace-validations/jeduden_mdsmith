@@ -199,16 +199,6 @@ func TestWriteAndCheckChannelsData(t *testing.T) {
 	assert.True(t, drift)
 }
 
-func TestWriteChannelsData_MkdirError(t *testing.T) {
-	root := t.TempDir()
-	// Make website/data a FILE so MkdirAll(website/data) fails.
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "website"), 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(root, "website", "data"), []byte("x"), 0o644))
-	_, err := WriteChannelsData(root, fixtureChannels())
-	require.Error(t, err)
-}
-
 func TestCheckChannelsData_ReadError(t *testing.T) {
 	root := t.TempDir()
 	// Make the data file a DIRECTORY so ReadFile returns a
@@ -285,14 +275,16 @@ func TestRunExtract_ExitErrorCapturesStderr(t *testing.T) {
 	assert.Contains(t, err.Error(), "boom", "stderr is captured")
 }
 
-func TestWriteChannelsData_WriteFileError(t *testing.T) {
+func TestWriteChannelsData_ReadError(t *testing.T) {
 	root := t.TempDir()
-	// Make the data file itself a directory: MkdirAll(parent)
-	// succeeds, but WriteFile on the path fails.
+	// The data file is a directory, so ReadFile returns a
+	// non-NotExist error that WriteChannelsData must surface
+	// instead of masking it with a write.
 	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, filepath.FromSlash(ChannelsDataFile)), 0o755))
 	_, err := WriteChannelsData(root, fixtureChannels())
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read")
 }
 
 func TestMdsmithBinName(t *testing.T) {
