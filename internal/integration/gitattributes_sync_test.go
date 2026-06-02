@@ -64,6 +64,6 @@ func TestRepoGitattributesInSyncWithConfig(t *testing.T) {
 	assert.True(t, githooks.GlobsEqual(installed, expected),
 		"committed .gitattributes is out of sync with .mdsmith.yml — run "+
 			"`mdsmith merge-driver install` (or `mdsmith fix`) and commit the "+
-			"result.\n  committed exclude: %v\n  expected  exclude: %v",
-		installed.Exclude, expected.Exclude)
+			"result.\n  committed: include=%v exclude=%v\n  expected:  include=%v exclude=%v",
+		installed.Include, installed.Exclude, expected.Include, expected.Exclude)
 }
