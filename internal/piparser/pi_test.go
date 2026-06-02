@@ -12,8 +12,8 @@ import (
 	"github.com/jeduden/mdsmith/internal/piparser"
 )
 
-// newPIParser builds a goldmark block parser with only the PI block parser
-// registered, mirroring how internal/schema wires it in.
+// newPIParser builds a minimal goldmark parser with only the PI block
+// parser registered, so the test exercises BlockParserPrioritized directly.
 func newPIParser() parser.Parser {
 	return parser.NewParser(parser.WithBlockParsers(piparser.BlockParserPrioritized()))
 }

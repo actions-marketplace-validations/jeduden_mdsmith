@@ -26,7 +26,8 @@ question. The current production set:
   kinds, and overrides.
 - `internal/engine` — orchestrate rules over files; owns the run loop.
 - `internal/lint` — model a parsed Markdown file (source, AST, front
-  matter, diagnostics, caches, prose ranges) and run rule checks over it.
+  matter, diagnostics, caches, prose ranges) that rules and the engine
+  consume.
 - `internal/gitignore` — match a path against .gitignore patterns
   (per-directory and ancestor rules, stopping at the working-tree
   boundary). Split out of `internal/lint`.
