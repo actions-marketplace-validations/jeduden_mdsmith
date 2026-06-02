@@ -149,9 +149,11 @@ func checkParityRulesFragment(root string, render func() (string, error)) (strin
 
 // writePaddedTable writes a GFM table to buf with column widths
 // computed from the widest cell in each column (using Unicode
-// rune widths so multi-byte characters align correctly).
-// The separator row uses the pattern "| --- |" (one dash per
-// column, which renders as a standard header separator).
+// rune widths so multi-byte characters align correctly), floored
+// at three. Each separator cell is a run of dashes as wide as its
+// column, so the floor guarantees at least "---" — matching
+// internal/rules/tablefmt and the cross-flavor minimum that
+// markdown-it and pandoc require.
 func writePaddedTable(
 	buf *bytes.Buffer, headers []string, rows [][]string,
 ) {
@@ -164,6 +166,14 @@ func writePaddedTable(
 			if w := runewidth.StringWidth(c); w > widths[i] {
 				widths[i] = w
 			}
+		}
+	}
+	// Floor each column at three so every separator cell renders at
+	// least "---", matching internal/rules/tablefmt and the
+	// cross-flavor minimum markdown-it and pandoc require.
+	for i := range widths {
+		if widths[i] < 3 {
+			widths[i] = 3
 		}
 	}
 	// Header row.
