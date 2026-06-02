@@ -255,7 +255,7 @@ func perRuleTiming(tb testing.TB, r rule.Rule, src []byte, mapFS fstest.MapFS) r
 // perRuleBenchDoc (2026-06-02) every rule but one sits at 0.94-1.33x;
 // the outlier is MDS043 (no-reference-style) at ~1.5-1.65x across runs,
 // whose many allocations charge GC into its Check windows. 2.5x leaves
-// that noisy outlier ~50% headroom yet still binds the 24 cheap rules
+// that noisy outlier ~50% headroom yet still binds the cheap rules
 // tighter than the old absolute gate (1ms vs their ~175µs ≈ 5.7x). The
 // deterministic perRuleAllocCeiling gate below is the tight per-rule
 // algorithmic-regression catch; this is the coarse CPU backstop. If a
@@ -312,11 +312,11 @@ var perRuleAllocCeiling = map[string]float64{
 	"MDS068": 4,   // link-style: 0 allocs
 }
 
-// init pins MDS043's allocs ceiling to the active goldmark build axis.
-// mds043AllocCeiling is 384 on the default arena build and 784 under
-// -tags goldmark_upstream (see goldmark_arena_test.go); the map literal
-// above carries the arena value, so this only differs on the non-arena
-// axis.
+// init pins MDS043's allocs ceiling from the build-tagged
+// mds043AllocCeiling constant (see goldmark_arena_test.go /
+// goldmark_upstream_test.go for the per-axis values, and the
+// perRuleAllocCeiling note above for why the indirection is kept even
+// when the two axes match).
 func init() {
 	perRuleAllocCeiling["MDS043"] = mds043AllocCeiling
 }
