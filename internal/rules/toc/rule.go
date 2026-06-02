@@ -80,7 +80,7 @@ func (r *Rule) Generate(f *lint.File, filePath string, line int,
 	items := mdtext.CollectTOCItems(f.AST, f.Source)
 
 	var sb strings.Builder
-	sb.Grow(len(items) * 50)
+	sb.Grow(len(items) * 80)
 	// stack tracks heading levels of included ancestors for depth computation.
 	stack := make([]int, 0, 8)
 

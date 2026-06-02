@@ -1328,8 +1328,12 @@ func collectBodySyncPoints(
 	lines := bytes.Split(content, []byte("\n"))
 	currentHeading := -1
 	for _, lineB := range lines {
-		trimmed := strings.TrimSpace(string(lineB))
-		if strings.HasPrefix(trimmed, "#") {
+		trimmedB := bytes.TrimSpace(lineB)
+		if len(trimmedB) == 0 {
+			continue
+		}
+		if trimmedB[0] == '#' {
+			trimmed := string(trimmedB)
 			for j, h := range headings {
 				if headingMatchesLine(h, trimmed) {
 					currentHeading = j
@@ -1338,7 +1342,8 @@ func collectBodySyncPoints(
 			}
 			continue
 		}
-		if currentHeading >= 0 && trimmed != "" {
+		if currentHeading >= 0 {
+			trimmed := string(trimmedB)
 			fields := fieldinterp.Fields(trimmed)
 			if len(fields) > 0 {
 				compiled := buildFieldPattern(trimmed)
