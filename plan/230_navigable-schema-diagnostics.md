@@ -269,7 +269,13 @@ declaration's line — still navigable.
     [MDS020 README](../internal/rules/MDS020-required-structure/README.md)
     and
     [live-diagnostics](../docs/features/live-diagnostics.md).
-12. Run `mdsmith fix .` and confirm `check .` passes.
+12. VS Code: rewrite the hover's `rules.DocURL`
+    website link to a `command:` link that opens the
+    rule's embedded README offline in a `mdsmith-rule:`
+    virtual document, backed by `mdsmith help rule`.
+    The server keeps emitting the https link so other
+    editors are unaffected.
+13. Run `mdsmith fix .` and confirm `check .` passes.
 
 ## Acceptance Criteria
 
@@ -295,6 +301,10 @@ declaration's line — still navigable.
 - [x] A VS Code hover shows the issue first, a
       separator, then a one-line summary and a doc
       link — not the full README.
+- [x] The VS Code hover's doc link opens the rule's
+      embedded README offline (a `mdsmith-rule:`
+      virtual doc via `mdsmith help rule`), not the
+      website — preserving the offline guarantee.
 - [x] [Plan 217](217_obsidian-plugin.md) requires the
       issue-first tooltip and a navigable link.
 - [x] The

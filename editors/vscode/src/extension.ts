@@ -29,6 +29,13 @@ import { runInit } from "./commands/init";
 import { runMergeDriverInstall } from "./commands/merge-driver";
 import { runKindsResolve, runKindsWhy, makeKindsContentProvider } from "./commands/kinds";
 import { KINDS_SCHEME, parseKindsUri } from "./commands/virtual-doc";
+import {
+  RULE_SCHEME,
+  OPEN_RULE_DOC_COMMAND,
+  buildRuleDocUri,
+  fetchRuleDocContent,
+  rewriteHoverMarkdown,
+} from "./commands/rule-doc";
 
 let client: LanguageClient | undefined;
 // Track the .mdsmith.yml file watcher across the activate /
@@ -141,6 +148,26 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
   // extension. The mdsmith.restartServer command stays the
   // explicit manual recovery path either way.
   clientOptions.errorHandler = new MdsmithErrorHandler();
+
+  // Rewrite the server's public-website rule-docs links (in hovers) so
+  // they open the README offline from the bundled binary instead of a
+  // browser. The server keeps emitting https links so editors without
+  // this extension still get a working link; VS Code intercepts them
+  // here and points them at the mdsmith-rule: virtual document. See
+  // commands/rule-doc.ts.
+  clientOptions.middleware = {
+    provideHover: async (document, position, token, next) => {
+      const hover = await next(document, position, token);
+      if (hover) {
+        for (const block of hover.contents) {
+          if (block instanceof vscode.MarkdownString) {
+            rewriteHoverMarkdown(block);
+          }
+        }
+      }
+      return hover;
+    },
+  };
 
   client = new LanguageClient("mdsmith", "mdsmith", serverOptions, clientOptions);
 
@@ -483,6 +510,22 @@ function registerPaletteCommands(context: vscode.ExtensionContext): void {
       });
     }),
 
+    // Open a rule's embedded README in a read-only virtual document.
+    // Invoked only from hover links the middleware rewrote (and trusted
+    // via isTrusted.enabledCommands), so id is always a rule ID — but
+    // registerCommand is callable programmatically, so guard anyway.
+    vscode.commands.registerCommand(OPEN_RULE_DOC_COMMAND, async (id?: string) => {
+      if (!id) return;
+      const doc = await vscode.workspace.openTextDocument(
+        vscode.Uri.parse(buildRuleDocUri(id))
+      );
+      const mdDoc = await vscode.languages.setTextDocumentLanguage(doc, "markdown");
+      await vscode.window.showTextDocument(mdDoc, {
+        preview: true,
+        viewColumn: vscode.ViewColumn.Beside,
+      });
+    }),
+
     // Register the virtual document provider for the mdsmith-kinds: scheme.
     vscode.workspace.registerTextDocumentContentProvider(
       KINDS_SCHEME,
@@ -509,6 +552,17 @@ function registerPaletteCommands(context: vscode.ExtensionContext): void {
           const provider = makeKindsContentProvider(binary, fileFolder?.uri.fsPath);
           return provider.provideTextDocumentContent(uriStr);
         },
+      }
+    ),
+
+    // Register the virtual document provider for the mdsmith-rule: scheme,
+    // which renders `mdsmith help rule <id>` (the embedded README) offline
+    // so the rewritten hover doc link opens without a browser or network.
+    vscode.workspace.registerTextDocumentContentProvider(
+      RULE_SCHEME,
+      {
+        provideTextDocumentContent: (uri: vscode.Uri) =>
+          fetchRuleDocContent(uri.toString(), getBinary(), getWorkspaceRoot()),
       }
     ),
 
