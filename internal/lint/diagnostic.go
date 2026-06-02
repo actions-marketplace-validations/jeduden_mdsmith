@@ -118,7 +118,7 @@ type ExplanationLeaf struct {
 // two diagnostics are considered equal when their (File, Line, Column,
 // RuleID, Message) tuples match. Earlier-encountered duplicates win so
 // the diagnostic order from the first hit is preserved. The input slice
-// is never modified; nil input returns nil and a non-nil input always
+// is never modified; nil input returns nil and a non-empty input always
 // produces a freshly-allocated slice so callers can keep the original
 // around without worrying about aliasing.
 func DedupeDiagnostics(diags []Diagnostic) []Diagnostic {

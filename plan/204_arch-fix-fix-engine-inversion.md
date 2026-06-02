@@ -29,9 +29,9 @@ intended direction.
   has no other dependencies.
 - `CheckRules` and `ConfigureRule` moved to a new
   `internal/checker` package: both need `config.RuleCfg`,
-  `rule.Rule`, and `lint.File`. The `rule` package
-  already imports `config` (which imports `rule`), so
-  adding `config` to `rule` would cycle. A new
+  `rule.Rule`, and `lint.File`. The `config` package
+  already imports `rule`, so adding `config` to `rule`
+  would create a `rule → config → rule` cycle. A new
   `internal/checker` package sits below both
   `internal/engine` and `internal/fix` with no
   import of either.
