@@ -1060,8 +1060,10 @@ func applyContentField(k string, vv any, ce *ContentEntry, path string) error {
 }
 
 // setContentProjection reads the optional `projection:` mode for a
-// content entry (`text` / `code` / `inline`). An empty value is the
-// implicit default and is never written explicitly.
+// content entry (`text` / `code` / `inline`). Omitting the key uses
+// the kind's default projection; this runs only when `projection:`
+// is present, so an explicit empty string is rejected as an unknown
+// projection like any other unrecognised value.
 //
 // Each content kind constrains which modes are legal, and an
 // incompatible combination is a schema-load error rather than a
