@@ -1,0 +1,9 @@
+# Build outputs and dependencies are not committed.
+/dist/
+/node_modules/
+/coverage/
+bun.lock
+# Staged copy of the repo LICENSE (see build.ts); the repo root is the
+# single source of truth.
+/LICENSE
+*.zip

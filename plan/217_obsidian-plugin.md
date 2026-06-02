@@ -1,7 +1,7 @@
 ---
 id: 217
 title: Obsidian plugin (WASM runtime)
-status: "🔲"
+status: "🔳"
 model: opus
 summary: >-
   Ship an Obsidian plugin under
