@@ -16,11 +16,13 @@ export interface InvalidateTarget {
   invalidate(uri: string, content?: string): void;
 }
 
-// VaultFileLike is the subset of Obsidian's TFile the snapshot and the
-// change handlers read.
+// VaultFileLike is the subset of Obsidian's TFile/TAbstractFile the
+// snapshot and the change handlers read. extension is optional because
+// vault events fire for folders too (a TAbstractFile has no extension);
+// the change handler guards on it being "md".
 export interface VaultFileLike {
   path: string;
-  extension: string;
+  extension?: string;
 }
 
 // EventRef mirrors Obsidian's opaque event handle, returned by on() and
