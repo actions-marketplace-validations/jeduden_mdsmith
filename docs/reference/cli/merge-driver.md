@@ -48,9 +48,8 @@ is missing, has no managed block, or has drifted.
 
 Only after that check passes does it register the merge
 driver in `git config` and install the pre-merge-commit
-hook. Both live under `.git/`, so they are untracked. A
-failing run touches neither, so it leaves the repository
-in place.
+hook. Both are git-internal and untracked. A failing run
+touches neither, so it leaves the repository in place.
 
 Run it in CI and the merge queue. There, `install` would
 re-render `.gitattributes` mid-run. A drifted committed

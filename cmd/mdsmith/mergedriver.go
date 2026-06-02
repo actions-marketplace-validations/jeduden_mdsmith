@@ -699,9 +699,10 @@ var osReadFile = os.ReadFile
 //
 // It rejects a symlinked or otherwise non-regular .gitattributes before
 // reading, mirroring the lstat guard install applies in
-// githooks.WriteGitattributes, so ci-install cannot be tricked into
-// reading a path outside the repository. A missing file (ENOENT) passes
-// the guard and is reported as "not found" below.
+// githooks.WriteGitattributes, to reduce the risk of following a link to
+// a path outside the repository. As there, a narrow TOCTOU window
+// remains between this guard and the read. A missing file (ENOENT)
+// passes the guard and is reported as "not found" below.
 func verifyGitattributes(attrPath string, expected githooks.Globs) int {
 	if err := guardFn(attrPath); err != nil {
 		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
