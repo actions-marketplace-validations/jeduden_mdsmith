@@ -1,9 +1,10 @@
-# Build outputs and dependencies are not committed.
-/dist/
-/node_modules/
-/coverage/
-bun.lock
-# Staged copy of the repo LICENSE (see build.ts); the repo root is the
-# single source of truth.
-/LICENSE
+# Build outputs and dependencies are not committed. bun.lock IS
+# committed (CI installs with --frozen-lockfile), mirroring
+# editors/vscode/.gitignore.
+node_modules/
+dist/
+coverage/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
 *.zip
