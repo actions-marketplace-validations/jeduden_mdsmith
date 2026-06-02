@@ -144,7 +144,9 @@ func NewGitignoreMatcher(root string) *GitignoreMatcher {
 }
 
 // collectAncestorGitignores finds .gitignore files in directories above
-// the given root, ordered from the filesystem root down to root's parent.
+// the given root, ordered from the top of root's own working tree down
+// to root's parent — the walk stops at the working-tree boundary, as
+// detailed below.
 //
 // The walk stops at a Git working-tree boundary. Git applies a
 // .gitignore only to paths within the working tree that contains it, so

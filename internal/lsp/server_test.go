@@ -2258,7 +2258,7 @@ func TestQuickFixBytesForCatalogProducesEdit(t *testing.T) {
 		"users expect mdsmith fix in the Quick Fix lightbulb menu")
 	assert.Contains(t, string(fixed), "a.md",
 		"regenerated catalog body should list the matched file")
-	uri := "file://" + docPath
+	uri := pathToURI(docPath)
 	edit := fullFileEdit(uri, doc.text, fixed)
 	require.Contains(t, edit.Changes, uri)
 }
