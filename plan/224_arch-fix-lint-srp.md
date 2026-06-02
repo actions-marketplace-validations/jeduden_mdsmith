@@ -34,6 +34,11 @@ a parsed Markdown file):
 - Run cache (`runcache.go`).
 - Prose-range projection
   (`proserange.go`).
+- Workspace file discovery — Markdown
+  detection and glob expansion that pick
+  the files to parse (`files.go`). Stays:
+  it feeds the parsed-file model and does
+  not depend on the three utilities below.
 
 The **standalone utilities** (extracted by
 this plan — each answers its own question,
