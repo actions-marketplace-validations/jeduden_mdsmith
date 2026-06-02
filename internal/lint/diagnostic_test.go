@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDiagnosticFields(t *testing.T) {
@@ -79,4 +80,26 @@ func TestDiagnostic_DisplayLineClamp(t *testing.T) {
 	assert.Equal(t, 1, Diagnostic{Line: 0}.DisplayLine(), "zero clamps to 1")
 	assert.Equal(t, 1, Diagnostic{Line: -3}.DisplayLine(), "negative clamps to 1")
 	assert.Equal(t, 7, Diagnostic{Line: 7}.DisplayLine(), "real line passes through")
+func TestDedupeDiagnostics_nil(t *testing.T) {
+	assert.Nil(t, DedupeDiagnostics(nil))
+}
+
+func TestDedupeDiagnostics_single(t *testing.T) {
+	d := Diagnostic{File: "a.md", Line: 1, RuleID: "MDS001", Message: "x"}
+	out := DedupeDiagnostics([]Diagnostic{d})
+	require.Len(t, out, 1)
+	assert.Equal(t, d, out[0])
+}
+
+func TestDedupeDiagnostics_removeDuplicates(t *testing.T) {
+	d := Diagnostic{File: "a.md", Line: 1, RuleID: "MDS001", Message: "x"}
+	out := DedupeDiagnostics([]Diagnostic{d, d})
+	require.Len(t, out, 1)
+}
+
+func TestDedupeDiagnostics_keepsDistinct(t *testing.T) {
+	d1 := Diagnostic{File: "a.md", Line: 1, RuleID: "MDS001", Message: "x"}
+	d2 := Diagnostic{File: "a.md", Line: 2, RuleID: "MDS001", Message: "x"}
+	out := DedupeDiagnostics([]Diagnostic{d1, d2})
+	require.Len(t, out, 2)
 }

@@ -44,7 +44,7 @@ import (
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/config"
-	"github.com/jeduden/mdsmith/internal/engine"
+	"github.com/jeduden/mdsmith/internal/checker"
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/stretchr/testify/require"
@@ -247,7 +247,7 @@ func runRuleForAudit(tb testing.TB, r rule.Rule, in auditProbeInput, src []byte,
 		applied = settings
 	}
 
-	cr, err := engine.ConfigureRule(r, config.RuleCfg{Settings: applied})
+	cr, err := checker.ConfigureRule(r, config.RuleCfg{Settings: applied})
 	require.NoError(tb, err, "configuring %s for fixture %s", r.ID(), in.label)
 
 	f, err := lint.NewFile("doc.md", src)
