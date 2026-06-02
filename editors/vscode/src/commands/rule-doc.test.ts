@@ -3,6 +3,7 @@ import type { SpawnFn } from "./runner";
 import {
   buildRuleDocUri,
   fetchRuleDocContent,
+  isRuleId,
   OPEN_RULE_DOC_COMMAND,
   parseRuleDocUri,
   rewriteHoverMarkdown,
@@ -11,6 +12,21 @@ import {
   RULE_SCHEME,
   type MarkdownLike,
 } from "./rule-doc";
+
+// ---- isRuleId ----
+
+describe("isRuleId", () => {
+  test("accepts MDS followed by digits, case-insensitive", () => {
+    expect(isRuleId("MDS020")).toBe(true);
+    expect(isRuleId("mds1")).toBe(true);
+  });
+
+  test("rejects slugs, partials, flags, and empties", () => {
+    for (const bad of ["", "MDS", "MDS01a", "required-structure", "mds020-required-structure", "--version"]) {
+      expect(isRuleId(bad)).toBe(false);
+    }
+  });
+});
 
 // ---- buildRuleDocUri / parseRuleDocUri ----
 

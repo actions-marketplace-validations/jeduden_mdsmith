@@ -28,6 +28,14 @@ export const OPEN_RULE_DOC_COMMAND = "mdsmith.openRuleDoc";
 // pass through.
 const RULE_ID_RE = /^MDS\d+$/i;
 
+// isRuleId reports whether s is a well-formed mdsmith rule ID. The
+// mdsmith-rule: URI, the link rewrite, and the openRuleDoc command all
+// gate on this — the single source of truth for the constraint — so only
+// a real rule ID ever reaches the spawned `mdsmith help rule`.
+export function isRuleId(s: string): boolean {
+  return RULE_ID_RE.test(s);
+}
+
 // RULE_DOC_LINK_RE matches a Markdown link target that points at a
 // published rule-docs page, e.g.
 //   ](https://mdsmith.dev/rules/mds020-required-structure/)
@@ -60,7 +68,7 @@ export function parseRuleDocUri(uri: string): { id: string } | null {
   if (url.protocol !== `${RULE_SCHEME}:`) return null;
   if (url.hostname !== "doc") return null;
   const id = url.searchParams.get("id");
-  if (!id || !RULE_ID_RE.test(id)) return null;
+  if (!id || !isRuleId(id)) return null;
   return { id };
 }
 

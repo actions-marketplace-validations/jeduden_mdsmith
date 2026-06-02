@@ -34,6 +34,7 @@ import {
   OPEN_RULE_DOC_COMMAND,
   buildRuleDocUri,
   fetchRuleDocContent,
+  isRuleId,
   rewriteHoverMarkdown,
 } from "./commands/rule-doc";
 
@@ -511,11 +512,13 @@ function registerPaletteCommands(context: vscode.ExtensionContext): void {
     }),
 
     // Open a rule's embedded README in a read-only virtual document.
-    // Invoked only from hover links the middleware rewrote (and trusted
-    // via isTrusted.enabledCommands), so id is always a rule ID — but
-    // registerCommand is callable programmatically, so guard anyway.
+    // Invoked from hover links the middleware rewrote (and trusted via
+    // isTrusted.enabledCommands), so id is normally a rule ID. But
+    // registerCommand is globally callable, so enforce the same
+    // MDS<digits> shape here and no-op on anything else, rather than
+    // opening a tab that just reports a malformed URI.
     vscode.commands.registerCommand(OPEN_RULE_DOC_COMMAND, async (id?: string) => {
-      if (!id) return;
+      if (!id || !isRuleId(id)) return;
       const doc = await vscode.workspace.openTextDocument(
         vscode.Uri.parse(buildRuleDocUri(id))
       );
