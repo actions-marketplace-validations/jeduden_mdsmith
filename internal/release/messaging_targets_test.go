@@ -52,6 +52,39 @@ func TestMessagingTargets_FragmentsFirst(t *testing.T) {
 	assert.Equal(t, "lead fragment", targets[1].Label)
 }
 
+func TestMessagingTargets_HeadlineAndEyebrowFragments(t *testing.T) {
+	m := sampleMessaging()
+	want := map[string]struct {
+		path  string
+		value string
+	}{
+		"headline fragment": {
+			path:  filepath.Join("/r", "docs", "brand", "fragments", "headline.fragment.md"),
+			value: m.Headline(),
+		},
+		"eyebrow fragment": {
+			path:  filepath.Join("/r", "docs", "brand", "fragments", "eyebrow.fragment.md"),
+			value: "eyebrow text",
+		},
+	}
+	found := map[string]bool{}
+	for _, tg := range MessagingTargets("/r") {
+		exp, ok := want[tg.Label]
+		if !ok {
+			continue
+		}
+		found[tg.Label] = true
+		assert.Equal(t, exp.path, tg.Path, "%s path", tg.Label)
+		assert.Equal(t, exp.value, tg.ValueOf(m), "%s value", tg.Label)
+		_, isFragment := tg.Patcher.(MarkdownFragment)
+		assert.True(t, isFragment,
+			"%s must use the MarkdownFragment patcher so it is created on first run", tg.Label)
+	}
+	for label := range want {
+		assert.True(t, found[label], "missing target %q", label)
+	}
+}
+
 func TestMessagingTargets_AllValueOfReturnsNonEmpty(t *testing.T) {
 	m := sampleMessaging()
 	for _, tg := range MessagingTargets("/r") {

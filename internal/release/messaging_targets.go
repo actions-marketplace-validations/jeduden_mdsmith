@@ -74,6 +74,18 @@ func messagingFragmentTargets(root string) []MessagingTarget {
 			Patcher: MarkdownFragment{},
 			ValueOf: func(m *Messaging) string { return m.VSCodeOverview },
 		},
+		{
+			Label:   "headline fragment",
+			Path:    messagingPath(root, "docs", "brand", "fragments", "headline.fragment.md"),
+			Patcher: MarkdownFragment{},
+			ValueOf: func(m *Messaging) string { return m.Headline() },
+		},
+		{
+			Label:   "eyebrow fragment",
+			Path:    messagingPath(root, "docs", "brand", "fragments", "eyebrow.fragment.md"),
+			Patcher: MarkdownFragment{},
+			ValueOf: func(m *Messaging) string { return m.Eyebrow },
+		},
 	}
 }
 
