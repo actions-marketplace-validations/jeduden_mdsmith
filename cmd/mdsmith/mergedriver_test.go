@@ -1382,9 +1382,11 @@ func TestFixAtRealPath_PreservesOursFileMode(t *testing.T) {
 
 func TestRunMergeDriver_CIInstall_HelpFlag_ExitsZero(t *testing.T) {
 	for _, flag := range []string{"--help", "-h"} {
-		captureStderr(func() {
+		got := captureStderr(func() {
 			assert.Equal(t, 0, runMergeDriver([]string{"ci-install", flag}))
 		})
+		assert.Contains(t, got, "Usage: mdsmith merge-driver",
+			"help must print the usage banner for %q, not just exit 0", flag)
 	}
 }
 
@@ -1595,7 +1597,13 @@ func TestRunMergeDriver_CIInstall_RegisterDriverError(t *testing.T) {
 	got := captureStderr(func() {
 		assert.Equal(t, 2, runMergeDriver([]string{"ci-install"}))
 	})
+	// Pin the failure to the registration step: a hook-step failure
+	// would carry ci-install's "installing pre-merge-commit hook:"
+	// prefix, which registerMergeDriver's bare error does not — so its
+	// absence proves we failed before the hook was touched.
 	assert.Contains(t, got, "cannot locate mdsmith binary")
+	assert.NotContains(t, got, "installing pre-merge-commit hook",
+		"must fail at registerMergeDriver, before the hook step")
 }
 
 // When verification and driver registration pass but a user-authored
@@ -1627,7 +1635,11 @@ func TestRunMergeDriver_CIInstall_HookError_UnmanagedHook(t *testing.T) {
 	got := captureStderr(func() {
 		assert.Equal(t, 2, runMergeDriver([]string{"ci-install"}))
 	})
-	assert.Contains(t, got, "pre-merge-commit")
+	// Assert the specific refusal text, not just "pre-merge-commit" —
+	// that substring also appears in the success message and the usage
+	// banner, so it would not distinguish the unmanaged-hook branch from
+	// a different hook failure.
+	assert.Contains(t, got, "not managed by mdsmith")
 }
 
 // --- verifyGitattributes ---
@@ -1658,5 +1670,8 @@ func TestVerifyGitattributes_ReadError_ReturnsTwo(t *testing.T) {
 	got := captureStderr(func() {
 		assert.Equal(t, 2, verifyGitattributes(attr, githooks.Globs{}))
 	})
+	// Assert the injected error is surfaced, not just the generic
+	// "reading" prefix, so a swallowed underlying error fails the test.
 	assert.Contains(t, got, "reading")
+	assert.Contains(t, got, "boom")
 }
