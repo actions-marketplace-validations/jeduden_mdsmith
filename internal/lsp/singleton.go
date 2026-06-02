@@ -12,6 +12,15 @@ import (
 	"time"
 )
 
+// randRead and userCacheDir indirect the crypto/rand and os entry
+// points the registry depends on, so their otherwise-unreachable
+// failure branches can be driven red/green in tests. Production points
+// them at the real calls.
+var (
+	randRead     = rand.Read
+	userCacheDir = os.UserCacheDir
+)
+
 // singletonPollInterval is how often the workspace-singleton watcher
 // re-reads the registry to see whether a newer server has claimed the
 // same workspace. 5s converges within a few seconds of a reload while
@@ -59,11 +68,12 @@ func watchSingleton(
 // watchdog stays quiet), then races the freshly-spawned server.
 //
 // It is a no-op without a workspace root or instanceID (the feature is
-// off, or the client sent no rootUri). A failed claim leaves the server
-// running without singleton protection rather than risking it stepping
-// itself aside on a transient registry write error.
+// off, or the client sent no rootUri); New only sets instanceID when it
+// also wires the registry seams, so the two travel together. A failed
+// claim leaves the server running without singleton protection rather
+// than risking it stepping itself aside on a transient registry error.
 func (s *Server) startSingletonWatch(root string) {
-	if root == "" || s.instanceID == "" || s.singletonClaim == nil {
+	if root == "" || s.instanceID == "" {
 		return
 	}
 	key := workspaceKey(root)
@@ -112,7 +122,7 @@ func workspaceKey(root string) string {
 // step aside for itself.
 func newInstanceID() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	if _, err := randRead(b[:]); err != nil {
 		return ""
 	}
 	return hex.EncodeToString(b[:])
@@ -129,7 +139,7 @@ type fileRegistry struct{ dir string }
 // the OS cache dir and falls back to the temp dir so a claim never fails
 // purely because the cache dir is unavailable.
 func defaultRegistry() fileRegistry {
-	base, err := os.UserCacheDir()
+	base, err := userCacheDir()
 	if err != nil {
 		base = os.TempDir()
 	}
@@ -140,32 +150,21 @@ func (r fileRegistry) path(key string) string {
 	return filepath.Join(r.dir, key+".owner")
 }
 
-// claim records id as the current owner of key. The write is atomic
-// (temp file + rename) so a concurrent reader never observes a partial
-// id and a newer claim cleanly replaces an older one.
+// claim records id as the current owner of key. It writes to a
+// per-instance temp path and renames it onto the owner record: the
+// rename is atomic, so a concurrent reader sees either the old owner or
+// the new one, never a half-written id, and the id-tagged temp name
+// keeps two servers claiming the same workspace at once from clobbering
+// each other's temp file.
 func (r fileRegistry) claim(key, id string) error {
 	if err := os.MkdirAll(r.dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(r.dir, key+".*.tmp")
-	if err != nil {
+	tmp := r.path(key) + "." + id + ".tmp"
+	if err := os.WriteFile(tmp, []byte(id), 0o600); err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	if _, err := tmp.WriteString(id); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, r.path(key)); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	return nil
+	return os.Rename(tmp, r.path(key))
 }
 
 // current returns the instance id currently recorded for key, or "" if

@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -223,4 +226,58 @@ func TestNewInstanceIDUniqueAndNonEmpty(t *testing.T) {
 	b := newInstanceID()
 	assert.NotEmpty(t, a)
 	assert.NotEqual(t, a, b, "each instance id must be distinct")
+}
+
+// The following tests drive the registry's failure branches and the OS
+// seams. They override package-level seams, so they do NOT run in
+// parallel; Go schedules every t.Parallel() test after the sequential
+// ones finish, so the override-and-restore never races a concurrent
+// reader.
+
+func TestNewInstanceIDEmptyOnRandFailure(t *testing.T) {
+	orig := randRead
+	t.Cleanup(func() { randRead = orig })
+	randRead = func([]byte) (int, error) { return 0, errors.New("rng down") }
+	assert.Empty(t, newInstanceID(), "a failed RNG yields no id, disabling the singleton")
+}
+
+func TestDefaultRegistryUsesCacheDir(t *testing.T) {
+	orig := userCacheDir
+	t.Cleanup(func() { userCacheDir = orig })
+	userCacheDir = func() (string, error) { return "/cache", nil }
+	assert.Equal(t, filepath.Join("/cache", "mdsmith", "lsp-singleton"), defaultRegistry().dir)
+}
+
+func TestDefaultRegistryFallsBackToTempDirWhenCacheUnavailable(t *testing.T) {
+	orig := userCacheDir
+	t.Cleanup(func() { userCacheDir = orig })
+	userCacheDir = func() (string, error) { return "", errors.New("no cache dir") }
+	assert.Equal(t, filepath.Join(os.TempDir(), "mdsmith", "lsp-singleton"), defaultRegistry().dir)
+}
+
+func TestFileRegistryClaimErrorsWhenDirUncreatable(t *testing.T) {
+	t.Parallel()
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o600))
+	// r.dir sits under a regular file, so MkdirAll cannot create it.
+	r := fileRegistry{dir: filepath.Join(blocker, "sub")}
+	assert.Error(t, r.claim("k", "id"))
+}
+
+func TestFileRegistryClaimErrorsWhenTempPathIsDir(t *testing.T) {
+	t.Parallel()
+	r := fileRegistry{dir: t.TempDir()}
+	// claim writes to "<owner>.<id>.tmp"; a directory there makes the
+	// WriteFile step fail.
+	require.NoError(t, os.Mkdir(r.path("k")+"."+"id"+".tmp", 0o755))
+	assert.Error(t, r.claim("k", "id"))
+}
+
+func TestFileRegistryCurrentEmptyWhenNotReadable(t *testing.T) {
+	t.Parallel()
+	r := fileRegistry{dir: t.TempDir()}
+	// A directory at the owner path: os.Open succeeds but io.ReadAll
+	// fails, so current reports no owner rather than a bogus one.
+	require.NoError(t, os.Mkdir(r.path("k"), 0o755))
+	assert.Equal(t, "", r.current("k"))
 }
