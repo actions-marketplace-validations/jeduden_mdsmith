@@ -73,7 +73,7 @@ func TestLineRange_Contains(t *testing.T) {
 }
 
 // TestDiagnostic_DisplayLineClamp covers DisplayLine: a non-positive
-// sentinel (plan 221's wholly-generated anchor) clamps to 1 for 1-based
+// sentinel (plan 230's wholly-generated anchor) clamps to 1 for 1-based
 // output, while a real line passes through unchanged.
 func TestDiagnostic_DisplayLineClamp(t *testing.T) {
 	assert.Equal(t, 1, Diagnostic{Line: 0}.DisplayLine(), "zero clamps to 1")

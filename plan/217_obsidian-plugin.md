@@ -95,7 +95,7 @@ field tracks the diagnostics. Each shows as
 a wavy underline. Severity classes live in
 `styles.css`.
 
-A hover tooltip is issue-first (plan 221): the
+A hover tooltip is issue-first (plan 230): the
 message leads, then the schema constraint from
 `related_locations` (a navigable link when it has
 a file/line, else plain text), then the rule code

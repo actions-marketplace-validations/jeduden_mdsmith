@@ -76,7 +76,7 @@ func expectDiagMsg(
 }
 
 // expectRelatedMsg asserts that some diagnostic carries a related
-// location whose Message contains substr. Since plan 221, the schema
+// location whose Message contains substr. Since plan 230, the schema
 // reference rides on RelatedLocations rather than the message body, so
 // schema-ref assertions go through this helper.
 func expectRelatedMsg(
@@ -2237,7 +2237,7 @@ status: '"open" | "done"'
 	assert.True(t, found, "a related location points at schema line 3")
 }
 
-// TestCheck_EveryMDS020DiagnosticCarriesRelatedLocation pins plan 221's
+// TestCheck_EveryMDS020DiagnosticCarriesRelatedLocation pins plan 230's
 // invariant: every MDS020 diagnostic surfaces the schema reference as a
 // related location. One document here triggers several distinct emit
 // paths (unexpected section + two missing sections); reverting any of

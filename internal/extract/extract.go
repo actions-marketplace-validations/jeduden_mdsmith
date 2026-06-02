@@ -334,7 +334,7 @@ func (p *projector) collision(key, why string) {
 	//
 	// Route through Emit (rather than building the Diagnostic by hand)
 	// so the schema reference rides on a RelatedLocation like every
-	// other MDS020 emit site — Format() no longer carries it (plan 221).
+	// other MDS020 emit site — Format() no longer carries it (plan 230).
 	mk := func(file string, line int, msg string) lint.Diagnostic {
 		return lint.Diagnostic{
 			File:     file,

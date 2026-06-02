@@ -62,7 +62,7 @@ type Diagnostic struct {
 }
 
 // DisplayLine returns Line clamped to at least 1 for user-facing output
-// (CLI text, JSON, and the public API). plan 221 may anchor a diagnostic
+// (CLI text, JSON, and the public API). plan 230 may anchor a diagnostic
 // at a non-positive line internally so it survives generated-section
 // filtering when no safe positive anchor exists (a wholly generated
 // file); that sentinel must never surface as line 0 in 1-based output.

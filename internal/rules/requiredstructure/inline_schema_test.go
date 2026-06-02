@@ -83,7 +83,7 @@ func TestCheck_InlineSchema_MissingSection(t *testing.T) {
 }
 
 // TestCheck_InlineSchema_MissingSectionAnchorsAtPrecedingHeading pins
-// plan 221's body anchoring: a missing section's diagnostic lands on
+// plan 230's body anchoring: a missing section's diagnostic lands on
 // the heading it should follow (## Goal, line 3), not file line 1.
 func TestCheck_InlineSchema_MissingSectionAnchorsAtPrecedingHeading(t *testing.T) {
 	r := &Rule{InlineSchema: inlineSchema(t, map[string]any{
@@ -992,7 +992,7 @@ func TestCheck_InlineSchema_PerScopeRequiredMentions(t *testing.T) {
 }
 
 // TestCheck_InlineKindSchema_RelatedLocationCarriesSourcePath pins
-// plan 221: an inline kind schema delivered as a schema-sources entry
+// plan 230: an inline kind schema delivered as a schema-sources entry
 // with a `source` makes the violation's related location point at the
 // kind's defining file, not the bare "inline kind schema" label.
 func TestCheck_InlineKindSchema_RelatedLocationCarriesSourcePath(t *testing.T) {

@@ -483,7 +483,7 @@ func applyInlineSchemaSource(result map[string]RuleCfg, schema map[string]any, s
 	entry := map[string]any{"inline": cloneSettings(schema)}
 	// Carry the kind's defining file so an inline-schema violation
 	// points the reader at <.mdsmith.yml or kind file> rather than the
-	// bare "inline kind schema" label (plan 221). The rule reads this
+	// bare "inline kind schema" label (plan 230). The rule reads this
 	// as the schema reference; it is not part of the schema content.
 	if sourcePath != "" {
 		entry["source"] = sourcePath

@@ -12,7 +12,7 @@ import (
 // carries RelatedLocations for a schema (MDS020) violation and that it
 // JSON-marshals with the related_locations field — matching the CLI
 // --format json shape so a WASM/Session host (e.g. the Obsidian
-// plugin) reads one schema (plan 221).
+// plugin) reads one schema (plan 230).
 func TestCheckCarriesRelatedLocations(t *testing.T) {
 	cfg := ConfigYAML("kinds:\n" +
 		"  task:\n" +

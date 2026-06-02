@@ -1,5 +1,5 @@
 ---
-id: 221
+id: 230
 title: Navigable schema diagnostics in the editor
 status: "✅"
 model: opus

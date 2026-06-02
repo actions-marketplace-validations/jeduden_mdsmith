@@ -263,7 +263,7 @@ func TestParseFMBlockKeyLines_BlockScalarWithFenceSequence(t *testing.T) {
 // diagnostics for unrecoverable CUE/JSON failures used to drop
 // the schema reference. Every diagnostic the validator emits now
 // uses SchemaDiagnostic, so the source rides on a structured
-// related location rather than the message body (plan 221).
+// related location rather than the message body (plan 230).
 func TestValidateFrontmatterDiags_CompileFailureCarriesSchemaRef(t *testing.T) {
 	sch := &Schema{
 		Source: "kind broken",

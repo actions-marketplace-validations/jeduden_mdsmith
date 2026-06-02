@@ -184,7 +184,7 @@ type Diagnostic struct {
 	Source   string             `json:"source,omitempty"`
 	Message  string             `json:"message"`
 	Data     *diagnosticData    `json:"data,omitempty"`
-	// RelatedInformation surfaces secondary locations (plan 221): for
+	// RelatedInformation surfaces secondary locations (plan 230): for
 	// MDS020, the proto.md / kind-file line that declares the violated
 	// constraint, which the editor renders as a navigable entry.
 	// Omitted when the diagnostic carries no navigable related

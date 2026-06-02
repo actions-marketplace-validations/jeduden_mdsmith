@@ -985,7 +985,7 @@ func TestToLSPClampsZeroLine(t *testing.T) {
 	assert.Equal(t, 0, got.Range.Start.Line)
 }
 
-// TestToLSP_RelatedInformationAndCodeDescription pins plan 221's wire
+// TestToLSP_RelatedInformationAndCodeDescription pins plan 230's wire
 // mapping: a navigable related location becomes a relatedInformation
 // entry with a resolved file:// URI and 0-based coordinates, the rule
 // code gets a derived codeDescription.href, and a file-less label is
@@ -3747,7 +3747,7 @@ func TestRuleHoverContentFallback(t *testing.T) {
 	assert.Contains(t, content, "mdsmith help rule MDSZZZ")
 }
 
-// TestRuleHoverContent_IssueFirst pins plan 221's hover layout: the
+// TestRuleHoverContent_IssueFirst pins plan 230's hover layout: the
 // diagnostic message and the navigable schema link lead as the primary
 // block, a separator follows, then the condensed rule identity (code,
 // name, one-line description, docs link). The full README is not

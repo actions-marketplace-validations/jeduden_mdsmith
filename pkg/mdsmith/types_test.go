@@ -41,7 +41,7 @@ func TestToExplanationConverts(t *testing.T) {
 }
 
 // TestToDiagnosticsClampsNonPositiveLine covers the public-API clamp:
-// plan 221's line-0 sentinel must not leak through the Session/WASM API;
+// plan 230's line-0 sentinel must not leak through the Session/WASM API;
 // it surfaces as 1, while a RelatedLocation line of 0 ("unknown") is
 // preserved.
 func TestToDiagnosticsClampsNonPositiveLine(t *testing.T) {

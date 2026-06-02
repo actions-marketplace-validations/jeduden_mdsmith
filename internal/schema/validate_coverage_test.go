@@ -283,7 +283,7 @@ func TestDocFrontmatterKeyLines_StrippedFrontMatter(t *testing.T) {
 }
 
 // TestMissingSectionAnchor covers the body-anchoring helper added in
-// plan 221: the natural insertion point is used when safe; otherwise the
+// plan 230: the natural insertion point is used when safe; otherwise the
 // anchor is the first body line outside every generated range so
 // engine.filterGeneratedDiags never drops the diagnostic and it still
 // formats as a valid location.

@@ -96,7 +96,7 @@ type expectedDiag struct {
 	// starts with this string. Mutually exclusive with Message.
 	MessagePrefix string `yaml:"message-prefix"`
 	// Related, when present, asserts the diagnostic's structured
-	// related locations (plan 221). Opt-in: an empty list skips the
+	// related locations (plan 230). Opt-in: an empty list skips the
 	// check, so only fixtures that exercise the schema reference need
 	// to declare it.
 	Related []expectedRelated `yaml:"related"`

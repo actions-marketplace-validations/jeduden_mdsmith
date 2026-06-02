@@ -351,7 +351,7 @@ func TestExplanationToJSON_EmptyLeavesIsEmptySlice(t *testing.T) {
 	}
 }
 
-// TestJSONFormatter_ClampsNonPositiveLine regresses plan 221: a
+// TestJSONFormatter_ClampsNonPositiveLine regresses plan 230: a
 // diagnostic anchored at line 0 serializes as line 1, not 0. Column is
 // left untouched (0 stays "unknown").
 func TestJSONFormatter_ClampsNonPositiveLine(t *testing.T) {

@@ -307,7 +307,7 @@ func nonBodyDiagLine(f *lint.File) int {
 // generated range (a positive line that both survives filtering and
 // formats as a valid location), or 0 when the whole file is generated
 // and no safe positive anchor exists, so the diagnostic still surfaces
-// rather than being dropped or printed as file:0 (plan 221).
+// rather than being dropped or printed as file:0 (plan 230).
 func MissingSectionAnchor(f *lint.File, candidate int) int {
 	if candidate > 0 && !lineInGeneratedRange(f, candidate) {
 		return candidate

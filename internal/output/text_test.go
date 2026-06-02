@@ -599,7 +599,7 @@ func TestTextFormatter_SnippetDotPathAlignment(t *testing.T) {
 	assert.Equal(t, 'h', diagRunes[caretPos], "caret should point at 'h' in https")
 }
 
-// TestTextFormatter_ClampsNonPositiveLine regresses plan 221: a
+// TestTextFormatter_ClampsNonPositiveLine regresses plan 230: a
 // diagnostic anchored at line 0 (a wholly generated file) prints as
 // line 1, never file:0. Column is left untouched (0 is "unknown",
 // covered by TestTextFormatter_SnippetColumnZero).

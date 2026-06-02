@@ -139,7 +139,7 @@ func TestEffectiveInjectsInlineSchema(t *testing.T) {
 	require.Contains(t, got, "sections")
 }
 
-// TestEffectiveInjectsInlineSchemaSourcePath covers plan 221: the
+// TestEffectiveInjectsInlineSchemaSourcePath covers plan 230: the
 // kind's defining file (SourcePath) rides on the schema-sources entry
 // as `source`, so an inline-kind violation names a navigable file
 // instead of the bare "inline kind schema" label.

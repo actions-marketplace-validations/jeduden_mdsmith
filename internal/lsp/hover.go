@@ -126,7 +126,7 @@ func (s *Server) handleHover(msg *requestMessage) {
 }
 
 // ruleHoverContent builds the hover body for a diagnostic, issue-first
-// (plan 221): the diagnostic message — what is wrong in this file —
+// (plan 230): the diagnostic message — what is wrong in this file —
 // leads as the primary block, followed by any navigable related
 // location, a separator, then a condensed rule-identity block (the
 // rule code, its one-line description, and a docs link). The full rule

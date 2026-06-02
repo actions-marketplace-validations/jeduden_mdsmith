@@ -27,7 +27,7 @@ type jsonDiagnostic struct {
 	// deprecation diagnostics stay unchanged on the wire.
 	Deprecated bool   `json:"deprecated,omitempty"`
 	ReplacedBy string `json:"replaced_by,omitempty"`
-	// RelatedLocations mirrors lint.Diagnostic's plan-221 field so CI
+	// RelatedLocations mirrors lint.Diagnostic's plan-230 field so CI
 	// scripts can read the schema-constraint location without parsing
 	// the message. omitempty so diagnostics that carry none stay
 	// unchanged on the wire. The rule-doc URL is not emitted here — it

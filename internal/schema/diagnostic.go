@@ -81,7 +81,7 @@ type SchemaDiagnostic struct {
 
 // Format renders the human-facing message: the first line carries
 // field/actual/expected, and an optional hint follows in parentheses
-// on its own indented line. Per plan 221 the schema reference no
+// on its own indented line. Per plan 230 the schema reference no
 // longer rides on the message — Emit attaches it as a structured
 // lint.RelatedLocation so the CLI and the LSP surface it as a
 // navigable location rather than greppable text.
