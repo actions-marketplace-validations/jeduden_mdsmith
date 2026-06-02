@@ -1381,9 +1381,11 @@ func TestFixAtRealPath_PreservesOursFileMode(t *testing.T) {
 // --- merge-driver ci-install (npm-ci-style: verify, never write) ---
 
 func TestRunMergeDriver_CIInstall_HelpFlag_ExitsZero(t *testing.T) {
-	captureStderr(func() {
-		assert.Equal(t, 0, runMergeDriver([]string{"ci-install", "--help"}))
-	})
+	for _, flag := range []string{"--help", "-h"} {
+		captureStderr(func() {
+			assert.Equal(t, 0, runMergeDriver([]string{"ci-install", flag}))
+		})
+	}
 }
 
 func TestRunMergeDriver_CIInstall_NotInRepo(t *testing.T) {
@@ -1523,4 +1525,138 @@ func TestRunMergeDriver_CIInstall_Drift_Fails(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(before), string(after),
 		"ci-install must not modify .gitattributes even on drift")
+}
+
+func TestRunMergeDriver_CIInstall_LoadConfigError(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"),
+		[]byte("not: [valid: yaml\n"), 0o644))
+
+	orig := executableFunc
+	t.Cleanup(func() { executableFunc = orig })
+	executableFunc = func() (string, error) { return "/usr/local/bin/mdsmith", nil }
+
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, runMergeDriver([]string{"ci-install"}))
+	})
+	assert.Contains(t, got, "loading config")
+}
+
+// pathWithOnlyGit points PATH at a temp dir holding just a `git` symlink
+// for the rest of the test. resolveInstalledBinary's PATH and $GOPATH
+// lookups then fail (no `mdsmith`, and no `go` to query GOPATH) while the
+// merge-driver's own `git rev-parse` still resolves. Skips on Windows,
+// where os.Symlink needs privilege; the coverage gate runs on Linux.
+func pathWithOnlyGit(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink-based PATH isolation is POSIX-only")
+	}
+	gitPath, err := exec.LookPath("git")
+	require.NoError(t, err, "git must be on PATH for this test")
+	binDir := t.TempDir()
+	require.NoError(t, os.Symlink(gitPath, filepath.Join(binDir, "git")))
+	t.Setenv("PATH", binDir)
+}
+
+// When verification passes but the binary cannot be located, ci-install
+// must surface registerMergeDriver's error and exit 2 — before writing
+// the hook.
+func TestRunMergeDriver_CIInstall_RegisterDriverError(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+
+	orig := executableFunc
+	t.Cleanup(func() { executableFunc = orig })
+	executableFunc = func() (string, error) { return "/usr/local/bin/mdsmith", nil }
+
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	// In-sync .gitattributes so verification passes and control reaches
+	// registerMergeDriver.
+	captureStderr(func() {
+		require.Equal(t, 0, runMergeDriver([]string{"install"}))
+	})
+
+	// Make the binary unlocatable (transient exe + a PATH without
+	// mdsmith or go), keeping git available for `rev-parse`.
+	executableFunc = func() (string, error) {
+		return filepath.Join(os.TempDir(), "go-run-fake", "mdsmith"), nil
+	}
+	pathWithOnlyGit(t)
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, runMergeDriver([]string{"ci-install"}))
+	})
+	assert.Contains(t, got, "cannot locate mdsmith binary")
+}
+
+// When verification and driver registration pass but a user-authored
+// (unmanaged) pre-merge-commit hook is present, ci-install must surface
+// ensurePreMergeCommitHook's refusal and exit 2.
+func TestRunMergeDriver_CIInstall_HookError_UnmanagedHook(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+
+	orig := executableFunc
+	t.Cleanup(func() { executableFunc = orig })
+	executableFunc = func() (string, error) { return "/usr/local/bin/mdsmith", nil }
+
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	// install writes an in-sync .gitattributes plus a managed hook.
+	captureStderr(func() {
+		require.Equal(t, 0, runMergeDriver([]string{"install"}))
+	})
+
+	// Replace the managed hook with an unmanaged one so
+	// ensurePreMergeCommitHook refuses to overwrite it.
+	hookPath := filepath.Join(dir, ".git", "hooks", "pre-merge-commit")
+	require.NoError(t, os.WriteFile(hookPath,
+		[]byte("#!/bin/sh\necho user\n"), 0o755))
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, runMergeDriver([]string{"ci-install"}))
+	})
+	assert.Contains(t, got, "pre-merge-commit")
+}
+
+// --- verifyGitattributes ---
+
+// A non-regular .gitattributes (here a directory) must be rejected by
+// the lstat guard before any read, so ci-install cannot be tricked into
+// reading a path outside the repository.
+func TestVerifyGitattributes_NonRegularFile_ReturnsTwo(t *testing.T) {
+	dir := t.TempDir()
+	attr := filepath.Join(dir, ".gitattributes")
+	require.NoError(t, os.Mkdir(attr, 0o755))
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, verifyGitattributes(attr, githooks.Globs{}))
+	})
+	assert.Contains(t, got, "not a regular file")
+}
+
+func TestVerifyGitattributes_ReadError_ReturnsTwo(t *testing.T) {
+	dir := t.TempDir()
+	attr := filepath.Join(dir, ".gitattributes")
+	require.NoError(t, os.WriteFile(attr, []byte("x"), 0o644))
+
+	orig := osReadFile
+	t.Cleanup(func() { osReadFile = orig })
+	osReadFile = func(string) ([]byte, error) { return nil, fmt.Errorf("boom") }
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, verifyGitattributes(attr, githooks.Globs{}))
+	})
+	assert.Contains(t, got, "reading")
 }

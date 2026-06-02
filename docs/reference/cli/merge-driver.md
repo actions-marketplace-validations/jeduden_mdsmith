@@ -41,14 +41,16 @@ custom includes.
 Like `install`, but it treats the committed
 `.gitattributes` as the source of truth instead of
 rewriting it. This is the `npm ci` analogue of `install`'s
-`npm install`. It registers the merge driver in
-`git config` and installs the pre-merge-commit hook. Both
-live under `.git/`, so they are untracked.
+`npm install`. It first checks the committed managed block
+against the globs derived from `.mdsmith.yml`. It never
+writes the file. It exits non-zero when `.gitattributes`
+is missing, has no managed block, or has drifted.
 
-It then checks the committed managed block against the
-globs derived from `.mdsmith.yml`. It never writes the
-file. It exits non-zero when `.gitattributes` is missing,
-has no managed block, or has drifted.
+Only after that check passes does it register the merge
+driver in `git config` and install the pre-merge-commit
+hook. Both live under `.git/`, so they are untracked. A
+failing run touches neither, so it leaves the repository
+in place.
 
 Run it in CI and the merge queue. There, `install` would
 re-render `.gitattributes` mid-run. A drifted committed

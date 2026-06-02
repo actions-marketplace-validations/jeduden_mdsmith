@@ -45,17 +45,19 @@ Subcommands:
   ci-install
         Like install, but treats the committed .gitattributes as
         the source of truth instead of rewriting it — the npm-ci
-        analogue of install's npm-install. It registers the merge
-        driver and installs the pre-merge-commit hook (both
-        git-internal and untracked), then verifies that the
-        committed managed block matches the globs derived from
-        .mdsmith.yml. It exits non-zero if .gitattributes is
-        missing, has no managed block, or has drifted, and never
-        writes the file. Use it in CI and the merge queue, where
-        rewriting a tracked file mid-run would dirty the worktree
-        and abort the merge. Takes no glob arguments; it always
-        compares against the canonical default include set, so it
-        is incompatible with custom-glob installs (same as MDS048).
+        analogue of install's npm-install. It first verifies that
+        the committed managed block matches the globs derived from
+        .mdsmith.yml, and only then registers the merge driver and
+        installs the pre-merge-commit hook (both git-internal and
+        untracked). It exits non-zero — before touching git config
+        or the hook — if .gitattributes is missing, has no managed
+        block, or has drifted, and never writes the file, so a
+        failing run leaves the repository untouched. Use it in CI
+        and the merge queue, where rewriting a tracked file mid-run
+        would dirty the worktree and abort the merge. Takes no glob
+        arguments; it always compares against the canonical default
+        include set, so it is incompatible with custom-glob installs
+        (same as MDS048).
 
 Git config (set by install / ci-install):
   merge.mdsmith.driver = '/absolute/path/to/mdsmith' merge-driver run %O %A %B %P
@@ -685,13 +687,28 @@ func runMergeDriverCIInstall(args []string) int {
 	return 0
 }
 
+// osReadFile is a variable so tests can substitute a failing
+// implementation to exercise the read-error path in verifyGitattributes.
+var osReadFile = os.ReadFile
+
 // verifyGitattributes checks that the mdsmith managed block in the
 // committed .gitattributes at attrPath matches expected, without ever
 // writing the file. It returns 0 when they match. On a missing file, a
 // missing managed block, or drift it prints a message naming the fix
 // (`mdsmith merge-driver install`) and returns 2.
+//
+// It rejects a symlinked or otherwise non-regular .gitattributes before
+// reading, mirroring the lstat guard install applies in
+// githooks.WriteGitattributes, so ci-install cannot be tricked into
+// reading a path outside the repository. A missing file (ENOENT) passes
+// the guard and is reported as "not found" below.
 func verifyGitattributes(attrPath string, expected githooks.Globs) int {
-	data, err := os.ReadFile(attrPath)
+	if err := guardFn(attrPath); err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return 2
+	}
+
+	data, err := osReadFile(attrPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr,
