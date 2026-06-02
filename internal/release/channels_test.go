@@ -294,6 +294,11 @@ func TestMdsmithBinName(t *testing.T) {
 }
 
 func TestBuildMdsmith_TempDirError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// os.TempDir reads TEMP/TMP on Windows, not TMPDIR, so this
+		// env trick can't force MkdirTemp to fail there.
+		t.Skip("TMPDIR is not honored by os.TempDir on Windows")
+	}
 	base := t.TempDir()
 	// Point TMPDIR at a non-existent directory so os.MkdirTemp fails.
 	t.Setenv("TMPDIR", filepath.Join(base, "missing"))
