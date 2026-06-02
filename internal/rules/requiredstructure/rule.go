@@ -1941,8 +1941,8 @@ func levelMismatchDiag(
 ) lint.Diagnostic {
 	d := schema.SchemaDiagnostic{
 		Field:     dh.Text,
-		Actual:    fmt.Sprintf("h%d", dh.Level),
-		Expected:  fmt.Sprintf("h%d", req.Level),
+		Actual:    "h" + strconv.Itoa(dh.Level),
+		Expected:  "h" + strconv.Itoa(req.Level),
 		SchemaRef: schemaRef,
 	}
 	return makeDiag(f.Path, dh.Line, d.Format())
