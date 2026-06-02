@@ -2333,13 +2333,27 @@ func TestQuickFixBytesForCatalogProducesEdit(t *testing.T) {
 	t.Parallel()
 	s := New(Options{Reader: nil, Writer: io.Discard, Rules: rule.All()})
 	cfg := config.Merge(config.Defaults(), nil)
+
+	// Use a real on-disk directory with a matching file so the catalog
+	// glob resolves to a non-empty result. The quick-fix then produces a
+	// genuine regeneration edit (a stale row → the correct row) rather
+	// than relying on the catalog being emptied: a populated catalog
+	// whose glob matches zero files is no longer auto-emptied, so an
+	// absolute path and a real match are needed to exercise the fix.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.md"), []byte("# A\n"), 0o644))
+	docPath := filepath.Join(dir, "x.md")
 	stale := []byte("# Doc\n\n<?catalog\nglob: [\"a.md\"]\n?>\nold body\n<?/catalog?>\n")
-	doc := &document{path: "x.md", text: stale}
-	fixed := s.quickFixBytesFor("catalog", doc, cfg, "")
+	doc := &document{path: docPath, text: stale}
+
+	fixed := s.quickFixBytesFor("catalog", doc, cfg, dir)
 	require.NotNil(t, fixed, "catalog must surface a quick-fix action; "+
 		"users expect mdsmith fix in the Quick Fix lightbulb menu")
-	edit := fullFileEdit("file:///x.md", doc.text, fixed)
-	require.Contains(t, edit.Changes, "file:///x.md")
+	assert.Contains(t, string(fixed), "a.md",
+		"regenerated catalog body should list the matched file")
+	uri := pathToURI(docPath)
+	edit := fullFileEdit(uri, doc.text, fixed)
+	require.Contains(t, edit.Changes, uri)
 }
 
 func TestQuickFixBytesForUnknownRule(t *testing.T) {
