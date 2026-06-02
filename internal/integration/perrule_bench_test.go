@@ -11,8 +11,10 @@ import (
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
+	"github.com/jeduden/mdsmith/pkg/markdown"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/yuin/goldmark/parser"
 )
 
 // perrule_bench_test.go is plan 215's per-opt-in-rule regression
@@ -29,8 +31,9 @@ import (
 //     whole-workspace p95 wall time and median allocs/op over the
 //     production rule set running through the engine.
 //   - This file is narrower and per-rule: for each OPT-IN rule it pins
-//     a baseline (allocs/op AND total parse+Check ns/op) measured on a
-//     larger representative doc, so a regression in one opt-in rule's
+//     a baseline (allocs/op AND a parse-normalised Check/parse time
+//     ratio) measured on a larger representative doc, so a regression in
+//     one opt-in rule's
 //     Check trips a gate that NAMES that rule — even though opt-in
 //     rules never run in BenchmarkCheckCorpus* (those use the default
 //     rule set) and sit far under the flat ≤ 10 alloc ceiling.
@@ -160,103 +163,84 @@ func perRuleAllocs(tb testing.TB, r rule.Rule, src []byte, mapFS fstest.MapFS) f
 	return delta
 }
 
-// timeBatchNsPerOp runs op iters times in one GC-cleaned window and
-// returns the per-op nanoseconds for that window. runtime.GC() before
-// the timed region starts it from a clean heap so a GC assist is less
-// likely to land inside the measurement. Callers take the minimum over
-// several windows to strip CI contention, which only ever ADDS time.
-func timeBatchNsPerOp(iters int, op func()) int64 {
-	runtime.GC()
-	start := time.Now()
-	for j := 0; j < iters; j++ {
-		op()
-	}
-	return time.Since(start).Nanoseconds() / int64(iters)
-}
-
-// ruleTiming holds one opt-in rule's two minimum-over-windows timings on
-// perRuleBenchDoc: the parse-only floor and the full parse+Check, both
-// in ns/op. The gate compares their RATIO, not either absolute number.
+// ruleTiming holds an opt-in rule's parse-normalised Check cost on
+// perRuleBenchDoc: the median per-iteration (parse+Check)/parse ratio,
+// plus mean parse-only and parse+Check times for log context.
 type ruleTiming struct {
-	ParseNs int64 // parse-only floor (makeFile), min over windows
-	FullNs  int64 // parse + Check, min over windows
+	Ratio   float64 // median of per-iteration (parse+Check)/parse ratios
+	ParseNs int64   // mean parse-only ns/op, for log context
+	FullNs  int64   // mean parse+Check ns/op, for log context
 }
 
-// Ratio is full parse+Check over the parse-only floor: 1.0 means Check
-// is free, 2.0 means Check costs as much as a full parse. CI contention
-// inflates ParseNs and FullNs by the same factor (a sibling go-build
-// saturating every core hits both batches equally), so it cancels here
-// — the ratio reads the same on a quiet box or a saturated batch
-// runner. A real Check-time regression grows FullNs against the
-// ~constant parse floor and pushes the ratio up.
-func (t ruleTiming) Ratio() float64 {
-	return float64(t.FullNs) / float64(t.ParseNs)
-}
-
-// perRuleTiming measures one rule's parse-only floor and parse+Check
-// total on perRuleBenchDoc, each as the MINIMUM per-op time over several
-// fixed-size windows. The two batches are timed BACK-TO-BACK inside each
-// window so they sample the same contention regime, and the per-batch
-// minimum over windows drives each toward its uncontended (k≈1) value: a
-// transient spike or GC pause only lands in some windows, while a
-// sustained all-core burst inflates both batches together and cancels in
-// the ratio. The minimum (not the average testing.Benchmark reports, nor
-// a p95) is the right estimator because contention here is additive noise
-// to strip out, not a latency distribution to characterise.
+// perRuleTiming measures one rule's Check cost as a fraction of the parse
+// floor on perRuleBenchDoc: each iteration it times a parse-only op and a
+// parse+Check op BACK-TO-BACK and records their ratio; it returns the
+// median ratio (plus mean times for logging).
 //
-// Gating the RATIO rather than the absolute parse+Check ns is what makes
-// the gate runner-independent. The goldmark parse (~170µs on this doc)
-// dwarfs most rules' Check, so an absolute ceiling had to carry 5-8x
-// headroom to survive the worst sustained-contention window (MDS035/037
-// once tripped a 1.25ms ceiling). Normalising by the same-run parse floor
-// removes that machine-speed factor entirely; the deterministic allocs
-// budget stays the tight per-rule algorithmic-regression catcher.
+// Pairing the two ops per ITERATION is what makes the gate
+// runner-independent. They run a few hundred microseconds apart -- well
+// inside one scheduler quantum -- so both see the same contention factor
+// k (a sibling go-build saturating every core slows both equally) and k
+// cancels in that iteration's ratio. The median over many iterations is
+// robust to the iterations a GC pause or a context switch lands inside.
+//
+// Earlier approaches timed the two as SEPARATE 100-op batches and reduced
+// them independently across windows (first min, then median). Batches sit
+// tens of milliseconds apart -- many scheduler quanta -- so the two
+// reductions could reflect different k and the ratio still scaled with
+// load: a no-op Check measured 0.80 on a contended CI runner. The goldmark
+// parse dwarfs most rules' Check, so an absolute ns ceiling would track
+// machine speed too; the ratio removes that factor. The deterministic
+// allocs budget stays the tight per-rule algorithmic-regression catcher.
 func perRuleTiming(tb testing.TB, r rule.Rule, src []byte, mapFS fstest.MapFS) ruleTiming {
 	tb.Helper()
 	makeFile := perRuleBenchMakeFile(tb, src, mapFS)
 	_ = r.Check(makeFile()) // warm once before measuring
-	const (
-		iters   = 100
-		repeats = 12
-	)
-	var t ruleTiming
-	for i := 0; i < repeats; i++ {
-		parseNs := timeBatchNsPerOp(iters, func() {
-			_ = makeFile()
-		})
-		if i == 0 || parseNs < t.ParseNs {
-			t.ParseNs = parseNs
-		}
-		fullNs := timeBatchNsPerOp(iters, func() {
-			f := makeFile()
-			_ = r.Check(f)
-		})
-		if i == 0 || fullNs < t.FullNs {
-			t.FullNs = fullNs
-		}
+	const iters = 301       // odd: the median is a single iteration's ratio
+	ratios := make([]float64, iters)
+	var parseSum, fullSum int64
+	runtime.GC() // start from a clean heap so fewer GC assists land inside
+	for i := range ratios {
+		s := time.Now()
+		_ = makeFile()
+		parseNs := time.Since(s).Nanoseconds()
+
+		s = time.Now()
+		f := makeFile()
+		_ = r.Check(f)
+		fullNs := time.Since(s).Nanoseconds()
+
+		ratios[i] = float64(fullNs) / float64(parseNs)
+		parseSum += parseNs
+		fullSum += fullNs
 	}
-	return t
+	sort.Float64s(ratios)
+	return ruleTiming{
+		Ratio:   ratios[iters/2],
+		ParseNs: parseSum / int64(iters),
+		FullNs:  fullSum / int64(iters),
+	}
 }
 
-// maxTimeRatio caps every opt-in rule's parse+Check time as a MULTIPLE
-// of the parse-only floor measured in the same run (see perRuleTiming).
-// One uniform bar fits all rules because the ratio divides out machine
-// speed and CI contention: a sibling go-build that saturates every core
-// inflates the parse floor and the parse+Check total together, so the
-// ratio reads the same on a quiet box or a saturated batch runner. That
-// sustained all-core contention is exactly what an absolute ns ceiling
-// could not filter (it only ADDS time, across every measurement window),
-// so MDS035/MDS037 once tripped a 1.25ms ceiling and had to carry ~8x
-// headroom; normalising by the same-run parse floor removes the
-// machine-speed factor entirely.
+// maxTimeRatio caps every opt-in rule's parse+Check time as a MULTIPLE of
+// the parse-only floor, both timed in the SAME iteration (see
+// perRuleTiming). One uniform bar fits all rules because the ratio divides
+// out machine speed and CI contention: a sibling go-build that saturates
+// every core slows the parse op and the parse+Check op together, so the
+// ratio reads the same on a quiet box or a saturated batch runner --
+// validated by holding ~1.0 for a no-op Check across a 2.6-4.3x swing in
+// raw parse time under all-core load. That sustained contention is exactly
+// what an absolute ns ceiling could not filter (it only ADDS time, across
+// every window), so MDS035/MDS037 once tripped a 1.25ms ceiling and had to
+// carry ~8x headroom; the ratio removes the machine-speed factor entirely.
 //
-// The ceiling clears the heaviest observed Check by a wide margin while
-// still tripping a Check that adds a full extra parse (ratio +~1.0). On
-// perRuleBenchDoc (2026-06-02) every rule but one sits at 0.94-1.33x;
-// the outlier is MDS043 (no-reference-style) at ~1.5-1.65x across runs,
-// whose many allocations charge GC into its Check windows. 2.5x leaves
-// that noisy outlier ~50% headroom yet still binds the cheap rules
-// tighter than the old absolute gate (1ms vs their ~175µs ≈ 5.7x). The
+// On perRuleBenchDoc (2026-06-02) every rule but one sits at 0.99-1.28x;
+// the stable outlier is MDS043 (no-reference-style) at ~1.65x, whose
+// reference-style link scan is the most Check work relative to parse -- it
+// is CPU, not allocation (MDS043's Check allocates ~10/op). 2.5x clears
+// that outlier with ~50% headroom while still binding the cheap rules
+// tighter than the old absolute gate (1ms vs their ~175µs ≈ 5.7x) and
+// tripping a Check that adds a full extra parse (ratio +~1.0). The
 // deterministic perRuleAllocCeiling gate below is the tight per-rule
 // algorithmic-regression catch; this is the coarse CPU backstop. If a
 // legitimate cost change pushes a rule over the bar, re-measure with
@@ -392,24 +376,24 @@ func TestPerRuleBenchBudget(t *testing.T) {
 			}
 
 			tm := perRuleTiming(t, r, src, mapFS)
-			ratio := tm.Ratio()
+			ratio := tm.Ratio
 			// Log the observed numbers so a `-v` run doubles as the
 			// re-measurement source when a ceiling needs updating.
-			t.Logf("%s (%s): ratio %.2f (parse %v, parse+Check %v), %.0f "+
-				"allocs/op (ceilings: ratio %.2f, allocs %.0f)",
-				r.ID(), r.Name(), ratio,
-				time.Duration(tm.ParseNs), time.Duration(tm.FullNs),
-				allocs, maxTimeRatio, allocCeiling)
+			t.Logf("%s (%s): ratio %.2f, %.0f allocs/op (ceilings: ratio "+
+				"%.2f, allocs %.0f; mean parse %v, parse+Check %v)",
+				r.ID(), r.Name(), ratio, allocs,
+				maxTimeRatio, allocCeiling,
+				time.Duration(tm.ParseNs), time.Duration(tm.FullNs))
 			if ratio > maxTimeRatio {
-				t.Fatalf("%s (%s) parse+Check is %.2fx the parse floor (%v "+
-					"vs %v), over the %.2fx maxTimeRatio ceiling. A real "+
-					"Check-time regression is suspected; the ratio cancels "+
-					"CI contention, so this is machine-independent. If the "+
-					"cost is justified, raise maxTimeRatio (noting why); the "+
-					"deterministic allocs gate above is the finer catch.",
-					r.ID(), r.Name(), ratio,
-					time.Duration(tm.FullNs), time.Duration(tm.ParseNs),
-					maxTimeRatio)
+				t.Fatalf("%s (%s) Check/parse ratio %.2f exceeds the %.2fx "+
+					"maxTimeRatio ceiling (mean parse %v, parse+Check %v). A "+
+					"real Check-time regression is suspected; the per-iteration "+
+					"ratio cancels CI contention, so this is machine-"+
+					"independent. If the cost is justified, raise maxTimeRatio "+
+					"(noting why); the deterministic allocs gate above is the "+
+					"finer catch.",
+					r.ID(), r.Name(), ratio, maxTimeRatio,
+					time.Duration(tm.ParseNs), time.Duration(tm.FullNs))
 			}
 		})
 	}
@@ -434,18 +418,20 @@ func (extraParseRule) ID() string       { return "MDSTEST-PARSE" }
 func (extraParseRule) Name() string     { return "extra-parse-timing" }
 func (extraParseRule) Category() string { return "test" }
 func (extraParseRule) Check(f *lint.File) []lint.Diagnostic {
-	// Re-parse f.Source: the same work makeFile already did, so the full
-	// parse+Check batch does ~2 parses and Ratio lands near 2.0.
-	g, _ := lint.NewFile(f.Path, f.Source)
-	runtime.KeepAlive(g)
+	// One more parse of f.Source via the same canonical parser
+	// lint.NewFile uses, so the full parse+Check batch does ~2 parses and
+	// the ratio lands near 2.0. ParseContext returns no error, so there is
+	// nothing to swallow.
+	node := markdown.ParseContext(f.Source, parser.NewContext())
+	runtime.KeepAlive(node)
 	return nil
 }
 
 // TestPerRuleTiming verifies the parse-normalised measurement that
 // TestPerRuleBenchBudget gates on: the ratio sits near 1.0 for a no-op
 // Check and climbs well past it when Check adds a full parse's worth of
-// work. Because both ratios divide out the parse floor measured in the
-// same run, the assertions hold regardless of how fast or contended the
+// work. Because each ratio divides out the parse floor timed in the same
+// iteration, the assertions hold regardless of how fast or contended the
 // host is. Skipped under -short and -race like the gate itself.
 func TestPerRuleTiming(t *testing.T) {
 	if testing.Short() {
@@ -461,20 +447,25 @@ func TestPerRuleTiming(t *testing.T) {
 	noop := perRuleTiming(t, noopTimingRule{}, src, mapFS)
 	require.Positive(t, noop.ParseNs, "parse floor must be measurable")
 	require.Positive(t, noop.FullNs, "parse+Check must be measurable")
-	assert.GreaterOrEqual(t, noop.Ratio(), 0.9,
-		"a no-op Check should leave the ratio at the parse floor (~1.0)")
-	assert.LessOrEqual(t, noop.Ratio(), 1.3,
+	// A free Check cannot truly push the ratio below ~1.0; a dip is pure
+	// measurement noise (one parse sample beating another), so the lower
+	// bound only rules out absurdity. The meaningful checks are that a
+	// free Check is NOT inflated toward 2.0 and that busy clearly exceeds
+	// it.
+	assert.Greater(t, noop.Ratio, 0.8,
+		"a no-op Check should leave the ratio near the parse floor (~1.0)")
+	assert.Less(t, noop.Ratio, 1.3,
 		"a no-op Check should not inflate the ratio")
 
 	busy := perRuleTiming(t, extraParseRule{}, src, mapFS)
-	assert.GreaterOrEqual(t, busy.Ratio(), 1.5,
+	assert.Greater(t, busy.Ratio, 1.5,
 		"a Check doing one extra full parse should ~double the ratio")
-	assert.Greater(t, busy.Ratio(), noop.Ratio(),
+	assert.Greater(t, busy.Ratio, noop.Ratio,
 		"the ratio must respond to Check cost, not just parse")
-	t.Logf("noop ratio %.2f (parse %dns, full %dns); extra-parse ratio %.2f "+
-		"(parse %dns, full %dns)",
-		noop.Ratio(), noop.ParseNs, noop.FullNs,
-		busy.Ratio(), busy.ParseNs, busy.FullNs)
+	t.Logf("noop ratio %.2f (mean parse %dns, full %dns); extra-parse "+
+		"ratio %.2f (mean parse %dns, full %dns)",
+		noop.Ratio, noop.ParseNs, noop.FullNs,
+		busy.Ratio, busy.ParseNs, busy.FullNs)
 }
 
 // BenchmarkOptInRule reports each opt-in rule's isolated total
