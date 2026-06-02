@@ -294,3 +294,40 @@ func TestWriteChannelsData_WriteFileError(t *testing.T) {
 	_, err := WriteChannelsData(root, fixtureChannels())
 	require.Error(t, err)
 }
+
+func TestMdsmithBinName(t *testing.T) {
+	assert.Equal(t, "mdsmith.exe", mdsmithBinName("windows"))
+	assert.Equal(t, "mdsmith", mdsmithBinName("linux"))
+	assert.Equal(t, "mdsmith", mdsmithBinName("darwin"))
+}
+
+func TestBuildMdsmith_TempDirError(t *testing.T) {
+	base := t.TempDir()
+	// Point TMPDIR at a non-existent directory so os.MkdirTemp fails.
+	t.Setenv("TMPDIR", filepath.Join(base, "missing"))
+	_, _, err := buildMdsmith(base)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tempdir")
+}
+
+func TestLoadChannels_ValidateError(t *testing.T) {
+	root := seedChannelDir(t, "a.md")
+	stubExtractAll(t, map[string]channelDoc{
+		// empty command fails validate inside LoadChannels.
+		relKey("a.md"): mkChannelDoc("A", "push", "cli", "", "aud", 1),
+	})
+	_, err := LoadChannels(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command")
+}
+
+func TestExtractAllChannels_RunExtractError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds cmd/mdsmith; skipped under -short")
+	}
+	// The build succeeds against the real repo, but extracting a
+	// non-existent channel file makes runExtract fail mid-loop.
+	_, err := extractAllChannels(repoRootForChannels(t),
+		[]string{"docs/development/release-channels/does-not-exist.md"})
+	require.Error(t, err)
+}
