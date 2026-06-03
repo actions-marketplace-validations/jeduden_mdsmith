@@ -264,6 +264,28 @@ Steps here.
 Without this parameter, included headings keep their
 original level, which may break heading hierarchy.
 
+### Heading-offset adjustment
+
+To shift every included heading by a fixed amount, use
+`heading-offset` with a signed integer from -6 to 6:
+
+```markdown
+<?include
+file: features.md
+heading-offset: "1"
+?>
+## Was An H1 In The Source
+<?/include?>
+```
+
+A positive value demotes headings; a negative value
+promotes them. Unlike `heading-level: "absolute"`, the
+shift does not depend on a preceding heading, so it also
+works at the document root — handy when a file's visual
+title is a logo or image rather than an H1.
+`heading-offset` and `heading-level` are mutually
+exclusive.
+
 ### Link rewriting
 
 Relative links in included content are automatically
