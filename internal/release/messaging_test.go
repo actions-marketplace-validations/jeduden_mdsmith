@@ -177,6 +177,17 @@ func TestParseHeadlineEmphasis_NestedInsideEmphasisRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "plain text only")
 }
 
+func TestMessaging_Headline(t *testing.T) {
+	m := &Messaging{
+		HeadlinePre:  "Mark",
+		HeadlineEm:   "down",
+		HeadlinePost: ", smithed.",
+	}
+	assert.Equal(t, "Mark*down*, smithed.", m.Headline(),
+		"Headline reassembles the single-emphasis Markdown the "+
+			"website hero splits into pre/em/post")
+}
+
 func TestLoadMessaging_HeadlineParseError(t *testing.T) {
 	// headline.code is non-empty but has no `*…*` span; the
 	// parser surfaces an error and LoadMessaging wraps it with a
