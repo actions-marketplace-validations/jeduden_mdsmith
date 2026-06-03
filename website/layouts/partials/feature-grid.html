@@ -8,6 +8,7 @@
        overview. Groups render in weight order (first
        appearance); cards within a group render by weight. */ -}}
 {{- $features := site.GetPage "/features" -}}
+{{- if $features -}}
 {{- $pages := $features.Pages.ByWeight -}}
 {{- $groups := slice -}}
 {{- range $pages -}}
@@ -43,3 +44,4 @@
     </div>
   </div>
 {{- end }}
+{{- end -}}
