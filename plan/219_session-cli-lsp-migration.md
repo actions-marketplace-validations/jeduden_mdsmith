@@ -1,7 +1,7 @@
 ---
 id: 219
 title: Route cmd/mdsmith and the LSP through pkg/mdsmith.Session
-status: "🔳"
+status: "✅"
 model: opus
 summary: >-
   Migrate the CLI's check/fix/kinds subcommands and the LSP server
@@ -92,8 +92,8 @@ it affects, not after:
 - [x] The LSP's in-memory buffer bytes reach cross-file rules through
       the session (Invalidate carries open-document content).
 - [x] The CLI end-to-end tests and the LSP p95 latency gate pass.
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no issues.
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no issues.
 
 ## See also
 
