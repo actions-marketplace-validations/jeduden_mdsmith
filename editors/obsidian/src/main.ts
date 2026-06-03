@@ -157,11 +157,16 @@ export default class MdsmithPlugin extends Plugin {
     await this.checkActiveFile();
   }
 
-  // teardownRuntime disposes the session and cancels the listeners and
-  // the pending fix-on-save. Safe to call when the runtime never started.
+  // teardownRuntime disposes the session, unsubscribes the fix-on-save
+  // vault listener, and cancels the pending fix. Safe to call when the
+  // runtime never started.
   private teardownRuntime(): void {
     this.debouncedFixOnSave?.cancel();
     this.debouncedFixOnSave = undefined;
+    if (this.fixOnSaveRef) {
+      this.app.vault.offref(this.fixOnSaveRef);
+      this.fixOnSaveRef = undefined;
+    }
     this.sync?.stop();
     this.sync = undefined;
     this.runtime?.dispose();

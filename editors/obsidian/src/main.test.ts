@@ -46,6 +46,7 @@ function makeApp(): {
   };
   active: { view: FakeView | null };
   fireModify(path: string): void;
+  modifyListenerCount(): number;
 } {
   type Handler = (f: FakeFile) => unknown;
   const vaultHandlers: Record<string, Handler[]> = {};
@@ -77,6 +78,9 @@ function makeApp(): {
     active,
     fireModify(path: string): void {
       for (const cb of vaultHandlers["modify"] ?? []) cb({ path });
+    },
+    modifyListenerCount(): number {
+      return vaultHandlers["modify"]?.length ?? 0;
     },
   };
 }
@@ -239,5 +243,25 @@ describe("configureFixOnSave — filter + wrong-buffer guard (thread B)", () => 
     ).debouncedFixOnSave?.cancel();
     await sleep(260);
     expect(fixSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("teardownRuntime — vault listener cleanup (Copilot review)", () => {
+  test("unsubscribes the fix-on-save modify listener so a failed restart leaves none", () => {
+    const { plugin, harness } = makePlugin({
+      runMode: "onSave",
+      fixOnSave: true,
+    });
+    harness.active.view = { file: { path: "active.md" }, editor: {} };
+    callPrivate(plugin, "configureFixOnSave");
+    expect(harness.modifyListenerCount()).toBe(1);
+
+    // teardownRuntime must offref the fix-on-save subscription, not just
+    // cancel the debounce: a restart whose startRuntime() fails early
+    // never re-runs configureFixOnSave to clear it, so without the
+    // offref a stale modify listener stays live for the rest of the
+    // session.
+    callPrivate(plugin, "teardownRuntime");
+    expect(harness.modifyListenerCount()).toBe(0);
   });
 });
