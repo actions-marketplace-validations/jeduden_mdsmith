@@ -88,7 +88,7 @@ it affects, not after:
       document and watched-file changes.
 - [x] `OSWorkspace.ReadFile` and `OSWorkspace.FS` resolve the same
       `uri` to the same file, proven by a test.
-- [ ] `Session.Fix` does not re-lint when the fix made no edit.
+- [x] `Session.Fix` does not re-lint when the fix made no edit.
 - [ ] The LSP's in-memory buffer bytes reach cross-file rules through
       the session (Invalidate carries open-document content).
 - [ ] The CLI end-to-end tests and the LSP p95 latency gate pass.

@@ -13,6 +13,7 @@
 package mdsmith
 
 import (
+	"bytes"
 	"hash/fnv"
 	"sync"
 
@@ -185,10 +186,10 @@ func rootDirOf(ws Workspace) string {
 	return ""
 }
 
-// newRunner builds the engine.Runner shared by Check and by Fix's
-// post-fix re-lint, so both paths lint with identical configuration.
-// SourceFS is snapshotted per call, so a workspace edit applied through
-// Invalidate is visible to the next operation.
+// newRunner builds the engine.Runner that backs Check (and therefore
+// Fix's post-fix diagnostics, which route through Check). SourceFS is
+// snapshotted per call, so a workspace edit applied through Invalidate
+// is visible to the next operation.
 func (s *Session) newRunner() *engine.Runner {
 	return &engine.Runner{
 		Config:           s.cfg,
@@ -260,17 +261,29 @@ func (s *Session) Fix(uri string, source []byte) (FixResult, error) {
 		return FixResult{}, err
 	}
 
-	// Re-lint the fixed bytes so the result carries the diagnostics
-	// that survive the fix (non-fixable rules, unfixable violations).
-	// This does not poison the Check cache: the fixed bytes hash
-	// differently, and a later Check on them reuses the entry.
-	res := s.newRunner().RunSource(uri, fixed)
+	// Re-lint the fixed bytes so the result carries the diagnostics that
+	// survive the fix (non-fixable rules, unfixable violations). Route
+	// through Check, not a fresh full runner, so the session's parse and
+	// check caches absorb the work (footgun 4: avoid re-linting twice).
+	// When the fix made no edit, fixed == source, so this Check hits the
+	// cache if the caller already Checked this source — a no-op Fix on a
+	// clean buffer no longer pays for a second lint. The cache is keyed
+	// by content hash, so the fixed bytes (changed or not) reuse or
+	// populate the correct entry.
+	diags, err := s.Check(uri, fixed)
+	if err != nil {
+		return FixResult{
+			Source:      string(fixed),
+			Changed:     !bytes.Equal(fixed, source),
+			Diagnostics: diags,
+		}, err
+	}
 
 	return FixResult{
 		Source:      string(fixed),
-		Changed:     string(fixed) != string(source),
-		Diagnostics: toDiagnostics(res.Diagnostics),
-	}, firstError(res.Errors)
+		Changed:     !bytes.Equal(fixed, source),
+		Diagnostics: diags,
+	}, nil
 }
 
 // Kinds resolves the kind list and effective rule configuration for

@@ -85,6 +85,65 @@ func TestSessionFixNoChange(t *testing.T) {
 	}
 }
 
+// TestSessionFixNoChangeReusesCheckCache is the plan-219 footgun-4
+// acceptance test: Fix must not re-lint with a fresh full runner when
+// the fix made no edit. When a prior Check already linted the identical
+// source, a following no-op Fix reuses that cached result and runs zero
+// additional parses — the doubled work the footgun warned about is
+// gone.
+func TestSessionFixNoChangeReusesCheckCache(t *testing.T) {
+	s := newTestSession(t, "", nil)
+	src := []byte("# Title\n\nClean body paragraph.\n")
+
+	// Warm the Check cache for this exact source.
+	if _, err := s.Check("a.md", src); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	afterCheck := s.parseCount()
+
+	res, err := s.Fix("a.md", src)
+	if err != nil {
+		t.Fatalf("Fix: %v", err)
+	}
+	if res.Changed {
+		t.Fatal("Fix: expected Changed=false on already-clean source")
+	}
+	if got := s.parseCount(); got != afterCheck {
+		t.Fatalf("Fix re-linted a no-op fix: parseCount went %d -> %d; "+
+			"a no-op Fix must reuse the cached Check instead of a fresh runner",
+			afterCheck, got)
+	}
+}
+
+// TestSessionFixNoChangeStillReturnsDiagnostics verifies the
+// short-circuit preserves the contract: a no-op Fix still returns the
+// diagnostics that remain (non-fixable findings) on the unchanged
+// source. A long line (MDS001) is default-enabled and not fixable, so
+// it survives the fix and must appear in the remaining diagnostics even
+// though Fix made no edit.
+func TestSessionFixNoChangeStillReturnsDiagnostics(t *testing.T) {
+	s := newTestSession(t, "", nil)
+	long := "# Title\n\n" + strings.Repeat("verylongword ", 12) + "tail\n"
+	src := []byte(long)
+
+	res, err := s.Fix("a.md", src)
+	if err != nil {
+		t.Fatalf("Fix: %v", err)
+	}
+	if res.Changed {
+		t.Fatalf("Fix: expected Changed=false, got source %q", res.Source)
+	}
+	var hasLineLen bool
+	for _, d := range res.Diagnostics {
+		if d.Rule == "MDS001" {
+			hasLineLen = true
+		}
+	}
+	if !hasLineLen {
+		t.Fatalf("Fix(no-op): expected the surviving MDS001 diagnostic, got %+v", res.Diagnostics)
+	}
+}
+
 func TestSessionKindsResolvesKind(t *testing.T) {
 	cfg := "kinds:\n  doc:\n    path-pattern: \"docs/**/*.md\"\n" +
 		"kind-assignment:\n  - glob: [\"docs/**/*.md\"]\n    kinds: [doc]\n"
