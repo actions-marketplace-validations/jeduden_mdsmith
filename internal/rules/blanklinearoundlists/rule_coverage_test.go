@@ -9,6 +9,15 @@ import (
 	"github.com/yuin/goldmark/ast"
 )
 
+// --- lineInSet coverage ---
+
+func TestLineInSet(t *testing.T) {
+	set := map[int]struct{}{2: {}, 5: {}}
+	assert.True(t, lineInSet(set, 2), "member line reports true")
+	assert.False(t, lineInSet(set, 3), "non-member line reports false")
+	assert.False(t, lineInSet(nil, 1), "nil set is safe and reports false")
+}
+
 // --- isInlineNode coverage ---
 
 func TestIsInlineNode_Text(t *testing.T) {
