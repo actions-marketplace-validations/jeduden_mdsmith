@@ -247,8 +247,10 @@ func tryParseTable(lines [][]byte, start int, codeLines map[int]struct{}) (*tabl
 	}
 
 	// Need at least 2 lines (header + separator).
-	_, nextInCode := codeLines[start+2]
-	if start+1 >= len(lines) || nextInCode {
+	if start+1 >= len(lines) {
+		return nil, start
+	}
+	if _, ok := codeLines[start+2]; ok {
 		return nil, start
 	}
 

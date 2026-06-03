@@ -188,11 +188,15 @@ func (r *Rule) activeMax(baseMax int, lc lineCategories, lineNum int) int {
 
 // isSkipped returns true if the line should be excluded from checking.
 func (r *Rule) isSkipped(line []byte, lineNum, limit int, lc lineCategories) bool {
-	if _, ok := lc.code[lineNum]; r.isExcluded("code-blocks") && ok {
-		return true
+	if r.isExcluded("code-blocks") {
+		if _, ok := lc.code[lineNum]; ok {
+			return true
+		}
 	}
-	if _, ok := lc.table[lineNum]; r.isExcluded("tables") && ok {
-		return true
+	if r.isExcluded("tables") {
+		if _, ok := lc.table[lineNum]; ok {
+			return true
+		}
 	}
 	if r.isExcluded("urls") && isURLOnlyLine(line) {
 		return true
