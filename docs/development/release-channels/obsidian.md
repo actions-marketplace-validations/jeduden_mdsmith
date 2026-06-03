@@ -1,9 +1,9 @@
 ---
 title: Obsidian
 summary: >-
-  A `mdsmith-obsidian-<version>.zip` of the WebAssembly
-  engine plus the plugin's five load files, attached to
-  each GitHub release and installed by unzipping into a
+  A `mdsmith-obsidian-<version>.zip` of the plugin's five
+  load files — the WebAssembly engine among them — attached
+  to each GitHub release and installed by unzipping into a
   vault's `.obsidian/plugins/mdsmith/` folder.
 mechanism: push
 artifact: obsidian-plugin
@@ -67,6 +67,7 @@ the raw binaries.
 
 Auth: none of its own. The zip rides the `release` job's
 `GITHUB_TOKEN` upload and OIDC signing — the same path the
-other release artifacts take. There is no publisher token to
-rotate and no `release` environment gate, because the only
-channel is the GitHub release itself.
+other release artifacts take. The `obsidian` job needs no
+publisher token to rotate and no `release` environment gate
+of its own; the `release` job that attaches and signs the
+zip stays gated as usual.
