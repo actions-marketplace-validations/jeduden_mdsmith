@@ -10,7 +10,7 @@ import (
 
 	"github.com/jeduden/mdsmith/internal/engine"
 	vlog "github.com/jeduden/mdsmith/internal/log"
-	"github.com/jeduden/mdsmith/internal/rule"
+	mdsmith "github.com/jeduden/mdsmith/pkg/mdsmith"
 )
 
 // checkCLIOpts bundles the runtime knobs threaded through the check
@@ -115,17 +115,24 @@ func checkFiles(fileArgs []string, opts checkCLIOpts) int {
 		return code
 	}
 
-	runner := &engine.Runner{
-		Config:           cfg,
-		Rules:            rule.All(),
-		StripFrontMatter: frontMatterEnabled(cfg),
-		Logger:           logger,
-		RootDir:          rootDirFromConfig(cfgPath),
-		MaxInputBytes:    maxBytes,
-		Explain:          opts.explain,
-		ConfigPath:       cfgPath,
+	sess, err := sessionForCLI(cfg, cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return 2
 	}
-	return reportCheckResult(runner.Run(files), opts, logger)
+	defer sess.Dispose()
+	result := sess.CheckPaths(files, checkBatchOptions(opts, logger, maxBytes))
+	return reportCheckResult(result, opts, logger)
+}
+
+// checkBatchOptions maps the check CLI flags, the resolved logger, and
+// the resolved byte cap onto the session's BatchOptions.
+func checkBatchOptions(opts checkCLIOpts, logger *vlog.Logger, maxBytes int64) mdsmith.BatchOptions {
+	return mdsmith.BatchOptions{
+		Explain:       opts.explain,
+		MaxInputBytes: maxBytes,
+		Logger:        logger,
+	}
 }
 
 // checkStdin reads from stdin, lints the content, and returns the appropriate
@@ -154,17 +161,14 @@ func checkStdin(opts checkCLIOpts) int {
 		return 2
 	}
 
-	runner := &engine.Runner{
-		Config:           cfg,
-		Rules:            rule.All(),
-		StripFrontMatter: frontMatterEnabled(cfg),
-		Logger:           logger,
-		RootDir:          rootDirFromConfig(cfgPath),
-		MaxInputBytes:    maxBytes,
-		Explain:          opts.explain,
-		ConfigPath:       cfgPath,
+	sess, err := sessionForCLI(cfg, cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return 2
 	}
-	return reportCheckResult(runner.RunSource("<stdin>", source), opts, logger)
+	defer sess.Dispose()
+	result := sess.CheckSource("<stdin>", source, checkBatchOptions(opts, logger, maxBytes))
+	return reportCheckResult(result, opts, logger)
 }
 
 // checkDiscovered loads config, discovers files from config patterns,
@@ -181,17 +185,14 @@ func checkDiscovered(opts checkCLIOpts) int {
 		return 2
 	}
 
-	runner := &engine.Runner{
-		Config:           cfg,
-		Rules:            rule.All(),
-		StripFrontMatter: frontMatterEnabled(cfg),
-		Logger:           logger,
-		RootDir:          rootDirFromConfig(cfgPath),
-		MaxInputBytes:    maxBytes,
-		Explain:          opts.explain,
-		ConfigPath:       cfgPath,
+	sess, err := sessionForCLI(cfg, cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
+		return 2
 	}
-	return reportCheckResult(runner.Run(files), opts, logger)
+	defer sess.Dispose()
+	result := sess.CheckPaths(files, checkBatchOptions(opts, logger, maxBytes))
+	return reportCheckResult(result, opts, logger)
 }
 
 // reportCheckResult writes diagnostics + the run-stats line and

@@ -20,8 +20,9 @@ import (
 // without exposing it in JS still fails, while a native-only addition
 // is allowed once it is listed here.
 var nativeOnlyMethods = map[string]bool{
-	"checkPaths": true,
-	"fixPaths":   true,
+	"checkPaths":  true,
+	"checkSource": true,
+	"fixPaths":    true,
 }
 
 // TestSessionMethodSetMatchesGo asserts the JS session proxy's method

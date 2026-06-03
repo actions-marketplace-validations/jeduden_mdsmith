@@ -86,6 +86,21 @@ func (s *Session) FixPaths(paths []string, opts BatchOptions) *fixpkg.Result {
 	return fixer.Fix(paths)
 }
 
+// CheckSource lints one in-memory source (e.g. stdin) and returns the
+// engine result, including any config-target rule findings against the
+// loaded config. It is the single-source sibling of CheckPaths: the CLI
+// uses it for `mdsmith check -` so stdin shares the session path, while
+// the public [Session.Check] serves the cached, JS-mirrored single-file
+// surface. uri is the display path ("<stdin>"); cross-file rules see no
+// SourceFS, matching the engine's stdin behaviour.
+//
+// Native-only: it returns the engine's own Result so the CLI reuses its
+// reporting. A WASM host uses [Session.Check] (which returns the public
+// Diagnostic shape) instead.
+func (s *Session) CheckSource(uri string, source []byte, opts BatchOptions) *engine.Result {
+	return s.newBatchRunner(opts).RunSource(uri, source)
+}
+
 // newBatchRunner builds the engine.Runner shared by CheckPaths (and, on
 // the path-based fixer side, the post-fix lint). It threads the session
 // state plus the per-call BatchOptions. MaxInputBytes falls back to the
