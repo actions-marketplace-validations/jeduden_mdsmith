@@ -3,8 +3,9 @@
  *
  * The CodeMirror 6 layer in src/diagnostics.ts applies these classes
  * to ranges with active diagnostics. The mdsmith engine reports
- * severity as a string ("error" | "warning"); diagnostics.ts maps it
- * to one of the severity classes below.
+ * severity as a string ("error" or "warning", plus "info" reserved
+ * for forward-compatibility); diagnostics.ts maps each to one of the
+ * severity classes below.
  */
 
 .mdsmith-diagnostic {

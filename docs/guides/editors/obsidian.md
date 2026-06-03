@@ -56,8 +56,10 @@ it.
 ### Across your vault
 
 **Diagnostics panel.** Open the **mdsmith
-Diagnostics** panel for a table of every diagnostic
-in the vault. Click a row to jump to its source.
+Diagnostics** panel for a table of the diagnostics
+from the notes you have checked or opened this
+session. It does not scan the whole vault up front.
+Click a row to jump to its source.
 
 **Cross-file checks.** Because the plugin holds one
 session over the whole vault, cross-file rules see
