@@ -1,7 +1,7 @@
 ---
 id: 232
 title: include heading-offset parameter
-status: "🔳"
+status: "✅"
 summary: >-
   Add a `heading-offset` parameter to the `<?include?>`
   directive (MDS021) that shifts every heading in the
@@ -112,29 +112,29 @@ needs for parent-relative nesting.
 
 ## Tasks
 
-1. [ ] Add `adjustHeadingsByOffset(content, offset)` to
+1. [x] Add `adjustHeadingsByOffset(content, offset)` to
    [`headings.go`][headings], reusing `applyShift`. Unit
    tests for ATX, setext, code fences, clamping, and the
    `offset == 0` no-op land in `headings_test.go` first,
    red.
-2. [ ] Apply `heading-offset` in `processIncludedContent`
+2. [x] Apply `heading-offset` in `processIncludedContent`
    in [`rule.go`][rule]: call `adjustHeadingsByOffset` when
    the parameter is present.
-3. [ ] Extend `validateIncludeDirective`: reject a
+3. [x] Extend `validateIncludeDirective`: reject a
    non-integer or out-of-range value, reject the pairing
    with `heading-level`, and reject the pairing with
    `extract`. A unit test pins each branch.
-4. [ ] Add fixtures under [MDS021-include][include-dir]: a
+4. [x] Add fixtures under [MDS021-include][include-dir]: a
    `good/` plus matching `fixed/` pair that exercises
    `heading-offset`, and a `bad/` case with a stale body.
-5. [ ] Update the rule README ([MDS021-include][include]):
+5. [x] Update the rule README ([MDS021-include][include]):
    the parameter table, a heading-offset section, an
    example, and the new diagnostics rows.
-6. [ ] Update the directive guide
+6. [x] Update the directive guide
    ([generating content][guide]) and the built-in help doc
    [`internal/directives/generating-content.md`][help] to
    cover `heading-offset`.
-7. [ ] Run `go test ./...`, `go tool golangci-lint run`,
+7. [x] Run `go test ./...`, `go tool golangci-lint run`,
    the allocation-budget test, and `mdsmith check .`.
 
 [rule]: ../internal/rules/include/rule.go
@@ -144,19 +144,19 @@ needs for parent-relative nesting.
 
 ## Acceptance Criteria
 
-- [ ] `heading-offset: "1"` demotes every embedded heading
+- [x] `heading-offset: "1"` demotes every embedded heading
       one level on `mdsmith fix`, even with no heading
       before the marker
-- [ ] `heading-offset: "-1"` promotes every embedded
+- [x] `heading-offset: "-1"` promotes every embedded
       heading one level, clamped at H1
-- [ ] A stale `heading-offset` body reports the MDS021
+- [x] A stale `heading-offset` body reports the MDS021
       "generated section is out of date" diagnostic on
       `check`
-- [ ] Pairing `heading-offset` with `heading-level` or
+- [x] Pairing `heading-offset` with `heading-level` or
       `extract` is a lint error with a clear message
-- [ ] A non-integer or out-of-range `heading-offset` is a
+- [x] A non-integer or out-of-range `heading-offset` is a
       lint error
-- [ ] No tracked Markdown uses the new syntax, so
+- [x] No tracked Markdown uses the new syntax, so
       `mdsmith-fixed-version` stays green
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no issues
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no issues
