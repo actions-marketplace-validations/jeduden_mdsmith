@@ -246,15 +246,19 @@ describe.skipIf(skip)("createRuntime", () => {
     // load rather than re-rejecting forever (the plugin's degraded-mode
     // recovery relies on this: startRuntime catches and the user can
     // Restart).
-    await expect(
-      createRuntime({
+    let failure: Error | undefined;
+    try {
+      await createRuntime({
         workspace: {},
         loadWasmExec: () => {
           throw new Error("asset missing");
         },
         loadWasmBytes: async () => wasmBytes,
-      }),
-    ).rejects.toThrow("asset missing");
+      });
+    } catch (err) {
+      failure = err as Error;
+    }
+    expect(failure?.message).toContain("asset missing");
 
     // A subsequent call with working loaders succeeds.
     const rt = await makeRuntime({});
