@@ -118,3 +118,33 @@ func TestPackageObsidianMissingRequiredFile(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mdsmith.wasm")
 }
+
+func TestPackageObsidianRejectsUnsafeVersion(t *testing.T) {
+	dir := t.TempDir()
+	dist := filepath.Join(dir, "dist")
+	stageObsidianDist(t, dist, "1.0.0")
+	// A version with path separators must be rejected: it would otherwise
+	// build a zip filename that escapes outDir.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dist, "manifest.json"),
+		[]byte(`{
+  "id": "mdsmith",
+  "version": "1.0.0/../../evil"
+}
+`), 0o644))
+
+	_, err := PackageObsidian(dist, filepath.Join(dir, "out"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid version")
+}
+
+func TestPackageObsidianDevSentinelVersion(t *testing.T) {
+	dir := t.TempDir()
+	dist := filepath.Join(dir, "dist")
+	stageObsidianDist(t, dist, "0.0.0-dev")
+	out := filepath.Join(dir, "out")
+
+	zipPath, err := PackageObsidian(dist, out)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(out, "mdsmith-obsidian-0.0.0-dev.zip"), zipPath)
+}

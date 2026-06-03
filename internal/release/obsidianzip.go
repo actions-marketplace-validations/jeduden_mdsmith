@@ -76,7 +76,18 @@ func readObsidianVersion(path string) (string, error) {
 	if sub == nil {
 		return "", fmt.Errorf("%s: no version field found", path)
 	}
-	return string(sub[2]), nil
+	version := string(sub[2])
+	// The version becomes part of the output zip's filename, so a value
+	// with a path separator (e.g. "1.0.0/../../x") could escape outDir.
+	// package-obsidian takes an arbitrary dist dir, so accept only the
+	// dev sentinel or a valid semver — the two forms the stamp step and a
+	// checked-in manifest ever produce.
+	if version != DevSentinel {
+		if err := ValidateSemver(version); err != nil {
+			return "", fmt.Errorf("%s: invalid version %q: %w", path, version, err)
+		}
+	}
+	return version, nil
 }
 
 // buildObsidianZip encodes the dist file contents (indexed to match
