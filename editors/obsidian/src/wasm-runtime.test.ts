@@ -13,7 +13,6 @@
 import {
   afterAll,
   beforeAll,
-  beforeEach,
   describe,
   expect,
   test,
@@ -88,13 +87,11 @@ async function makeRuntime(
 }
 
 describe.skipIf(skip)("createRuntime", () => {
-  // The engine is memoized at module scope; reset it before each test so
-  // one test's cached engine never leaks into another's load-count
-  // assertions. Production never resets — the engine lives for the whole
-  // plugin session.
-  beforeEach(() => {
-    __resetEngineForTests();
-  });
+  // The engine is memoized at module scope and intentionally shared
+  // across these tests: creating a fresh Go runtime per test would leak
+  // an immortal one (there is no shutdown hook). Only the load-count and
+  // retry-cache tests below call __resetEngineForTests(), since they
+  // assert behavior that is only observable from a clean cache.
 
   test("check returns a normalized diagnostic array for a clean file", async () => {
     const rt = await makeRuntime({});
@@ -182,6 +179,9 @@ describe.skipIf(skip)("createRuntime", () => {
   // createRuntime — a Restart / configPath change must not instantiate a
   // second immortal Go runtime, only a fresh session.
   test("the engine loads once across multiple createRuntime calls", async () => {
+    // Count asset loads from a clean cache; the tests above reuse the
+    // shared engine, so reset here to make the first load observable.
+    __resetEngineForTests();
     let execLoads = 0;
     let byteLoads = 0;
     const countingOpts = () => ({
@@ -214,6 +214,7 @@ describe.skipIf(skip)("createRuntime", () => {
   });
 
   test("concurrent first createRuntime calls share a single engine load", async () => {
+    __resetEngineForTests(); // dedupe is observable only from a clean cache
     let execLoads = 0;
     let byteLoads = 0;
     const opts = () => ({
@@ -241,6 +242,8 @@ describe.skipIf(skip)("createRuntime", () => {
   });
 
   test("a failed engine load does not poison the cache — a later call can retry", async () => {
+    // Start from a clean cache so the throwing loader is the first load.
+    __resetEngineForTests();
     // First bring-up fails because the asset loader throws. The memoized
     // promise must be cleared so the next createRuntime re-attempts the
     // load rather than re-rejecting forever (the plugin's degraded-mode
