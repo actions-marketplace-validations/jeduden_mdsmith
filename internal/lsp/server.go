@@ -1712,13 +1712,19 @@ func (s *Server) rebuildSession(cfg *config.Config, cfgPath string) {
 		}
 	}
 	s.sessionMu.Lock()
-	old := s.session
 	s.session = sess
 	s.workspace = ws
 	s.sessionMu.Unlock()
-	if old != nil {
-		old.Dispose()
-	}
+	// Do NOT Dispose the superseded session. A lint/fix goroutine may
+	// still hold it (obtained from currentSession() before this swap),
+	// and Dispose nils its checkCache under lock — so the held session's
+	// next Check would lose its warm cache, and a concurrent reload while
+	// linting is in flight is exactly when that happens. The superseded
+	// session is unreferenced once every in-flight caller returns, so GC
+	// reclaims it (its caches are plain maps, nothing OS-level to release);
+	// the public Dispose() stays for external callers that own a session's
+	// whole lifetime. Letting GC reap it keeps the invariant simple: a
+	// session handed out by currentSession() is never disposed underfoot.
 }
 
 // currentSession returns the active session and its overlay workspace

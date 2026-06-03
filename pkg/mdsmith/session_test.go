@@ -293,3 +293,57 @@ func TestSessionCheckAfterDisposeNoPanic(t *testing.T) {
 		t.Fatalf("Check after Dispose: unexpected error: %v", err)
 	}
 }
+
+// TestSessionDisposeDropsCheckCache pins the mechanic behind the LSP's
+// use-after-dispose hazard: Dispose nils checkCache, so a Check on a
+// session that is still held re-parses instead of serving the warm
+// cache. The "held" half is the invariant the LSP's rebuildSession now
+// upholds by NOT disposing the superseded session — a goroutine that
+// obtained the session before the swap keeps its warm cache; the
+// "disposed" half is the regression it must never re-introduce.
+func TestSessionDisposeDropsCheckCache(t *testing.T) {
+	src := []byte("# Title\n\nClean body paragraph.\n")
+
+	t.Run("held session keeps its warm cache", func(t *testing.T) {
+		s := newTestSession(t, "", nil)
+		if _, err := s.Check("a.md", src); err != nil {
+			t.Fatalf("warm Check: %v", err)
+		}
+		warm := s.parseCount()
+
+		// Building a replacement session (what rebuildSession does on a
+		// reload) must not touch the held session's cache. The held
+		// reference re-Checks the same source and serves from cache.
+		_ = newTestSession(t, "", nil)
+
+		if _, err := s.Check("a.md", src); err != nil {
+			t.Fatalf("re-Check: %v", err)
+		}
+		if got := s.parseCount(); got != warm {
+			t.Fatalf("held session re-parsed (parseCount %d -> %d); its warm "+
+				"checkCache must survive a peer session being built", warm, got)
+		}
+	})
+
+	t.Run("disposed session loses its cache", func(t *testing.T) {
+		s := newTestSession(t, "", nil)
+		if _, err := s.Check("a.md", src); err != nil {
+			t.Fatalf("warm Check: %v", err)
+		}
+		warm := s.parseCount()
+
+		// Dispose is the hazard: it nils checkCache. A caller that still
+		// holds the session re-parses on its next Check — the warm cache is
+		// gone. This is exactly why rebuildSession must not Dispose a
+		// session it just handed out via currentSession().
+		s.Dispose()
+
+		if _, err := s.Check("a.md", src); err != nil {
+			t.Fatalf("re-Check after Dispose: %v", err)
+		}
+		if got := s.parseCount(); got == warm {
+			t.Fatalf("parseCount stayed %d after Dispose; the test no longer "+
+				"observes the cache loss that Dispose-on-an-in-use-session causes", warm)
+		}
+	})
+}

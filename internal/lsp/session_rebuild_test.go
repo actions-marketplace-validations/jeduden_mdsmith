@@ -3,7 +3,10 @@ package lsp
 import (
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -154,4 +157,120 @@ func TestQuickFixBytesForNoSessionReturnsNil(t *testing.T) {
 	got := s.quickFixBytesFor("no-trailing-spaces", doc, cfg, "")
 	require.Nil(t, got,
 		"quick-fix with no session must return nil so no broken edit is offered")
+}
+
+// serverWithSession builds a Server whose per-workspace session is
+// already constructed against an on-disk config under dir, mirroring the
+// post-handleInitialized state. It returns the server so a test can hold
+// the live session via currentSession() and drive concurrent reloads.
+func serverWithSession(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"), []byte("{}\n"), 0o600))
+
+	s := New(Options{Reader: nil, Writer: io.Discard, Rules: rule.All()})
+	s.configMu.Lock()
+	s.rootDir = dir
+	s.configMu.Unlock()
+	s.reloadConfig() // builds the first session
+	return s
+}
+
+// TestRebuildSessionDoesNotDisposeHeldSession is the use-after-dispose
+// regression guard. A lint/fix goroutine obtains a session from
+// currentSession(); a concurrent reloadConfig (config or
+// didChangeWatchedFiles change) then swaps in a new session. The swap
+// must NOT Dispose the superseded session, because the held goroutine is
+// still using it: Dispose nils its checkCache under lock, so the held
+// session's Check would lose its warm cache (and, without the engine's
+// nil-map guard, would panic on the next write). Run under -race.
+//
+// The held session is exercised through Check (which writes checkCache),
+// Fix (which routes through Check), and CheckVersion (the per-keystroke
+// path) while reloadConfig hammers rebuildSession in parallel. The
+// assertions: no panic/race, and the held session keeps returning the
+// correct diagnostic for a known-dirty buffer the whole time.
+func TestRebuildSessionDoesNotDisposeHeldSession(t *testing.T) {
+	t.Parallel()
+	s := serverWithSession(t)
+
+	held, _ := s.currentSession()
+	require.NotNil(t, held, "reloadConfig must have built a session")
+
+	// A buffer with a trailing-space violation (MDS006) and a long line
+	// (MDS001): every Check on it must keep reporting the same findings,
+	// proving the held session stays a working linter across the swap.
+	dirty := []byte("# Title\n\ntrailing line here   \n")
+
+	// Warm the held session's checkCache so a concurrent Dispose (the bug)
+	// would visibly nil a populated cache, not an empty one.
+	if _, err := held.Check("doc.md", dirty); err != nil {
+		t.Fatalf("warm Check: %v", err)
+	}
+
+	const iters = 200
+	var wg sync.WaitGroup
+
+	// Reloader: repeatedly rebuild the session under sessionMu. Before the
+	// fix this called old.Dispose() on the held session.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cfg, cfgPath, _ := s.snapshotConfig()
+		for i := 0; i < iters; i++ {
+			s.rebuildSession(cfg, cfgPath)
+		}
+	}()
+
+	// Users of the HELD session: Check / Fix / CheckVersion must keep
+	// working and keep finding MDS006 while the swap races underneath.
+	check := func(do func() bool) {
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			if !do() {
+				t.Errorf("held session lost its MDS006 finding mid-reload")
+				return
+			}
+		}
+	}
+	wg.Add(3)
+	go check(func() bool {
+		diags, err := held.Check("doc.md", dirty)
+		return err == nil && hasPublicRule(diags, "MDS006")
+	})
+	go check(func() bool {
+		res, err := held.Fix("doc.md", dirty)
+		// MDS006 (trailing spaces) is fixable, so a working Fix removes it:
+		// the source must change and the trailing run must be gone. This
+		// proves Fix re-linted through the held session without panic.
+		return err == nil && res.Changed && !strings.Contains(res.Source, "here   ")
+	})
+	go check(func() bool {
+		res := held.CheckVersion("doc.md", dirty, 1)
+		for _, d := range res.Diagnostics {
+			if d.RuleID == "MDS006" {
+				return true
+			}
+		}
+		return false
+	})
+
+	wg.Wait()
+
+	// After the storm, the held session must still cache and lint
+	// correctly — a Disposed session would have a dead checkCache.
+	diags, err := held.Check("doc.md", dirty)
+	require.NoError(t, err, "held session unusable after concurrent reloads")
+	assert.True(t, hasPublicRule(diags, "MDS006"),
+		"held session must still report MDS006 after the reload storm")
+}
+
+// hasPublicRule reports whether any public diagnostic carries ruleID.
+func hasPublicRule(diags []mdsmith.Diagnostic, ruleID string) bool {
+	for _, d := range diags {
+		if d.Rule == ruleID {
+			return true
+		}
+	}
+	return false
 }
