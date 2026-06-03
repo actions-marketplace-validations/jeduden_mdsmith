@@ -49,9 +49,10 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 	listEndLine := lastLineOfNode(f, list)
 
 	codeLines := lint.CollectCodeBlockLines(f)
-	_, startInCode := codeLines[listStartLine]
-	_, endInCode := codeLines[listEndLine]
-	if startInCode || endInCode {
+	if _, ok := codeLines[listStartLine]; ok {
+		return nil
+	}
+	if _, ok := codeLines[listEndLine]; ok {
 		return nil
 	}
 
@@ -217,9 +218,10 @@ func (r *Rule) collectBlankLineInsertions(f *lint.File) (beforeSet, afterSet map
 		listStartLine := lineOfNode(f, list)
 		listEndLine := lastLineOfNode(f, list)
 
-		_, startInCode := codeLines[listStartLine]
-		_, endInCode := codeLines[listEndLine]
-		if startInCode || endInCode {
+		if _, ok := codeLines[listStartLine]; ok {
+			return ast.WalkContinue, nil
+		}
+		if _, ok := codeLines[listEndLine]; ok {
 			return ast.WalkContinue, nil
 		}
 

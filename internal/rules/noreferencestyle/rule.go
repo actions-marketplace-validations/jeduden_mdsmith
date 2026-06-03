@@ -227,21 +227,27 @@ func collectReferenceDefinitions(f *lint.File) []referenceDefinition {
 		labelStart, labelEnd, ok := scanRefDefLine(source, lineStart, eol)
 		if ok {
 			raw := source[labelStart:labelEnd]
-			if _, inCode := codeLines[lineNum]; labelInRefs(raw, refs) && !inCode {
-				bracketAbs := labelStart - 1
-				end := eol
-				// Include the trailing newline so a fix can drop the
-				// line cleanly.
-				if end < len(source) && source[end] == '\n' {
-					end++
+			// labelInRefs normalizes and scans, so check it first; the
+			// codeLines membership is only consulted when the label is
+			// actually referenced, keeping the && short-circuit the
+			// previous `labelInRefs(...) && !codeLines[lineNum]` had.
+			if labelInRefs(raw, refs) {
+				if _, inCode := codeLines[lineNum]; !inCode {
+					bracketAbs := labelStart - 1
+					end := eol
+					// Include the trailing newline so a fix can drop
+					// the line cleanly.
+					if end < len(source) && source[end] == '\n' {
+						end++
+					}
+					out = append(out, referenceDefinition{
+						label: string(raw),
+						line:  lineNum,
+						col:   f.ColumnOfOffset(bracketAbs),
+						start: lineStart,
+						end:   end,
+					})
 				}
-				out = append(out, referenceDefinition{
-					label: string(raw),
-					line:  lineNum,
-					col:   f.ColumnOfOffset(bracketAbs),
-					start: lineStart,
-					end:   end,
-				})
 			}
 		}
 		if eol >= len(source) {
