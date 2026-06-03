@@ -125,6 +125,15 @@ a `Root`, `ReadFile` resolves a relative URI against it, exactly as the
 different files. An absolute path is read unchanged, and an empty `Root`
 reads paths as passed. `MemWorkspace` keys both paths off the same map.
 
+A third implementation, `OverlayWorkspace`, is the LSP server's. It
+reads disk rooted at `Root` but lets `Set(uri, bytes)` shadow a path's
+content with an editor's unsaved buffer, so cross-file rules read the
+live buffer rather than the last saved file. Only content is overlaid —
+open buffers still exist on disk, so globbing and directory walks defer
+to disk, and the `fs.FS` view clones only the small open-buffer map per
+lint pass, never the corpus. That keeps a per-keystroke `CheckVersion`
+off any `O(corpus)` snapshot cost.
+
 `MemWorkspace.Glob` is a linear key filter. The lint hot loop must not
 call it per file; a benchmark fixture asserts no per-file `Glob` under
 `MemWorkspace`.
