@@ -296,8 +296,22 @@ func (s *Session) Kinds(uri string) (KindResolution, error) {
 	if err != nil {
 		return KindResolution{}, err
 	}
-	res := config.ResolveFile(s.cfg, uri, fmKinds, fmFields)
-	return toKindResolution(res), nil
+	return toKindResolution(s.ResolveFile(uri, fmKinds, fmFields)), nil
+}
+
+// ResolveFile resolves the kind list and per-rule effective config for
+// uri against the session's compiled config, given the file's
+// already-parsed front-matter kinds and fields (pass nil when there are
+// none). It returns the raw *config.FileResolution, including the
+// per-rule merge chain the CLI's `kinds why` walks.
+//
+// Native-only: it returns an internal config type. The CLI reads and
+// validates front matter itself (its error UX differs from the
+// session's lenient unsaved-buffer handling) and hands the parsed
+// inputs here; [Session.Kinds] is the JS-mirrored sibling that reads
+// front matter through the workspace and returns the public JSON shape.
+func (s *Session) ResolveFile(uri string, fmKinds []string, fmFields map[string]any) *config.FileResolution {
+	return config.ResolveFile(s.cfg, uri, fmKinds, fmFields)
 }
 
 // frontMatterFor reads uri through the workspace and parses its

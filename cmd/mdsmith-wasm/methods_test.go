@@ -23,6 +23,7 @@ var nativeOnlyMethods = map[string]bool{
 	"checkPaths":  true,
 	"checkSource": true,
 	"fixPaths":    true,
+	"resolveFile": true,
 }
 
 // TestSessionMethodSetMatchesGo asserts the JS session proxy's method

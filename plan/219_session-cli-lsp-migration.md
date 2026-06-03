@@ -82,7 +82,7 @@ it affects, not after:
 
 ## Acceptance Criteria
 
-- [ ] `cmd/mdsmith` check, fix, and kinds construct a
+- [x] `cmd/mdsmith` check, fix, and kinds construct a
       `pkg/mdsmith.Session`.
 - [ ] The LSP uses one `Session` per workspace and invalidates it on
       document and watched-file changes.
