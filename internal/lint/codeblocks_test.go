@@ -34,6 +34,21 @@ func TestCollectPIBlockLines_CachedPerFile(t *testing.T) {
 	assertSameMap(t, first, second)
 }
 
+// TestInCodeOrPI pins the short-circuit membership helper: a line in
+// codeLines reports true without consulting piLines, a line only in
+// piLines reports true, and a line in neither reports false. Nil maps
+// are safe (membership reads on a nil map return the zero value).
+func TestInCodeOrPI(t *testing.T) {
+	code := map[int]struct{}{1: {}, 3: {}}
+	pi := map[int]struct{}{2: {}}
+
+	assert.True(t, InCodeOrPI(code, pi, 1), "line in codeLines")
+	assert.True(t, InCodeOrPI(code, pi, 2), "line in piLines")
+	assert.False(t, InCodeOrPI(code, pi, 4), "line in neither")
+	assert.False(t, InCodeOrPI(nil, nil, 1), "nil maps are safe and report false")
+	assert.True(t, InCodeOrPI(nil, pi, 2), "nil codeLines, hit in piLines")
+}
+
 // assertSameMap asserts the two maps are the identical backing map,
 // which proves the walk ran once and the result was cached rather than
 // recomputed (a fresh map each call would have a different address).

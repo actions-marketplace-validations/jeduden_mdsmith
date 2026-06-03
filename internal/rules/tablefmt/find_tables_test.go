@@ -25,6 +25,23 @@ func TestTryParseTable_FirstLineHasPipeButNotTableRow(t *testing.T) {
 	assert.Equal(t, 0, end)
 }
 
+// TestTryParseTable_SeparatorLineInCodeBlock covers the
+// `codeLines[start+2]` guard: a header-shaped first row whose
+// separator row (1-based line start+2) sits inside a fenced or
+// indented code block is not a real table, so tryParseTable bails
+// out. With start == 0 the separator is 1-based line 2, so a
+// codeLines set containing 2 trips the guard.
+func TestTryParseTable_SeparatorLineInCodeBlock(t *testing.T) {
+	lines := [][]byte{
+		[]byte("| Col | Col2 |"),
+		[]byte("|-----|------|"),
+	}
+	codeLines := map[int]struct{}{2: {}}
+	tbl, end := tryParseTable(lines, 0, codeLines)
+	require.Nil(t, tbl, "expected nil when the separator row is inside a code block")
+	assert.Equal(t, 0, end)
+}
+
 // TestFindTables_SkipsNonPipeLines covers the plan-195 fast-path
 // in findTables that skips tryParseTable on lines without `|`.
 // Pinning the behaviour anchors the optimisation against an

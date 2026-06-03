@@ -275,7 +275,7 @@ func TestTryParseTable_SeparatorNotSeparatorRow(t *testing.T) {
 // tryParseTable: separator line is in a code block → return nil
 // codeLines uses 1-based line numbers; start=0, separator is at index 1 → 1-based=2
 func TestTryParseTable_SeparatorInCodeBlock(t *testing.T) {
-	codeLines := map[int]struct{}{2: struct{}{}} // 1-based line 2 = index 1 (separator)
+	codeLines := map[int]struct{}{2: {}} // 1-based line 2 = index 1 (separator)
 	lines := [][]byte{
 		[]byte("| A | B |"),
 		[]byte("|---|---|"),
@@ -288,7 +288,7 @@ func TestTryParseTable_SeparatorInCodeBlock(t *testing.T) {
 // tryParseTable: subsequent data row is in a code block → loop breaks early.
 // With start=0, end starts at 2. codeLines[end+1]=codeLines[3] means index 2 (lines[2]).
 func TestTryParseTable_DataRowInCodeBlock(t *testing.T) {
-	codeLines := map[int]struct{}{3: struct{}{}} // 1-based line 3 = index 2 (lines[2])
+	codeLines := map[int]struct{}{3: {}} // 1-based line 3 = index 2 (lines[2])
 	lines := [][]byte{
 		[]byte("| A | B |"),
 		[]byte("|---|---|"),

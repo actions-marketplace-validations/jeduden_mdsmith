@@ -31,6 +31,34 @@ func fix(t *testing.T, style, src string) string {
 	return string(applyStructureFix(f, style))
 }
 
+// TestFormatSkipLines_MergedCodeAndPI covers the merged-map branch of
+// formatSkipLines: when a file has both a code block and a PI block,
+// the function allocates a fresh set and folds the code lines into it
+// (the `for n := range code` loop) rather than returning the cached
+// code map directly. The fenced block contributes code lines and the
+// `<?toc?>` directive contributes PI lines, so both inputs are
+// non-empty and the merged path runs.
+func TestFormatSkipLines_MergedCodeAndPI(t *testing.T) {
+	src := "# Title\n\n```go\ncode\n```\n\n<?toc?>\n<?/toc?>\n"
+	f, err := lint.NewFile("merge.md", []byte(src))
+	require.NoError(t, err)
+
+	code := lint.CollectCodeBlockLines(f)
+	pi := lint.CollectPIBlockLines(f)
+	require.NotEmpty(t, code, "fenced block must yield code lines")
+	require.NotEmpty(t, pi, "toc directive must yield PI lines")
+
+	skip := formatSkipLines(f)
+	for n := range code {
+		_, ok := skip[n]
+		assert.True(t, ok, "code line %d must be in the merged skip set", n)
+	}
+	for n := range pi {
+		_, ok := skip[n]
+		assert.True(t, ok, "PI line %d must be in the merged skip set", n)
+	}
+}
+
 func TestMD058CRLFBlankLine(t *testing.T) {
 	// A CRLF file must get a CRLF blank line inserted, not a bare
 	// LF, so `mdsmith fix` does not introduce mixed line endings.

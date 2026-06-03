@@ -52,6 +52,19 @@ func collectPIBlockLinesInto(n ast.Node, f *File, lines map[int]struct{}) {
 	}
 }
 
+// InCodeOrPI reports whether the 1-based line is present in codeLines or
+// piLines. It checks codeLines first and returns early, so the piLines
+// lookup is skipped for a line already known to sit inside a code block —
+// preserving the short-circuit of the original `codeLines[l] || piLines[l]`
+// expression while keeping each call site to a single statement.
+func InCodeOrPI(codeLines, piLines map[int]struct{}, line int) bool {
+	if _, ok := codeLines[line]; ok {
+		return true
+	}
+	_, ok := piLines[line]
+	return ok
+}
+
 // CollectCodeBlockLines returns a set of 1-based line numbers that
 // belong to fenced code blocks (including fence lines) or indented code
 // blocks. The walk is computed once per File and cached; the returned

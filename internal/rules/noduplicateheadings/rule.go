@@ -55,7 +55,8 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 				RuleID:   r.ID(),
 				RuleName: r.Name(),
 				Severity: lint.Warning,
-				Message:  "duplicate heading " + strconv.Quote(text) + " (first defined on line " + strconv.Itoa(firstLine) + ")",
+				Message: "duplicate heading " + strconv.Quote(text) +
+					" (first defined on line " + strconv.Itoa(firstLine) + ")",
 			})
 		} else {
 			seen[text] = line
