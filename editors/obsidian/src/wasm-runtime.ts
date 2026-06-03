@@ -104,7 +104,7 @@ interface WasmSession {
 // only the surface we call.
 interface GoRuntime {
   importObject: WebAssembly.Imports;
-  run(instance: WebAssembly.Instance): void;
+  run(instance: WebAssembly.Instance): Promise<void>;
 }
 
 // evalWasmExec runs the wasm_exec.js source for its side effect of
@@ -181,8 +181,13 @@ async function instantiateEngine(
   // exported callbacks alive. It registers globalThis.mdsmith
   // synchronously during startup, so we grab the factory reference
   // immediately after. The engine loads exactly once per module, so
-  // there is no second instance to race the global.
-  go.run(instance);
+  // there is no second instance to race the global. The returned
+  // Promise can still reject if Go panics; guard it so a panic
+  // surfaces as a logged error instead of an unhandled rejection that
+  // would crash Bun/Electron.
+  void go.run(instance).catch((err: unknown) => {
+    console.error("mdsmith: the WASM runtime exited unexpectedly", err);
+  });
 
   const factory = (globalThis as unknown as { mdsmith?: MdsmithFactory })
     .mdsmith;
