@@ -53,6 +53,14 @@ function asEnum<T extends string>(
     : undefined;
 }
 
+// coerceRunMode validates an arbitrary value — a stored JSON field or a
+// UI dropdown selection — against the allowed run modes, falling back to
+// the default for anything unexpected (so an out-of-set value can never
+// be persisted as the run mode).
+export function coerceRunMode(v: unknown): RunMode {
+  return asEnum<RunMode>(v, RUN_MODES) ?? DEFAULTS.runMode;
+}
+
 // normalize takes whatever loadData() returned (null, a partial object,
 // or a hand-edited file with junk values) and produces a clean
 // MdsmithSettings. Unknown keys are dropped so saveData round-trips
@@ -65,7 +73,7 @@ export function normalize(raw: unknown): MdsmithSettings {
   >;
   return {
     configPath: asString(src.configPath) ?? DEFAULTS.configPath,
-    runMode: asEnum<RunMode>(src.runMode, RUN_MODES) ?? DEFAULTS.runMode,
+    runMode: coerceRunMode(src.runMode),
     fixOnSave: asBool(src.fixOnSave) ?? DEFAULTS.fixOnSave,
   };
 }
@@ -152,7 +160,7 @@ export class MdsmithSettingTab extends PluginSettingTab {
           dd.addOption("off", "Off");
           dd.setValue(this.host.settings.runMode);
           dd.onChange(async (v) => {
-            await write({ runMode: (v as RunMode) ?? DEFAULTS.runMode });
+            await write({ runMode: coerceRunMode(v) });
           });
         },
       );

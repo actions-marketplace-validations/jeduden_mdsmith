@@ -10,6 +10,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   classifyChange,
+  coerceRunMode,
   DEFAULTS,
   type MdsmithSettings,
   normalize,
@@ -97,5 +98,18 @@ describe("classifyChange", () => {
         runMode: "off",
       }),
     ).toBe("restart");
+  });
+});
+
+describe("coerceRunMode", () => {
+  test("accepts the allowed run modes and rejects anything else", () => {
+    expect(coerceRunMode("onType")).toBe("onType");
+    expect(coerceRunMode("onSave")).toBe("onSave");
+    expect(coerceRunMode("off")).toBe("off");
+    // An unexpected dropdown selection or stored value falls back to the
+    // default instead of being persisted verbatim.
+    expect(coerceRunMode("garbage")).toBe("onSave");
+    expect(coerceRunMode(undefined)).toBe("onSave");
+    expect(coerceRunMode(123)).toBe("onSave");
   });
 });
