@@ -219,12 +219,12 @@ mdsmith check .   # lint every Markdown file; non-zero exit on failure (CI-ready
 mdsmith fix .     # auto-fix what fixes cleanly, in place
 ```
 
-`check` prints each problem — location, rule, and the offending line
-with a caret under the column — then a summary, exiting non-zero:
+`check` prints each problem — location, rule, and a source snippet
+with a caret under the offending column — then a summary, exiting non-zero:
 
 ```text
-docs/guide.md:3:81 MDS001 line too long (95 > 80)
-3 | This sentence is written deliberately long so that it spills well past the eighty-column limit.
+docs/guide.md:1:81 MDS001 line too long (89 > 80)
+1 | # This heading runs deliberately long so that it spills well past the eighty-column limit
 ····················································································^
 stats: checked=1 fixed=0 failures=1 unfixed=1
 ```
