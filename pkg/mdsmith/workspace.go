@@ -37,6 +37,18 @@ type Workspace interface {
 	FS() fs.FS
 }
 
+// mutableWorkspace is the optional overlay interface a [Workspace] can
+// implement to accept buffer edits through [Session.Invalidate]. The
+// session calls Set to shadow a path with open-document bytes and Delete
+// to drop a path. A workspace that does not implement it (e.g. a bare
+// OSWorkspace) re-reads disk instead. MemWorkspace and the LSP's overlay
+// workspace satisfy it, so the session reaches both without a concrete
+// type assertion — see [Session.Invalidate].
+type mutableWorkspace interface {
+	Set(path string, data []byte)
+	Delete(path string)
+}
+
 // OSWorkspace reads from the host filesystem. It is the native
 // implementation used by the CLI and the LSP server. The zero value is
 // usable and reads paths exactly as passed (absolute or relative to the

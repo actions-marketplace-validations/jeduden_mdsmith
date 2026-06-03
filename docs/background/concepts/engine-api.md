@@ -70,6 +70,19 @@ The `MemWorkspace` is the only filesystem under WASM. See [open
 namespace and capabilities](#open-namespace-and-capabilities) for how
 the native-only set stays in lock-step despite the gap.
 
+Three more native-only methods serve the LSP server. `CheckVersion`
+takes the editor's `textDocument` version, so the [version-keyed parse
+cache](#caching) can serve a re-lint at the same version without
+re-parsing. `FixRule` applies one rule's fixes for a quick-fix
+lightbulb. `ResolveFile` returns the raw per-rule resolution the `kinds
+why` command walks:
+
+```go
+func (s *Session) CheckVersion(uri string, source []byte, version int) ([]Diagnostic, error)
+func (s *Session) FixRule(uri string, source []byte, names []string) (FixResult, error)
+func (s *Session) ResolveFile(uri string, fmKinds []string, fmFields map[string]any) *config.FileResolution
+```
+
 Introspection and lifecycle round out the surface:
 
 ```go
@@ -147,25 +160,34 @@ method is allowed once it joins that allowlist.
 
 ## Caching
 
-The session owns three caches, all session-scoped:
+The session owns four caches, all session-scoped:
 
-- **Parsed AST.** One entry per URI, holding the last
-  `(content-hash, document)` pair. The next `Check` on the same URI
-  with the same content reuses it. The first `Check` parses; later
-  `Check` and `Fix` on the same source skip the parse.
+- **Check results.** One entry per URI, holding the last
+  `(content-hash, diagnostics)` pair. The next `Check` on the same URI
+  with the same content reuses it without re-parsing or re-linting; a
+  no-op `Fix` reuses it too.
+- **Version-keyed parse.** One parsed document per URI, keyed by the
+  editor's `textDocument` version. `CheckVersion` serves it, so a
+  re-lint at the same version (a code action, a hover) skips the parse.
+  An edit bumps the version and misses, forcing a re-parse. This is the
+  per-keystroke cache the LSP latency gate depends on.
+- **Cross-file read.** The engine read cache shared across operations,
+  so a catalog or include target read by one buffer is not re-read by
+  the next on every keystroke.
 - **Compiled config.** Built once at `NewSession`. A config change
   needs `Dispose()` plus a new `NewSession`; there is no in-place
   reconfigure.
-- **Workspace `ReadFile` results.** Keyed by path.
 
 `Invalidate(uri)` signals that `uri` changed. With a `content` argument
-it rewrites that file in a `MemWorkspace`, so the next cross-file
-`Check` reads the new bytes. `OSWorkspace` ignores `content` and
-re-reads disk; a no-`content` call on a `MemWorkspace` deletes the
-entry (file removed). Invalidate then drops every cached `Check`
-result, not only `uri`'s. A changed file can feed any other through a
-cross-file rule (catalog, include, links), and the session keeps no
-dependency graph, so a stale dependent must never be served.
+it rewrites that file through the workspace's mutable overlay, so the
+next cross-file `Check` reads the new bytes — this is how the LSP's
+unsaved-buffer bytes reach catalog, include, and link rules. A bare
+`OSWorkspace` has no overlay and re-reads disk; a no-`content` call on a
+mutable workspace deletes the entry (file removed). Invalidate drops the
+changed path's read-cache and version-parse entries, then drops every
+cached `Check` result, not only `uri`'s. A changed file can feed any
+other through a cross-file rule, and the session keeps no dependency
+graph, so a stale dependent must never be served.
 
 ## WASM bindings
 

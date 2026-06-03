@@ -15,6 +15,7 @@ package mdsmith
 import (
 	"bytes"
 	"hash/fnv"
+	"path/filepath"
 	"sync"
 
 	"github.com/jeduden/mdsmith/internal/bytelimit"
@@ -127,6 +128,22 @@ type Session struct {
 	// source). The test seam parseCount reads it; the bench asserts
 	// steady-state stays under half the cold-start time.
 	parses int
+
+	// runCache is the engine-owned cross-file read cache shared across
+	// every operation on this session, so two host buffers that catalog
+	// over the same tree do not each re-read the matched targets. The
+	// LSP relies on this surviving across per-keystroke CheckVersion
+	// calls; Invalidate drops the changed path's entry. Created once in
+	// NewSession.
+	runCache *lint.RunCache
+	// parseCache memoizes the parsed *lint.File for a document keyed by
+	// (uri, version). CheckVersion installs it on the runner so a repeat
+	// Check at the same version skips the parse — the plan-216 contract
+	// the LSP latency gate depends on. Invalidate drops the path's entry.
+	parseCache *lint.ParseCache
+	// parseHits counts version-keyed parse-cache hits CheckVersion
+	// observed. Test seam (parseCacheHits); not part of the public API.
+	parseHits int
 }
 
 // cachedCheck is one memoized Check result: the content hash it was
@@ -172,6 +189,8 @@ func NewSession(opts SessionOptions) (*Session, error) {
 		rootDir:    rootDirOf(opts.Workspace),
 		maxBytes:   bytelimit.DefaultMaxInputBytes,
 		checkCache: make(map[string]cachedCheck),
+		runCache:   lint.NewRunCache(),
+		parseCache: lint.NewParseCache(),
 	}, nil
 }
 
@@ -199,7 +218,37 @@ func (s *Session) newRunner() *engine.Runner {
 		MaxInputBytes:    s.maxBytes,
 		SourceFS:         s.ws.FS(),
 		ConfigPath:       s.cfgPath,
+		// Shared cross-file read cache: a catalog/include target read by
+		// one operation is reused by the next until Invalidate drops it.
+		RunCache: s.runCache,
 	}
+}
+
+// CheckVersion lints source for uri at the editor's textDocument
+// version and returns its diagnostics. It is the LSP-facing per-
+// keystroke entry point: the session's version-keyed parse cache serves
+// the parsed document when a prior call already parsed (uri, version),
+// so the engine skips re-parsing on a re-lint at the same version (the
+// plan-216 contract). An edit bumps the version, which misses the cache
+// and re-parses. uri is workspace-relative, matching config globs.
+//
+// Cross-file rules read through the session workspace's FS view, so an
+// open-document overlay applied through Invalidate reaches them — the
+// LSP's unsaved-buffer bytes feed catalog/include/link rules.
+func (s *Session) CheckVersion(uri string, source []byte, version int) ([]Diagnostic, error) {
+	// Record a parse-cache hit for the test seam before delegating: the
+	// runner re-probes internally, but counting here keeps the seam off
+	// the engine's API. The extra map lookup is negligible against a
+	// parse and only on the version path.
+	if _, ok := s.parseCache.Get(uri, version); ok {
+		s.mu.Lock()
+		s.parseHits++
+		s.mu.Unlock()
+	}
+	r := s.newRunner()
+	r.ParseCache = s.parseCache
+	res := r.RunSourceWithVersion(uri, source, version)
+	return toDiagnostics(res.Diagnostics), firstError(res.Errors)
 }
 
 // Check lints source (the in-memory bytes for uri) and returns its
@@ -286,6 +335,36 @@ func (s *Session) Fix(uri string, source []byte) (FixResult, error) {
 	}, nil
 }
 
+// FixRule applies only the named fixable rules to source and returns
+// the rewritten bytes plus a Changed flag. It is the LSP per-rule
+// quick-fix entry point (today's fix.SourceWithRules): a lightbulb that
+// fixes one rule's violations rewrites the document through this without
+// disturbing other rules. An empty names slice is a no-op.
+//
+// FixRule does not re-lint — the quick-fix path needs only the bytes and
+// whether they changed — so Diagnostics on the result is always nil.
+// Cross-file rules read through the session workspace's FS view, so an
+// open-document overlay (Invalidate) reaches them.
+func (s *Session) FixRule(uri string, source []byte, names []string) (FixResult, error) {
+	fixed, err := fixpkg.SourceWithRules(fixpkg.SourceOptions{
+		Config:           s.cfg,
+		Rules:            s.rules,
+		Path:             uri,
+		Source:           source,
+		RootDir:          s.rootDir,
+		StripFrontMatter: frontMatterEnabled(s.cfg),
+		MaxInputBytes:    s.maxBytes,
+		SourceFS:         s.ws.FS(),
+	}, names)
+	if err != nil {
+		return FixResult{}, err
+	}
+	return FixResult{
+		Source:  string(fixed),
+		Changed: !bytes.Equal(fixed, source),
+	}, nil
+}
+
 // Kinds resolves the kind list and effective rule configuration for
 // uri, including per-leaf provenance. It reads the file's bytes through
 // the workspace to parse its front matter (the `kinds:` list and any
@@ -364,10 +443,11 @@ func capabilityList() []string {
 }
 
 // Invalidate signals that uri changed. With a content argument it
-// rewrites uri in the workspace (when the workspace is a MemWorkspace)
-// so the next cross-file Check reads the new bytes; an OSWorkspace
-// ignores content and re-reads disk. A no-content call on a
-// MemWorkspace deletes the file (it was removed).
+// rewrites uri in the workspace (when the workspace implements the
+// mutable Set/Delete overlay — MemWorkspace and the LSP's buffer
+// overlay do) so the next cross-file Check reads the new bytes; a bare
+// OSWorkspace ignores content and re-reads disk. A no-content call on a
+// mutable workspace deletes the file (it was removed).
 //
 // It then drops every cached Check result, not only uri's: a changed
 // file can affect any file that reads it through a cross-file rule
@@ -376,7 +456,13 @@ func capabilityList() []string {
 // reuse the cache buys is a within-session optimisation; correctness
 // after an edit wins.
 func (s *Session) Invalidate(uri string, content ...[]byte) {
-	if mw, ok := s.ws.(*MemWorkspace); ok {
+	// Route the open-document bytes through the Workspace's mutable
+	// interface (Set/Delete) rather than a hardcoded *MemWorkspace type
+	// assertion, so any buffer-overlay workspace — the LSP's, which
+	// shadows disk with unsaved-buffer content — receives the edit and
+	// its cross-file rules read the new bytes (footgun 3). An OSWorkspace
+	// (no Set/Delete) re-reads disk, so only the caches below drop.
+	if mw, ok := s.ws.(mutableWorkspace); ok {
 		switch {
 		case len(content) > 0:
 			mw.Set(uri, content[0])
@@ -384,9 +470,26 @@ func (s *Session) Invalidate(uri string, content ...[]byte) {
 			mw.Delete(uri)
 		}
 	}
+	// Drop the engine caches for the changed path so the next operation
+	// re-reads and re-parses it: the cross-file read cache (keyed by the
+	// absolute path catalog/include compute) and the version-keyed parse
+	// cache (keyed by the workspace-relative uri).
+	s.runCache.Invalidate(s.absPath(uri))
+	s.parseCache.Invalidate(uri)
 	s.mu.Lock()
 	clear(s.checkCache)
 	s.mu.Unlock()
+}
+
+// absPath maps a workspace-relative uri to the absolute path the engine
+// read cache keys catalog/include reads by. With no rootDir (a
+// MemWorkspace, or an unrooted OSWorkspace) the uri is returned
+// unchanged — the cache keys it the same way the rules do.
+func (s *Session) absPath(uri string) string {
+	if s.rootDir == "" || filepath.IsAbs(uri) {
+		return uri
+	}
+	return filepath.Join(s.rootDir, filepath.FromSlash(uri))
 }
 
 // Dispose releases the session's caches. The session must not be used
@@ -404,6 +507,14 @@ func (s *Session) parseCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.parses
+}
+
+// parseCacheHits returns the number of version-keyed parse-cache hits
+// CheckVersion observed. Test seam, not part of the public API.
+func (s *Session) parseCacheHits() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.parseHits
 }
 
 // frontMatterEnabled reports whether front-matter stripping is on for
