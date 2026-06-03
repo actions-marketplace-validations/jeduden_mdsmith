@@ -132,6 +132,54 @@ func TestStartSingletonWatchSupersedesAndNotifies(t *testing.T) {
 	assert.Equal(t, workspaceKey("/work/space"), claimedKey, "must claim under the workspace key")
 	assert.Contains(t, buf.String(), "mdsmith/superseded",
 		"must notify the editor before exiting so its client does not restart us")
+	assert.Contains(t, buf.String(), `"reason":"superseded"`,
+		"must serialize the superseded reason payload the supersededParams struct declares")
+}
+
+func TestStartSingletonWatchNoopWithoutClaimSeam(t *testing.T) {
+	t.Parallel()
+	s := New(Options{Reader: nil, Writer: io.Discard, Rules: rule.All()})
+	s.instanceID = "me" // set, but the registry seam is not wired
+	s.singletonClaim = nil
+	s.singletonCurrent = func(string) string {
+		t.Error("must not start a watcher when the claim seam is nil")
+		return ""
+	}
+	s.startSingletonWatch("/work/space") // must not panic on the nil seam
+	time.Sleep(20 * time.Millisecond)
+}
+
+func TestStartSingletonWatchClaimsOnlyOnce(t *testing.T) {
+	t.Parallel()
+	s := New(Options{Reader: nil, Writer: io.Discard, Rules: rule.All()})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	s.runCtx = ctx
+	s.instanceID = "me"
+	s.singletonInterval = time.Hour // keep the watcher idle
+	var claims int
+	s.singletonClaim = func(string, string) error {
+		claims++
+		return nil
+	}
+	s.singletonCurrent = func(string) string { return "me" }
+
+	s.startSingletonWatch("/work/space")
+	s.startSingletonWatch("/work/space") // a stray re-initialize must not re-claim
+	s.startSingletonWatch("/other")      // nor one with a different root
+	assert.Equal(t, 1, claims, "claim is guarded by the watch Once, so it runs exactly once")
+}
+
+func TestNewDefaultOnSupersededExitCallsOsExit(t *testing.T) {
+	orig := osExit
+	t.Cleanup(func() { osExit = orig })
+	var called bool
+	var code int
+	osExit = func(c int) { called, code = true, c }
+	s := New(Options{Reader: nil, Writer: io.Discard, Rules: rule.All()})
+	s.onSupersededExit() // run the real default closure New() installed
+	assert.True(t, called, "the default onSupersededExit must exit the process")
+	assert.Equal(t, 0, code, "must exit cleanly so the editor does not treat it as a crash")
 }
 
 func TestStartSingletonWatchKeepsRunningWhenClaimFails(t *testing.T) {
@@ -271,6 +319,17 @@ func TestFileRegistryClaimErrorsWhenTempPathIsDir(t *testing.T) {
 	// WriteFile step fail.
 	require.NoError(t, os.Mkdir(r.path("k")+"."+"id"+".tmp", 0o755))
 	assert.Error(t, r.claim("k", "id"))
+}
+
+func TestFileRegistryClaimRemovesTempOnRenameFailure(t *testing.T) {
+	t.Parallel()
+	r := fileRegistry{dir: t.TempDir()}
+	// A directory at the owner path makes os.Rename(tmp, owner) fail
+	// (can't rename a file onto a directory) after WriteFile succeeds.
+	require.NoError(t, os.Mkdir(r.path("k"), 0o755))
+	assert.Error(t, r.claim("k", "id"))
+	_, statErr := os.Stat(r.path("k") + "." + "id" + ".tmp")
+	assert.True(t, os.IsNotExist(statErr), "a failed claim must not leave its temp file behind")
 }
 
 func TestFileRegistryCurrentEmptyWhenNotReadable(t *testing.T) {

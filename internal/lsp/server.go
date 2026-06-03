@@ -236,12 +236,14 @@ func New(opts Options) *Server {
 		// with its own context. Tests override these seams.
 		runCtx:         context.Background(),
 		parentAlive:    processAlive,
-		onParentExit:   func() { os.Exit(0) },
+		onParentExit:   func() { osExit(0) },
 		parentInterval: parentPollInterval,
 		// Workspace-singleton defaults; the registry seams are wired
 		// only when the feature is enabled so unit tests stay hermetic.
+		// onParentExit and onSupersededExit share the osExit seam
+		// (singleton.go) so both default closures are unit-testable.
 		singletonInterval: singletonPollInterval,
-		onSupersededExit:  func() { os.Exit(0) },
+		onSupersededExit:  func() { osExit(0) },
 	}
 	if opts.EnableWorkspaceSingleton {
 		s.instanceID = newInstanceID()

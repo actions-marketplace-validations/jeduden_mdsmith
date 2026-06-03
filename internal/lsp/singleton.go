@@ -19,6 +19,11 @@ import (
 var (
 	randRead     = rand.Read
 	userCacheDir = os.UserCacheDir
+	// osExit is the process-exit seam shared by the parent-process and
+	// workspace-singleton watchdogs (see server.go). Overriding it lets
+	// tests exercise the default exit closures without terminating the
+	// test binary.
+	osExit = os.Exit
 )
 
 // singletonPollInterval is how often the workspace-singleton watcher
@@ -69,23 +74,29 @@ func watchSingleton(
 //
 // It is a no-op without a workspace root or instanceID (the feature is
 // off, or the client sent no rootUri); New only sets instanceID when it
-// also wires the registry seams, so the two travel together. A failed
-// claim leaves the server running without singleton protection rather
-// than risking it stepping itself aside on a transient registry error.
+// also wires the registry seams, so the two travel together (the nil
+// guard is belt-and-suspenders for a hand-built Server). A failed claim
+// leaves the server running without singleton protection rather than
+// risking it stepping itself aside on a transient registry error.
 func (s *Server) startSingletonWatch(root string) {
-	if root == "" || s.instanceID == "" {
+	if root == "" || s.instanceID == "" || s.singletonClaim == nil {
 		return
 	}
-	key := workspaceKey(root)
-	// Claim the workspace under this instance's id, overwriting any
-	// previous owner. Whichever server initialized most recently — the
-	// window the user just opened or reloaded — wins; an older server
-	// for the same workspace sees a different owner on its next poll.
-	if err := s.singletonClaim(key, s.instanceID); err != nil {
-		s.logger.Printf("lsp: workspace singleton claim failed: %v", err)
-		return
-	}
+	// Claim and watch exactly once. A spec-compliant client sends a
+	// single initialize, but guarding the claim with the watcher's Once
+	// means a stray second initialize cannot re-assert this (possibly
+	// already-superseded) server's ownership and invert newest-wins.
 	s.singletonWatchOnce.Do(func() {
+		key := workspaceKey(root)
+		// Claim the workspace under this instance's id, overwriting any
+		// previous owner. Whichever server initialized most recently —
+		// the window the user just opened or reloaded — wins; an older
+		// server for the same workspace sees a different owner on its
+		// next poll.
+		if err := s.singletonClaim(key, s.instanceID); err != nil {
+			s.logger.Printf("lsp: workspace singleton claim failed: %v", err)
+			return
+		}
 		go watchSingleton(s.runCtx, key, s.instanceID, s.singletonInterval, s.singletonCurrent, func() {
 			s.logger.Printf("lsp: superseded by a newer server for this workspace; exiting")
 			s.shutdown.Store(true)
@@ -164,7 +175,13 @@ func (r fileRegistry) claim(key, id string) error {
 	if err := os.WriteFile(tmp, []byte(id), 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, r.path(key))
+	if err := os.Rename(tmp, r.path(key)); err != nil {
+		// Best-effort: drop the temp file so a failed claim does not
+		// leave an orphan in the shared registry dir.
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // current returns the instance id currently recorded for key, or "" if

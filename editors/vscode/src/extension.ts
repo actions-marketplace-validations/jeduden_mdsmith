@@ -175,21 +175,25 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 
   client = new LanguageClient("mdsmith", "mdsmith", serverOptions, clientOptions);
 
+  // Listen for the server announcing that a newer instance for this
+  // workspace has taken over. Marking the error handler turns the
+  // imminent connection close into a no-restart, so this (now orphaned)
+  // editor host stops respawning a server the newer one immediately
+  // supersedes again. See the newest-wins workspace singleton in
+  // internal/lsp/singleton.go. Registered BEFORE start() so the
+  // notification can never land in the gap between start() resolving
+  // and handler registration — vscode-languageclient buffers pre-start
+  // notification handlers.
+  client.onNotification("mdsmith/superseded", () => {
+    errorHandler.markSuperseded();
+    getOutputChannel().appendLine(
+      "mdsmith: a newer server has taken over this workspace; " +
+        "stopping this instance (it will not be restarted)."
+    );
+  });
+
   try {
     await client.start();
-    // After a successful start, listen for the server announcing that a
-    // newer instance for this workspace has taken over. Marking the
-    // error handler turns the imminent connection close into a
-    // no-restart, so this (now orphaned) editor host stops respawning a
-    // server that the newer one immediately supersedes again. See the
-    // newest-wins workspace singleton in internal/lsp/singleton.go.
-    client.onNotification("mdsmith/superseded", () => {
-      errorHandler.markSuperseded();
-      getOutputChannel().appendLine(
-        "mdsmith: a newer server has taken over this workspace; " +
-          "stopping this instance (it will not be restarted)."
-      );
-    });
   } catch (err) {
     // start() rejected — leave the LanguageClient referenceable
     // briefly so the user can hit "Show Output" to read the
