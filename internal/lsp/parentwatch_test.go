@@ -67,6 +67,18 @@ func TestStartParentWatchNoopWithoutPID(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 }
 
+func TestNewDefaultOnParentExitCallsOsExit(t *testing.T) {
+	orig := osExit
+	t.Cleanup(func() { osExit = orig })
+	var called bool
+	var code int
+	osExit = func(c int) { called, code = true, c }
+	s := New(Options{Reader: nil, Writer: io.Discard, Rules: rule.All()})
+	s.onParentExit() // run the real default closure New() installed
+	assert.True(t, called, "the default onParentExit must exit the process")
+	assert.Equal(t, 0, code)
+}
+
 func TestStartParentWatchNoExitWhileParentAlive(t *testing.T) {
 	t.Parallel()
 	s := New(Options{Reader: nil, Writer: io.Discard, Rules: rule.All()})
