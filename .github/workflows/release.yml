@@ -267,9 +267,10 @@ jobs:
     #
     # No publisher tokens and no `release` environment: the only channel
     # is GitHub Releases (plan 217 Non-Goals), so there is nothing to
-    # gate. The plugin manifests are not in the tracked-manifest set, so
-    # the version is stamped into the in-checkout copies here (for the
-    # zip only) rather than by `mdsmith-release stamp`.
+    # gate. The plugin manifests (editors/obsidian/{manifest,package}.json)
+    # are in the tracked-manifest set, so `mdsmith-release stamp` rewrites
+    # their dev sentinel to the release version alongside the rest of the
+    # tracked set; only this job's zip carries the result.
     needs: [preflight]
     if: *release_repo_trigger_ok
     runs-on: ubuntu-latest
@@ -282,17 +283,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Stamp the plugin manifests with the release version
+      - name: Stamp the manifests with the release version
         env:
           VERSION: ${{ env.VERSION }}
-        working-directory: editors/obsidian
-        # Rewrite the dev-sentinel version in manifest.json and
-        # package.json to the release tag (without the leading v). These
-        # copies are ephemeral (the checkout is discarded after the
-        # run); only the zip carries them.
-        run: |
-          ver="${VERSION#v}"
-          node -e "for (const f of ['manifest.json','package.json']) { const j = require('./'+f); j.version = process.argv[1]; require('fs').writeFileSync(f, JSON.stringify(j, null, 2) + '\n'); }" "$ver"
+        # Runtime logic lives in mdsmith-release per
+        # docs/development/release-tooling.md. stamp rewrites every
+        # tracked manifest's dev sentinel to the release tag (the obsidian
+        # manifest.json/package.json among them); the checkout is
+        # discarded after the run, so only the zip built below ships the
+        # stamped files.
+        run: go run ./cmd/mdsmith-release stamp "${VERSION#v}"
       - name: Install plugin dependencies
         working-directory: editors/obsidian
         # --ignore-scripts neutralizes install-time hooks (see the npm
