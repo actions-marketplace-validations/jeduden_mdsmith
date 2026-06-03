@@ -187,11 +187,29 @@ func NewSession(opts SessionOptions) (*Session, error) {
 		cfgPath:    src.configPath(),
 		rules:      rule.All(),
 		rootDir:    rootDirOf(opts.Workspace),
-		maxBytes:   bytelimit.DefaultMaxInputBytes,
+		maxBytes:   resolveSessionMaxBytes(cfg),
 		checkCache: make(map[string]cachedCheck),
 		runCache:   lint.NewRunCache(),
 		parseCache: lint.NewParseCache(),
 	}, nil
+}
+
+// resolveSessionMaxBytes resolves the session's input byte cap from the
+// config's max-input-size, mirroring cmd/mdsmith's resolveMaxInputBytes
+// and the LSP's: an empty setting yields the default 2 MB cap, "0" means
+// unlimited, and any other value is the parsed byte count. An
+// unparseable value falls back to the default (the CLI surfaces the
+// parse error separately at flag time; the session, like the LSP, stays
+// lenient and uses the default so a bad config does not wedge linting).
+func resolveSessionMaxBytes(cfg *config.Config) int64 {
+	if cfg == nil || cfg.MaxInputSize == "" {
+		return bytelimit.DefaultMaxInputBytes
+	}
+	n, err := config.ParseSize(cfg.MaxInputSize)
+	if err != nil {
+		return bytelimit.DefaultMaxInputBytes
+	}
+	return n
 }
 
 // rootDirOf returns the workspace root to anchor RootDir-dependent
@@ -484,6 +502,16 @@ func (s *Session) Invalidate(uri string, content ...[]byte) {
 	s.mu.Lock()
 	clear(s.checkCache)
 	s.mu.Unlock()
+}
+
+// InvalidateWikilinks drops the cross-file read cache's wikilink index
+// so the next Check rebuilds the candidate set. The LSP calls it when a
+// watched file is created or deleted: a wikilink like `[[NewPage]]`
+// would otherwise resolve against the pre-change set. It is the
+// workspace-shape sibling of [Session.Invalidate], which drops a single
+// path's cached content.
+func (s *Session) InvalidateWikilinks() {
+	s.runCache.InvalidateWikilinks()
 }
 
 // absPath maps a workspace-relative uri to the absolute path the engine

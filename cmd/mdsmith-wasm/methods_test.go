@@ -20,12 +20,13 @@ import (
 // without exposing it in JS still fails, while a native-only addition
 // is allowed once it is listed here.
 var nativeOnlyMethods = map[string]bool{
-	"checkPaths":   true,
-	"checkSource":  true,
-	"checkVersion": true,
-	"fixPaths":     true,
-	"fixRule":      true,
-	"resolveFile":  true,
+	"checkPaths":          true,
+	"checkSource":         true,
+	"checkVersion":        true,
+	"fixPaths":            true,
+	"fixRule":             true,
+	"invalidateWikilinks": true,
+	"resolveFile":         true,
 }
 
 // TestSessionMethodSetMatchesGo asserts the JS session proxy's method

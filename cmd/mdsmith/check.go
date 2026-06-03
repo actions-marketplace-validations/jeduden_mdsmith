@@ -130,9 +130,23 @@ func checkFiles(fileArgs []string, opts checkCLIOpts) int {
 func checkBatchOptions(opts checkCLIOpts, logger *vlog.Logger, maxBytes int64) mdsmith.BatchOptions {
 	return mdsmith.BatchOptions{
 		Explain:       opts.explain,
-		MaxInputBytes: maxBytes,
+		MaxInputBytes: batchMaxBytes(maxBytes),
 		Logger:        logger,
 	}
+}
+
+// batchMaxBytes maps the CLI's fully-resolved max-input-size (config
+// merged with the --max-input-size flag) onto BatchOptions.MaxInputBytes,
+// which treats 0 as "use the session default". The CLI value is always
+// authoritative, and resolveMaxInputBytes returns 0 for an explicit
+// `max-input-size: 0` (unlimited) — so map that to math.MaxInt64, the
+// engine's explicit-unlimited sentinel, to keep it authoritative and
+// non-zero rather than silently falling back to the 2 MB default.
+func batchMaxBytes(resolved int64) int64 {
+	if resolved <= 0 {
+		return math.MaxInt64
+	}
+	return resolved
 }
 
 // checkStdin reads from stdin, lints the content, and returns the appropriate

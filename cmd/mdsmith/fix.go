@@ -163,7 +163,7 @@ func runFixThroughSession(
 	defer sess.Dispose()
 	fixResult := sess.FixPaths(files, mdsmith.BatchOptions{
 		Explain:       opts.explain,
-		MaxInputBytes: maxBytes,
+		MaxInputBytes: batchMaxBytes(maxBytes),
 		Logger:        logger,
 		DryRun:        opts.dryRun,
 	})

@@ -84,14 +84,14 @@ it affects, not after:
 
 - [x] `cmd/mdsmith` check, fix, and kinds construct a
       `pkg/mdsmith.Session`.
-- [ ] The LSP uses one `Session` per workspace and invalidates it on
+- [x] The LSP uses one `Session` per workspace and invalidates it on
       document and watched-file changes.
 - [x] `OSWorkspace.ReadFile` and `OSWorkspace.FS` resolve the same
       `uri` to the same file, proven by a test.
 - [x] `Session.Fix` does not re-lint when the fix made no edit.
-- [ ] The LSP's in-memory buffer bytes reach cross-file rules through
+- [x] The LSP's in-memory buffer bytes reach cross-file rules through
       the session (Invalidate carries open-document content).
-- [ ] The CLI end-to-end tests and the LSP p95 latency gate pass.
+- [x] The CLI end-to-end tests and the LSP p95 latency gate pass.
 - [ ] All tests pass: `go test ./...`
 - [ ] `go tool golangci-lint run` reports no issues.
 
