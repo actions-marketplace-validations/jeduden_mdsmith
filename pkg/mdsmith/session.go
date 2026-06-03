@@ -43,6 +43,15 @@ type ConfigSource interface {
 	configPath() string
 }
 
+// alreadyMerged marks a [ConfigSource] whose loadConfig returns a config
+// that is already layered over the defaults (and may carry caller
+// injected settings). NewSession uses the as-is config for such a
+// source instead of re-merging. [ConfigCompiled] is the only
+// implementation today.
+type alreadyMerged interface {
+	alreadyMerged()
+}
+
 // ConfigYAML is a [ConfigSource] backed by an inline YAML string. An
 // empty string yields a mostly-default config.
 type ConfigYAML string
@@ -62,6 +71,29 @@ func (c ConfigPath) loadConfig() (*config.Config, error) {
 }
 
 func (c ConfigPath) configPath() string { return string(c) }
+
+// ConfigCompiled is a [ConfigSource] backed by an already-merged
+// *config.Config plus the path it was loaded from (empty for none). Use
+// it when the caller has already loaded and merged the configuration and
+// applied its own side effects to it — the CLI's loadConfig injects
+// build recipes (for MDS040) and installs the include-extract projector,
+// then hands the resulting config straight to a Session. NewSession
+// takes a compiled source as-is and does not re-merge it over defaults,
+// so those injected settings survive.
+func ConfigCompiled(cfg *config.Config, path string) ConfigSource {
+	return compiledConfig{cfg: cfg, path: path}
+}
+
+// compiledConfig is the [ConfigSource] returned by [ConfigCompiled]. It
+// implements alreadyMerged so NewSession skips the defaults merge.
+type compiledConfig struct {
+	cfg  *config.Config
+	path string
+}
+
+func (c compiledConfig) loadConfig() (*config.Config, error) { return c.cfg, nil }
+func (c compiledConfig) configPath() string                  { return c.path }
+func (c compiledConfig) alreadyMerged()                      {}
 
 // SessionOptions configures a [Session].
 type SessionOptions struct {
@@ -122,7 +154,15 @@ func NewSession(opts SessionOptions) (*Session, error) {
 	// (cmd/mdsmith loadConfigRaw) and the LSP server do. Without this,
 	// a config that omits a rule leaves it disabled rather than at its
 	// default-enabled state, so a bare session would lint nothing.
-	cfg := config.Merge(config.Defaults(), loaded)
+	//
+	// A source that has already merged (ConfigCompiled, used by the CLI
+	// which merges and then injects build recipes / the include-extract
+	// projector onto the result) is taken as-is: re-merging would
+	// recompute rule entries and drop those injected settings.
+	cfg := loaded
+	if _, merged := src.(alreadyMerged); !merged {
+		cfg = config.Merge(config.Defaults(), loaded)
+	}
 	return &Session{
 		ws:         opts.Workspace,
 		cfg:        cfg,
