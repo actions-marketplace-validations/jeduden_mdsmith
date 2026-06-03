@@ -433,16 +433,13 @@ jobs:
           MDSMITH_OBSIDIAN_WASM_DIR: ${{ github.workspace }}/cmd/mdsmith-wasm/dist
         run: bun run build.ts --production
       - name: Package the release zip
-        working-directory: editors/obsidian
-        # Read the version from manifest.json so the artifact name
-        # matches the one the release pipeline expects. The zip carries
-        # the five files Obsidian loads, flat at the top level.
-        run: |
-          version=$(node -p "require('./manifest.json').version")
-          zip -j "mdsmith-obsidian-${version}.zip" \
-            dist/main.js dist/manifest.json dist/styles.css \
-            dist/mdsmith.wasm dist/wasm_exec.js
-          ls -l "mdsmith-obsidian-${version}.zip"
+        # Runtime logic lives in mdsmith-release per
+        # docs/development/release-tooling.md. package-obsidian reads the
+        # version from dist/manifest.json and writes
+        # mdsmith-obsidian-<version>.zip with the five files Obsidian
+        # loads, flat at the top level, via archive/zip (no `zip`
+        # binary). outDir is editors/obsidian so the upload glob matches.
+        run: go run ./cmd/mdsmith-release package-obsidian editors/obsidian/dist editors/obsidian
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mdsmith-obsidian-plugin
