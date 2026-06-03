@@ -115,11 +115,7 @@ func checkFiles(fileArgs []string, opts checkCLIOpts) int {
 		return code
 	}
 
-	sess, err := sessionForCLI(cfg, cfgPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
-		return 2
-	}
+	sess := sessionForCLI(cfg, cfgPath)
 	defer sess.Dispose()
 	result := sess.CheckPaths(files, checkBatchOptions(opts, logger, maxBytes))
 	return reportCheckResult(result, opts, logger)
@@ -175,11 +171,7 @@ func checkStdin(opts checkCLIOpts) int {
 		return 2
 	}
 
-	sess, err := sessionForCLI(cfg, cfgPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
-		return 2
-	}
+	sess := sessionForCLI(cfg, cfgPath)
 	defer sess.Dispose()
 	result := sess.CheckSource("<stdin>", source, checkBatchOptions(opts, logger, maxBytes))
 	return reportCheckResult(result, opts, logger)
@@ -199,11 +191,7 @@ func checkDiscovered(opts checkCLIOpts) int {
 		return 2
 	}
 
-	sess, err := sessionForCLI(cfg, cfgPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
-		return 2
-	}
+	sess := sessionForCLI(cfg, cfgPath)
 	defer sess.Dispose()
 	result := sess.CheckPaths(files, checkBatchOptions(opts, logger, maxBytes))
 	return reportCheckResult(result, opts, logger)

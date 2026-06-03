@@ -332,11 +332,7 @@ func resolveFileFromCLI(path string) (*config.FileResolution, *config.Config, in
 		}
 	}
 
-	sess, err := sessionForCLI(cfg, cfgPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
-		return nil, nil, 2
-	}
+	sess := sessionForCLI(cfg, cfgPath)
 	defer sess.Dispose()
 	return sess.ResolveFile(path, fmKinds, fmFields), cfg, 0
 }

@@ -601,13 +601,18 @@ func frontMatterEnabled(cfg *config.Config) bool {
 // FS view agree on a workspace-relative uri.
 //
 // NewSession only fails when its ConfigSource fails to load; a compiled
-// source cannot, so the returned error is always nil today. It is
-// surfaced anyway so a future fallible source is not silently dropped.
-func sessionForCLI(cfg *config.Config, cfgPath string) (*mdsmith.Session, error) {
-	return mdsmith.NewSession(mdsmith.SessionOptions{
+// source cannot (ConfigCompiled.loadConfig returns the config verbatim
+// with a nil error), so the error is always nil here. Rather than carry
+// a dead, untestable error branch at every call site, the impossible
+// error is dropped — matching the in-tree NewFileFromSource //nolint
+// pattern. If a future compiled source becomes fallible, NewSession's
+// signature forces this line to surface the error again.
+func sessionForCLI(cfg *config.Config, cfgPath string) *mdsmith.Session {
+	sess, _ := mdsmith.NewSession(mdsmith.SessionOptions{ //nolint:errcheck // ConfigCompiled never fails to load
 		Workspace: mdsmith.OSWorkspace{Root: rootDirFromConfig(cfgPath)},
 		Config:    mdsmith.ConfigCompiled(cfg, cfgPath),
 	})
+	return sess
 }
 
 // rootDirFromConfig returns the project root directory derived from the

@@ -155,11 +155,7 @@ func runFixThroughSession(
 	logger *vlog.Logger, files []string, maxBytes int64,
 ) int {
 	files = orderFilesLeavesFirst(files, rootDirFromConfig(cfgPath), maxBytes)
-	sess, err := sessionForCLI(cfg, cfgPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
-		return 2
-	}
+	sess := sessionForCLI(cfg, cfgPath)
 	defer sess.Dispose()
 	fixResult := sess.FixPaths(files, mdsmith.BatchOptions{
 		Explain:       opts.explain,
