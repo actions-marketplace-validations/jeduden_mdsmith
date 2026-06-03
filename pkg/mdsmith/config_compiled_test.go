@@ -40,7 +40,8 @@ func TestConfigCompiledUsedAsIs(t *testing.T) {
 	defer s.Dispose()
 
 	if got := s.cfg.Rules["line-length"].Settings["max"]; got != 999 {
-		t.Fatalf("session config line-length.max = %v, want 999 (compiled config must be used as-is, not re-merged)", got)
+		t.Fatalf("session config line-length.max = %v, want 999 "+
+			"(compiled config must be used as-is, not re-merged)", got)
 	}
 	if s.cfg != merged {
 		t.Fatalf("session should hold the supplied compiled config pointer unchanged")

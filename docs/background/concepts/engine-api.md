@@ -42,13 +42,33 @@ type SessionOptions struct {
 }
 ```
 
-The core operations are thin shims over the engine and the fixer:
+The core operations are thin shims over the engine and the fixer. Each
+takes one URI and its in-memory bytes:
 
 ```go
 func (s *Session) Check(uri string, source []byte) ([]Diagnostic, error)
 func (s *Session) Fix(uri string, source []byte) (FixResult, error)
 func (s *Session) Kinds(uri string) (KindResolution, error)
 ```
+
+Two native-only batch operations lint or fix many files on disk in one
+call. Each drives the engine's parallel path loop and returns its own
+result type. So `cmd/mdsmith` keeps file discovery, ordering, and output
+formatting, but drops its own engine plumbing:
+
+```go
+func (s *Session) CheckPaths(paths []string, opts BatchOptions) *engine.Result
+func (s *Session) FixPaths(paths []string, opts BatchOptions) *fix.Result
+```
+
+`BatchOptions` carries the `--explain` flag, the parallel concurrency
+cap (`GOMAXPROCS` by default), a per-call byte cap, a verbose logger,
+and a dry-run flag for `FixPaths`. These two methods have **no
+JavaScript mirror**: a browser host has no disk, no file walk, and no
+write-back, so it lints single buffers through `Check` / `Fix` instead.
+The `MemWorkspace` is the only filesystem under WASM. See [open
+namespace and capabilities](#open-namespace-and-capabilities) for how
+the native-only set stays in lock-step despite the gap.
 
 Introspection and lifecycle round out the surface:
 
@@ -82,9 +102,27 @@ disk under `GOOS=js GOARCH=wasm`. So the JS `workspace` map becomes a
 `MemWorkspace` once at session construction. It then mutates only
 through `Invalidate(uri, content)`.
 
+A `Workspace` reads through two paths that must agree on which file a
+URI names: `ReadFile` (which `Session.Kinds` uses to read front matter)
+and the `fs.FS` view (which cross-file rules — catalog, include, links —
+read through). `OSWorkspace` carries an optional `Root`; the CLI sets it
+to the project root so workspace-relative URIs match config globs. With
+a `Root`, `ReadFile` resolves a relative URI against it, exactly as the
+`Root`-rooted `fs.FS` does, so the same URI cannot resolve to two
+different files. An absolute path is read unchanged, and an empty `Root`
+reads paths as passed. `MemWorkspace` keys both paths off the same map.
+
 `MemWorkspace.Glob` is a linear key filter. The lint hot loop must not
 call it per file; a benchmark fixture asserts no per-file `Glob` under
 `MemWorkspace`.
+
+The configuration arrives through a `ConfigSource`. `ConfigYAML` carries
+inline YAML (the WASM path) and `ConfigPath` names a `.mdsmith.yml` on
+disk; `NewSession` merges either over the built-in defaults.
+`ConfigCompiled` wraps an already-merged `*config.Config`: the CLI
+loads, merges, injects build recipes, and installs the include-extract
+projector, then hands the result over so those side effects survive. A
+compiled source is taken as-is.
 
 ## Open namespace and capabilities
 
@@ -98,6 +136,14 @@ such as `extract`, `query`, `deps`, `rename`, `hover`, and `completion`
 to both sides without rearranging the existing methods. Each new method
 declares itself once on Go's `Session` and once on the proxied JS
 session — there is no central registry.
+
+`Capabilities()` advertises only the mirrored single-file surface
+(`check`, `fix`, `kinds`). The native-only batch ops (`checkPaths`,
+`fixPaths`) are left off, because a JS host can never call them. A
+native test ties the JS proxy method set to the Go `Session` method set
+minus an explicit native-only allowlist. A new *mirrored* method added
+on one side but not the other fails the build. A new native-only batch
+method is allowed once it joins that allowlist.
 
 ## Caching
 
