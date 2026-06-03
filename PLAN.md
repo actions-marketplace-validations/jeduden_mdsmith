@@ -157,4 +157,5 @@ footer: |
 | 225 | ✅     |        | [Add internal/punkt to the architecture layering map](plan/225_arch-fix-punkt-layering.md)                                              |
 | 230 | ✅     | opus   | [Navigable schema diagnostics in the editor](plan/230_navigable-schema-diagnostics.md)                                                  |
 | 231 | ✅     |        | [LSP newest-wins workspace singleton](plan/231_lsp-workspace-singleton.md)                                                              |
+| 232 | ✅     | opus   | [include heading-offset parameter](plan/232_include-heading-offset.md)                                                                  |
 <?/catalog?>

@@ -42,13 +42,14 @@ for details.
 
 ## Parameters
 
-| Parameter           | Required | Default  | Description                                                                                |
-| ------------------- | -------- | -------- | ------------------------------------------------------------------------------------------ |
-| `file`              | yes      | --       | Relative path to include                                                                   |
-| `extract`           | no       | --       | Dotted path through the extract projection of a kind-typed `file:`. Splices one leaf value |
-| `strip-frontmatter` | no       | `"true"` | Remove YAML frontmatter (incompatible with `extract:`)                                     |
-| `wrap`              | no       | --       | Wrap in code fence (value = language)                                                      |
-| `heading-level`     | no       | --       | `"absolute"`: shift headings to nest under parent (incompatible with `extract:`)           |
+| Parameter           | Required | Default  | Description                                                                                      |
+| ------------------- | -------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `file`              | yes      | --       | Relative path to include                                                                         |
+| `extract`           | no       | --       | Dotted path through the extract projection of a kind-typed `file:`. Splices one leaf value       |
+| `strip-frontmatter` | no       | `"true"` | Remove YAML frontmatter (incompatible with `extract:`)                                           |
+| `wrap`              | no       | --       | Wrap in code fence (value = language)                                                            |
+| `heading-level`     | no       | --       | `"absolute"`: shift headings to nest under parent (incompatible with `extract:`)                 |
+| `heading-offset`    | no       | --       | Signed integer -6 to 6: shift every heading by N (incompatible with `heading-level`, `extract:`) |
 
 ## Link Adjustment
 
@@ -77,6 +78,19 @@ The included file has `## Build` (level 2) and
 
 When the marker sits at document root (no preceding
 heading), no shift is applied.
+
+## Heading-Offset Adjustment
+
+When `heading-offset: "N"` is set, every heading in the
+included content shifts by N levels. `N` is a signed
+integer from -6 to 6. A positive value demotes a heading
+(adds a `#`); a negative value promotes it. Levels are
+capped at the 1-6 range.
+
+Unlike `heading-level: "absolute"`, the shift is fixed. It
+does not read a preceding heading, so it also applies at
+the document root. `heading-offset` cannot combine with
+`heading-level` or `extract:`.
 
 ## Cycle Detection
 
@@ -170,6 +184,20 @@ Details.
 <?/include?>
 ```
 
+### With Heading Offset
+
+Demote every heading in the included file by one level,
+even when no heading precedes the marker:
+
+```markdown
+<?include
+file: features.md
+heading-offset: "1"
+?>
+## Was An H1 In The Source
+<?/include?>
+```
+
 ### With Link Rewriting
 
 Given `DEVELOPMENT.md` in the repo root contains
@@ -208,9 +236,9 @@ ambiguous: the directive surfaces a lint error
 listing the keys. Frontmatter scalars sit under the
 `frontmatter` key: `extract: frontmatter.title`.
 
-`extract:` is incompatible with `strip-frontmatter:`
-and `heading-level:`. The projection returns one
-scalar, so those parameters do not apply.
+`extract:` is incompatible with `strip-frontmatter:`,
+`heading-level:`, and `heading-offset:`. The projection
+returns one scalar, so those parameters do not apply.
 
 ### Bad — Outdated Content
 
@@ -224,23 +252,26 @@ Outdated content
 
 ## Diagnostics
 
-| Condition              | Message                                                                 |
-| ---------------------- | ----------------------------------------------------------------------- |
-| content mismatch       | generated section is out of date                                        |
-| missing file           | include file "x.md" not found                                           |
-| no file param          | include directive missing required "file" parameter                     |
-| absolute path          | include directive has absolute file path                                |
-| escapes root           | include file path escapes project root                                  |
-| no root for dotdot     | include file path contains ".." but project root is not configured      |
-| invalid heading-level  | include directive "heading-level" must be "absolute"                    |
-| empty extract          | include directive "extract" value is empty                              |
-| extract + sfm          | include directive "extract" cannot be combined with "strip-frontmatter" |
-| extract + hl           | include directive "extract" cannot be combined with "heading-level"     |
-| extract miss           | extract: missing key "x" in extract projection                          |
-| extract no kind        | extract: "x.md" has no resolved kind; cannot project a typed value      |
-| extract not conformant | extract: target file does not conform to its schema: ...                |
-| cyclic include         | cyclic include: a.md -> b.md -> a.md                                    |
-| depth exceeded         | include depth exceeds maximum (10)                                      |
+| Condition              | Message                                                                    |
+| ---------------------- | -------------------------------------------------------------------------- |
+| content mismatch       | generated section is out of date                                           |
+| missing file           | include file "x.md" not found                                              |
+| no file param          | include directive missing required "file" parameter                        |
+| absolute path          | include directive has absolute file path                                   |
+| escapes root           | include file path escapes project root                                     |
+| no root for dotdot     | include file path contains ".." but project root is not configured         |
+| invalid heading-level  | include directive "heading-level" must be "absolute"                       |
+| invalid heading-offset | include directive "heading-offset" must be an integer between -6 and 6     |
+| offset + level         | include directive "heading-offset" cannot be combined with "heading-level" |
+| empty extract          | include directive "extract" value is empty                                 |
+| extract + sfm          | include directive "extract" cannot be combined with "strip-frontmatter"    |
+| extract + hl           | include directive "extract" cannot be combined with "heading-level"        |
+| extract + offset       | include directive "extract" cannot be combined with "heading-offset"       |
+| extract miss           | extract: missing key "x" in extract projection                             |
+| extract no kind        | extract: "x.md" has no resolved kind; cannot project a typed value         |
+| extract not conformant | extract: target file does not conform to its schema: ...                   |
+| cyclic include         | cyclic include: a.md -> b.md -> a.md                                       |
+| depth exceeded         | include depth exceeds maximum (10)                                         |
 
 ## Pattern
 

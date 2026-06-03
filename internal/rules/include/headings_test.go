@@ -141,6 +141,90 @@ func TestAdjustHeadings_CodeBlocks(t *testing.T) {
 	}
 }
 
+func TestAdjustHeadingsByOffset(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		offset  int
+		want    string
+	}{
+		{
+			name:    "positive offset demotes ATX headings",
+			content: "# One\n\n## Two\n\nText.\n",
+			offset:  1,
+			want:    "## One\n\n### Two\n\nText.\n",
+		},
+		{
+			name:    "negative offset promotes ATX headings",
+			content: "## Two\n\n### Three\n",
+			offset:  -1,
+			want:    "# Two\n\n## Three\n",
+		},
+		{
+			name:    "offset 0 returns unchanged",
+			content: "## Two\n\n### Three\n",
+			offset:  0,
+			want:    "## Two\n\n### Three\n",
+		},
+		{
+			name:    "negative offset clamps at level 1",
+			content: "# One\n\n## Two\n",
+			offset:  -1,
+			want:    "# One\n\n# Two\n",
+		},
+		{
+			name:    "positive offset clamps at level 6",
+			content: "##### Five\n\n###### Six\n",
+			offset:  2,
+			want:    "###### Five\n\n###### Six\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := adjustHeadingsByOffset(tt.content, tt.offset)
+			assert.Equal(t, tt.want, got,
+				"adjustHeadingsByOffset() =\n%q\nwant:\n%q", got, tt.want)
+		})
+	}
+}
+
+func TestAdjustHeadingsByOffset_SetextAndFences(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		offset  int
+		want    string
+	}{
+		{
+			name:    "setext h1 converted to ATX when shifted",
+			content: "Title\n=====\n\nBody.\n",
+			offset:  1,
+			want:    "## Title\n\nBody.\n",
+		},
+		{
+			name:    "hash lines inside code fence are not shifted",
+			content: "# Real\n\n```bash\n# comment\n```\n",
+			offset:  1,
+			want:    "## Real\n\n```bash\n# comment\n```\n",
+		},
+		{
+			name:    "no headings returns unchanged",
+			content: "Just text.\n\nMore text.\n",
+			offset:  2,
+			want:    "Just text.\n\nMore text.\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := adjustHeadingsByOffset(tt.content, tt.offset)
+			assert.Equal(t, tt.want, got,
+				"adjustHeadingsByOffset() =\n%q\nwant:\n%q", got, tt.want)
+		})
+	}
+}
+
 // --- isResultPrevLineFence ---
 
 // TestIsResultPrevLineFence pins both branches: empty result

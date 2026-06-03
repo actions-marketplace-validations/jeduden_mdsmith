@@ -55,6 +55,11 @@ so they nest under the include site's parent
 heading; omit it to keep source heading levels
 unchanged. No other value is accepted.
 
+`heading-offset: "N"` shifts every included heading by
+the signed integer N (-6 to 6), so it works even with no
+parent heading. It cannot combine with `heading-level`
+or `extract:`.
+
 See the full
 [generating-content guide](../../docs/guides/directives/generating-content.md)
 for sort orders, gitignore filtering, format

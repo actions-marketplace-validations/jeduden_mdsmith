@@ -48,6 +48,20 @@ func adjustHeadings(content string, parentLevel int) string {
 	return strings.Join(result, "\n")
 }
 
+// adjustHeadingsByOffset shifts every heading level in content by offset,
+// clamped to the 1..6 range. An offset of 0 returns content unchanged.
+// Unlike adjustHeadings, the shift is uniform and source-absolute: it does
+// not read a parent heading level and may move headings up (negative
+// offset), so it calls applyShift directly without the "skip when shift
+// <= 0" guard that parent-relative nesting needs.
+func adjustHeadingsByOffset(content string, offset int) string {
+	if offset == 0 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	return strings.Join(applyShift(lines, offset), "\n")
+}
+
 // findMinHeadingLevel scans lines and returns the minimum heading level found,
 // ignoring lines inside fenced code blocks. Returns 0 if no headings are found.
 func findMinHeadingLevel(lines []string) int {
