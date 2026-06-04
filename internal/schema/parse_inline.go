@@ -1117,10 +1117,10 @@ func checkProjectionKind(kind, proj, path string) error {
 }
 
 // setContentBind reads the optional `bind:` override for a content
-// entry. A non-empty value renames the default key (`code` / `items`
-// / `rows` / `text`). The empty form is rejected because a content
-// entry has no children to hoist; users who want to drop the wrapper
-// key should restructure the schema instead.
+// entry. A non-empty value renames the default key (`code` /
+// `inline` / `items` / `rows` / `text`). The empty form is rejected
+// because a content entry has no children to hoist; users who want to
+// drop the wrapper key should restructure the schema instead.
 func setContentBind(ce *ContentEntry, v any, path string) error {
 	s, ok := v.(string)
 	if !ok {

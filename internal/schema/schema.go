@@ -381,7 +381,8 @@ type ContentEntry struct {
 	// paragraph, `code` for a code-block). One of `Projection*`.
 	// `ProjectionInline` emits a paragraph's inline spans as a typed
 	// recursive list and is rejected at parse time on any non-paragraph
-	// kind. Plan 212.
+	// kind; it also defaults the paragraph's extract key to `inline`
+	// instead of `text` (unless `bind:` overrides it). Plan 212.
 	Projection string
 }
 
