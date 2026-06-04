@@ -160,6 +160,23 @@ func TestWalkExtractPath_MultiKeyWithExactlyOneContentKey(t *testing.T) {
 	assert.Equal(t, "Hello", v)
 }
 
+func TestWalkExtractPath_TextAndInlineSiblingsAmbiguous(t *testing.T) {
+	// A scope with both a text-projected and an inline-projected
+	// paragraph yields {text, inline}; both are content keys (plan
+	// 212), so `extract: <section>` without a leaf is ambiguous and
+	// the user must spell out .text or .inline rather than silently
+	// getting the text sibling.
+	data := map[string]any{
+		"section": map[string]any{
+			"text":   "Hello",
+			"inline": []any{map[string]any{"span": "text", "value": "Hi"}},
+		},
+	}
+	_, err := walkExtractPath(data, "section")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous")
+}
+
 // =====================================================================
 // projectExtractValue: wraps walkExtractPath with the host projector
 // =====================================================================
