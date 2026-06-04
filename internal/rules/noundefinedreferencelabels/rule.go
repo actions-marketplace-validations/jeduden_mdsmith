@@ -240,7 +240,7 @@ func (r *Rule) scanFullRefs(
 	f *lint.File,
 	defs []string,
 	spans []byteRange,
-	codeLines, piLines map[int]bool,
+	codeLines, piLines map[int]struct{},
 ) []lint.Diagnostic {
 	source := f.Source
 	var diags []lint.Diagnostic
@@ -267,7 +267,7 @@ func (r *Rule) scanFullRefs(
 			continue
 		}
 		line := f.LineOfOffset(open1)
-		if codeLines[line] || piLines[line] ||
+		if lint.InCodeOrPI(codeLines, piLines, line) ||
 			inCodeSpan(spans, open1) || isEscapedBracket(source, open1) {
 			pos = ca2
 			continue
@@ -303,7 +303,7 @@ func (r *Rule) scanCollapsedRefs(
 	f *lint.File,
 	defs []string,
 	spans []byteRange,
-	codeLines, piLines map[int]bool,
+	codeLines, piLines map[int]struct{},
 ) []lint.Diagnostic {
 	source := f.Source
 	var diags []lint.Diagnostic
@@ -324,7 +324,7 @@ func (r *Rule) scanCollapsedRefs(
 			continue
 		}
 		line := f.LineOfOffset(open)
-		if codeLines[line] || piLines[line] ||
+		if lint.InCodeOrPI(codeLines, piLines, line) ||
 			inCodeSpan(spans, open) || isEscapedBracket(source, open) {
 			pos = ca + 2
 			continue
@@ -362,7 +362,7 @@ func (r *Rule) scanShortcutRefs(
 	f *lint.File,
 	defs []string,
 	spans []byteRange,
-	codeLines, piLines map[int]bool,
+	codeLines, piLines map[int]struct{},
 	shortcutMode string,
 ) []lint.Diagnostic {
 	source := f.Source
@@ -396,12 +396,12 @@ func (r *Rule) scanShortcutRefs(
 			}
 		}
 		line := f.LineOfOffset(open)
-		if codeLines[line] || piLines[line] ||
+		if lint.InCodeOrPI(codeLines, piLines, line) ||
 			inCodeSpan(spans, open) || isEscapedBracket(source, open) {
 			pos = ca
 			continue
 		}
-		if defLines[line] {
+		if _, ok := defLines[line]; ok {
 			pos = ca
 			continue
 		}
@@ -433,14 +433,14 @@ func (r *Rule) scanShortcutRefs(
 // contain a reference definition `[label]: dest`. The byte-level
 // scan replaces the per-line refDefStartRE.Match call (the regex
 // dispatch was small but non-zero on the alloc-budget path).
-func collectRefDefLines(source []byte) map[int]bool {
-	lines := make(map[int]bool)
+func collectRefDefLines(source []byte) map[int]struct{} {
+	lines := make(map[int]struct{})
 	lineNum := 1
 	start := 0
 	for i := 0; i <= len(source); i++ {
 		if i == len(source) || source[i] == '\n' {
 			if refDefLineStarts(source, start, i) {
-				lines[lineNum] = true
+				lines[lineNum] = struct{}{}
 			}
 			lineNum++
 			start = i + 1

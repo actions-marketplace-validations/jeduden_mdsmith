@@ -11,7 +11,7 @@ import (
 // the returned map is shared read-only and must not be mutated. The
 // atomic.Bool + mutex memo avoids the once.Do closure box (see the
 // File.piBlockLines field comment).
-func CollectPIBlockLines(f *File) map[int]bool {
+func CollectPIBlockLines(f *File) map[int]struct{} {
 	if f.piBlockLinesDone.Load() {
 		return f.piBlockLines
 	}
@@ -24,8 +24,8 @@ func CollectPIBlockLines(f *File) map[int]bool {
 	return f.piBlockLines
 }
 
-func collectPIBlockLines(f *File) map[int]bool {
-	lines := map[int]bool{}
+func collectPIBlockLines(f *File) map[int]struct{} {
+	lines := map[int]struct{}{}
 	collectPIBlockLinesInto(f.AST, f, lines)
 	return lines
 }
@@ -34,22 +34,35 @@ func collectPIBlockLines(f *File) map[int]bool {
 // ast.Walk) so the per-File memo build sheds the closure box
 // ast.Walk would otherwise allocate. The helper closes over
 // nothing.
-func collectPIBlockLinesInto(n ast.Node, f *File, lines map[int]bool) {
+func collectPIBlockLinesInto(n ast.Node, f *File, lines map[int]struct{}) {
 	if n == nil {
 		return
 	}
 	if pi, ok := n.(*piparser.ProcessingInstruction); ok {
 		segs := pi.Lines()
 		for i := 0; i < segs.Len(); i++ {
-			lines[f.LineOfOffset(segs.At(i).Start)] = true
+			lines[f.LineOfOffset(segs.At(i).Start)] = struct{}{}
 		}
 		if pi.HasClosure() {
-			lines[f.LineOfOffset(pi.ClosureLine.Start)] = true
+			lines[f.LineOfOffset(pi.ClosureLine.Start)] = struct{}{}
 		}
 	}
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
 		collectPIBlockLinesInto(c, f, lines)
 	}
+}
+
+// InCodeOrPI reports whether the 1-based line is present in codeLines or
+// piLines. It checks codeLines first and returns early, so the piLines
+// lookup is skipped for a line already known to sit inside a code block —
+// preserving the short-circuit of the original `codeLines[l] || piLines[l]`
+// expression while keeping each call site to a single statement.
+func InCodeOrPI(codeLines, piLines map[int]struct{}, line int) bool {
+	if _, ok := codeLines[line]; ok {
+		return true
+	}
+	_, ok := piLines[line]
+	return ok
 }
 
 // CollectCodeBlockLines returns a set of 1-based line numbers that
@@ -58,7 +71,7 @@ func collectPIBlockLinesInto(n ast.Node, f *File, lines map[int]bool) {
 // map is shared read-only and must not be mutated. The atomic.Bool +
 // mutex memo avoids the once.Do closure box (see the
 // File.codeBlockLines field comment).
-func CollectCodeBlockLines(f *File) map[int]bool {
+func CollectCodeBlockLines(f *File) map[int]struct{} {
 	if f.codeBlockLinesDone.Load() {
 		return f.codeBlockLines
 	}
@@ -71,8 +84,8 @@ func CollectCodeBlockLines(f *File) map[int]bool {
 	return f.codeBlockLines
 }
 
-func collectCodeBlockLines(f *File) map[int]bool {
-	lines := map[int]bool{}
+func collectCodeBlockLines(f *File) map[int]struct{} {
+	lines := map[int]struct{}{}
 	collectCodeBlockLinesInto(f.AST, f, lines)
 	return lines
 }
@@ -81,7 +94,7 @@ func collectCodeBlockLines(f *File) map[int]bool {
 // closure box) and folds every fenced or indented code block's
 // content lines into the supplied set. Matches the previous
 // ast.Walk shape byte-for-byte; the helper closes over nothing.
-func collectCodeBlockLinesInto(n ast.Node, f *File, lines map[int]bool) {
+func collectCodeBlockLinesInto(n ast.Node, f *File, lines map[int]struct{}) {
 	if n == nil {
 		return
 	}
@@ -98,14 +111,14 @@ func collectCodeBlockLinesInto(n ast.Node, f *File, lines map[int]bool) {
 
 // addFencedCodeBlockLines marks the opening fence line, all content lines,
 // and the closing fence line.
-func addFencedCodeBlockLines(f *File, fcb *ast.FencedCodeBlock, set map[int]bool) {
+func addFencedCodeBlockLines(f *File, fcb *ast.FencedCodeBlock, set map[int]struct{}) {
 	// Determine the opening fence line by looking at the node's info or
 	// the first content line. The opening fence is always the line before
 	// the first content line (or, when there are no content lines, we find
 	// it via the Info segment).
 	openLine := FindFencedOpenLine(f, fcb)
 	if openLine > 0 {
-		set[openLine] = true
+		set[openLine] = struct{}{}
 	}
 
 	// Content lines from the code block's segments.
@@ -114,7 +127,7 @@ func addFencedCodeBlockLines(f *File, fcb *ast.FencedCodeBlock, set map[int]bool
 	for i := 0; i < segs.Len(); i++ {
 		seg := segs.At(i)
 		ln := f.LineOfOffset(seg.Start)
-		set[ln] = true
+		set[ln] = struct{}{}
 		if ln > lastContentLine {
 			lastContentLine = ln
 		}
@@ -130,7 +143,7 @@ func addFencedCodeBlockLines(f *File, fcb *ast.FencedCodeBlock, set map[int]bool
 		closeLine = openLine + 1
 	}
 	if closeLine > 0 && closeLine <= len(f.Lines) {
-		set[closeLine] = true
+		set[closeLine] = struct{}{}
 	}
 }
 
@@ -164,11 +177,11 @@ func FindFencedOpenLine(f *File, fcb *ast.FencedCodeBlock) int {
 }
 
 // addBlockLines marks all content lines of an indented code block.
-func addBlockLines(f *File, cb *ast.CodeBlock, set map[int]bool) {
+func addBlockLines(f *File, cb *ast.CodeBlock, set map[int]struct{}) {
 	segs := cb.Lines()
 	for i := 0; i < segs.Len(); i++ {
 		seg := segs.At(i)
 		ln := f.LineOfOffset(seg.Start)
-		set[ln] = true
+		set[ln] = struct{}{}
 	}
 }

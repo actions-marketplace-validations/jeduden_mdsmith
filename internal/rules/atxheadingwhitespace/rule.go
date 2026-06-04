@@ -31,7 +31,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	var diags []lint.Diagnostic
 	for i, rawLine := range f.Lines {
 		lineNum := i + 1
-		if codeLines[lineNum] || piLines[lineNum] {
+		if lint.InCodeOrPI(codeLines, piLines, lineNum) {
 			continue
 		}
 		diags = append(diags, r.checkLine(f.Path, lineNum, rawLine)...)
@@ -139,7 +139,7 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	result := make([]string, 0, len(f.Lines))
 	for i, rawLine := range f.Lines {
 		lineNum := i + 1
-		if codeLines[lineNum] || piLines[lineNum] {
+		if lint.InCodeOrPI(codeLines, piLines, lineNum) {
 			result = append(result, string(rawLine))
 			continue
 		}

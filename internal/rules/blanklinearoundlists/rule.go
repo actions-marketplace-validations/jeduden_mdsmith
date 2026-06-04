@@ -49,7 +49,7 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 	listEndLine := lastLineOfNode(f, list)
 
 	codeLines := lint.CollectCodeBlockLines(f)
-	if codeLines[listStartLine] || codeLines[listEndLine] {
+	if lineInSet(codeLines, listStartLine) || lineInSet(codeLines, listEndLine) {
 		return nil
 	}
 
@@ -166,6 +166,15 @@ func isBlank(line []byte) bool {
 	return len(bytes.TrimSpace(line)) == 0
 }
 
+// lineInSet reports whether the 1-based line is a member of set. It
+// wraps the comma-ok membership test so callers can compose two
+// checks in a single short-circuiting `||` expression — when the
+// first line is already in a code block the second lookup is skipped.
+func lineInSet(set map[int]struct{}, line int) bool {
+	_, ok := set[line]
+	return ok
+}
+
 // Fix implements rule.FixableRule.
 func (r *Rule) Fix(f *lint.File) []byte {
 	beforeSet, afterSet := r.collectBlankLineInsertions(f)
@@ -215,7 +224,7 @@ func (r *Rule) collectBlankLineInsertions(f *lint.File) (beforeSet, afterSet map
 		listStartLine := lineOfNode(f, list)
 		listEndLine := lastLineOfNode(f, list)
 
-		if codeLines[listStartLine] || codeLines[listEndLine] {
+		if lineInSet(codeLines, listStartLine) || lineInSet(codeLines, listEndLine) {
 			return ast.WalkContinue, nil
 		}
 

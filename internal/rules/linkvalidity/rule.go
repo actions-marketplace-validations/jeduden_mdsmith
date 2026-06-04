@@ -287,7 +287,7 @@ func (r *Rule) skipPredicate(f *lint.File) func(int) bool {
 	piLines := lint.CollectPIBlockLines(f)
 	ranges := f.GeneratedRanges
 	return func(ln int) bool {
-		if codeLines[ln] || piLines[ln] {
+		if lint.InCodeOrPI(codeLines, piLines, ln) {
 			return true
 		}
 		for _, gr := range ranges {
