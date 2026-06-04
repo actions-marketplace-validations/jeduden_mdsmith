@@ -19,10 +19,11 @@ import (
 func goodSite(t *testing.T, prefix string) string {
 	t.Helper()
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "development", "merge-queue", "index.html"),
-		`<a href="`+prefix+`/development/pr-fixup-workflow/">pr fixup</a>`)
-	writeFile(t, filepath.Join(root, "development", "architecture-audit", "index.html"),
-		`<a href="`+prefix+`/development/architecture/">arch</a>`)
+	// A .md content link rendered to a clean doc permalink
+	// (reference/index.md links its sibling cli.md, served at
+	// /reference/cli/) — satisfies the sibling-.md probe.
+	writeFile(t, filepath.Join(root, "reference", "index.html"),
+		`<a href="`+prefix+`/reference/cli/">cli</a>`)
 	writeFile(t, filepath.Join(root, "reference", "schema-types", "index.html"),
 		`<a href="`+prefix+`/rules/mds020-required-structure/">rule</a>`)
 	writeFile(t, filepath.Join(root, "rules", "mds001", "index.html"),
@@ -48,10 +49,8 @@ func TestVerifyWebsiteLinks_SubpathDeployPasses(t *testing.T) {
 // match `href=value` as well as `href="value"`.
 func TestVerifyWebsiteLinks_AcceptsUnquotedHref(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "development", "merge-queue", "index.html"),
-		`<a href=/development/pr-fixup-workflow/>pr fixup</a>`)
-	writeFile(t, filepath.Join(root, "development", "architecture-audit", "index.html"),
-		`<a href=/development/architecture/>arch</a>`)
+	writeFile(t, filepath.Join(root, "reference", "index.html"),
+		`<a href=/reference/cli/>cli</a>`)
 	writeFile(t, filepath.Join(root, "reference", "schema-types", "index.html"),
 		`<a href=/rules/mds020-required-structure/>rule</a>`)
 	writeFile(t, filepath.Join(root, "rules", "mds001", "index.html"),
@@ -59,24 +58,16 @@ func TestVerifyWebsiteLinks_AcceptsUnquotedHref(t *testing.T) {
 	require.NoError(t, VerifyWebsiteLinks(root, ""))
 }
 
+// TestVerifyWebsiteLinks_FailsOnMissingSiblingMD removes the only
+// clean doc permalink so the recursive sibling-.md probe finds no
+// match anywhere in the rendered tree.
 func TestVerifyWebsiteLinks_FailsOnMissingSiblingMD(t *testing.T) {
 	root := goodSite(t, "")
-	writeFile(t, filepath.Join(root, "development", "merge-queue", "index.html"),
-		`<a href="pr-fixup-workflow.md">stale .md ref</a>`)
+	writeFile(t, filepath.Join(root, "reference", "index.html"),
+		`<a href="cli.md">stale .md ref</a>`)
 	err := VerifyWebsiteLinks(root, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sibling .md")
-}
-
-func TestVerifyWebsiteLinks_FailsOnIndexMDMisresolved(t *testing.T) {
-	root := goodSite(t, "")
-	// Simulate the bug PR #309 fixed: relative target stayed
-	// relative, browser resolves below the leaf page.
-	writeFile(t, filepath.Join(root, "development", "architecture-audit", "index.html"),
-		`<a href="architecture/">stale relative</a>`)
-	err := VerifyWebsiteLinks(root, "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "index.md drop")
 }
 
 func TestVerifyWebsiteLinks_FailsOnLeakedREADMEHref(t *testing.T) {
@@ -131,10 +122,8 @@ func TestVerifyWebsiteLinks_FailsOnMissingSiteAbsolute(t *testing.T) {
 	// Build a tree that has every required href except the
 	// site-absolute /rules/mdsxxx/ form.
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "development", "merge-queue", "index.html"),
-		`<a href="/mdsmith/development/pr-fixup-workflow/">x</a>`)
-	writeFile(t, filepath.Join(root, "development", "architecture-audit", "index.html"),
-		`<a href="/mdsmith/development/architecture/">x</a>`)
+	writeFile(t, filepath.Join(root, "reference", "index.html"),
+		`<a href="/mdsmith/reference/cli/">x</a>`)
 	// No MDS-rule href under any subpath.
 	err := VerifyWebsiteLinks(root, "https://example.com/mdsmith/")
 	require.Error(t, err)
@@ -180,13 +169,11 @@ func TestVerifyWebsiteLinks_InvalidBaseURLWraps(t *testing.T) {
 // calls the callback with a stat error.
 func TestVerifyWebsiteLinks_MissingRecursiveRootWraps(t *testing.T) {
 	root := t.TempDir()
-	// Materialize only the non-recursive probe targets plus a
+	// Materialize only the non-recursive probe target plus a
 	// page carrying the site-absolute rule href, so we reach
 	// the recursive `no README.md leak` probe.
-	writeFile(t, filepath.Join(root, "development", "merge-queue", "index.html"),
-		`<a href="/development/pr-fixup-workflow/">x</a>`)
-	writeFile(t, filepath.Join(root, "development", "architecture-audit", "index.html"),
-		`<a href="/development/architecture/">x</a>`)
+	writeFile(t, filepath.Join(root, "reference", "index.html"),
+		`<a href="/reference/cli/">x</a>`)
 	writeFile(t, filepath.Join(root, "reference", "schema-types", "index.html"),
 		`<a href="/rules/mds020-required-structure/">x</a>`)
 	// rules/ is absent.
