@@ -14,20 +14,58 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestOsRunner_RunCommand drives the production Runner against
-// real, harmless binaries: a zero-exit command returns nil, a
-// non-zero exit returns *exec.ExitError, and a missing binary
-// returns a not-found error before any process starts.
+// helperModeEnv selects the behaviour of TestHelperProcess when this
+// test binary is re-exec'd as a stand-in command. RunCommand sets no
+// cmd.Env (fs.go), so the child inherits the value a subtest sets with
+// t.Setenv.
+const helperModeEnv = "MDSMITH_RUNCOMMAND_HELPER"
+
+// TestHelperProcess is not a real test: it is the executable the
+// RunCommand subtests exec in place of `true`/`false`/`test -f`. It is a
+// no-op during a normal `go test` run (helperModeEnv unset) and only
+// acts when re-exec'd with that env set, mimicking one command's
+// observable exit status / cwd behaviour. This keeps RunCommand's
+// coverage cross-platform instead of depending on POSIX userland that
+// is absent on Windows.
+func TestHelperProcess(t *testing.T) {
+	switch os.Getenv(helperModeEnv) {
+	case "":
+		return // normal run: not the helper child
+	case "exit0":
+		os.Exit(0)
+	case "exit1":
+		os.Exit(1)
+	case "marker":
+		// Succeed only when ./marker exists relative to the working
+		// directory RunCommand set via cmd.Dir.
+		if _, err := os.Stat("marker"); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	default:
+		os.Exit(2)
+	}
+}
+
+// TestOsRunner_RunCommand drives the production Runner via the
+// helper-process pattern: it re-execs this test binary
+// (TestHelperProcess) as a harmless stand-in command, so a zero exit
+// returns nil, a non-zero exit returns *exec.ExitError, cmd.Dir is
+// honoured, and a missing binary returns a not-found error — exercised
+// identically on every platform, with no POSIX `true`/`false`/`test`.
 func TestOsRunner_RunCommand(t *testing.T) {
 	r := osRunner{}
+	self := os.Args[0]
+	runHelper := []string{"-test.run=^TestHelperProcess$"}
 
 	t.Run("zero exit returns nil", func(t *testing.T) {
-		// `true` exits 0; cwd "" inherits the test process cwd.
-		require.NoError(t, r.RunCommand("", "true"))
+		t.Setenv(helperModeEnv, "exit0")
+		require.NoError(t, r.RunCommand("", self, runHelper...))
 	})
 
 	t.Run("non-zero exit returns ExitError", func(t *testing.T) {
-		err := r.RunCommand("", "false")
+		t.Setenv(helperModeEnv, "exit1")
+		err := r.RunCommand("", self, runHelper...)
 		require.Error(t, err)
 		var exitErr *exec.ExitError
 		assert.True(t, errors.As(err, &exitErr),
@@ -35,14 +73,14 @@ func TestOsRunner_RunCommand(t *testing.T) {
 	})
 
 	t.Run("runs in the requested directory", func(t *testing.T) {
-		// `test -f marker` succeeds only when cmd.Dir is honoured:
-		// the marker exists only inside the temp dir.
+		t.Setenv(helperModeEnv, "marker")
+		// The marker exists only inside dir, so a success proves
+		// cmd.Dir was honoured; a different cwd fails the same check.
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "marker"), []byte("x"), 0o644))
-		assert.NoError(t, r.RunCommand(dir, "test", "-f", "marker"))
-		// From a different cwd the same relative test fails.
+		assert.NoError(t, r.RunCommand(dir, self, runHelper...))
 		other := t.TempDir()
-		assert.Error(t, r.RunCommand(other, "test", "-f", "marker"))
+		assert.Error(t, r.RunCommand(other, self, runHelper...))
 	})
 
 	t.Run("missing binary returns an error", func(t *testing.T) {
