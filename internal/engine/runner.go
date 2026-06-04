@@ -372,9 +372,9 @@ func (r *Runner) lintFile(path string, rules []rule.Rule, intraFileCap int, cach
 // print the same warning N times and duplicate that entry in the
 // returned diagnostics. Earlier-encountered duplicates win so the
 // diagnostic order from the first hit is preserved. The input slice
-// is never modified; nil input returns nil and a non-nil input
-// always produces a freshly-allocated slice so callers can keep the
-// original around without worrying about aliasing.
+// is never modified; nil and empty non-nil inputs return nil; a
+// non-empty input always produces a freshly-allocated slice so
+// callers can keep the original around without worrying about aliasing.
 //
 // Deprecated: call lint.DedupeDiagnostics directly. This wrapper exists
 // so existing callers need not be updated all at once.
