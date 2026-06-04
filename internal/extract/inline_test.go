@@ -150,6 +150,26 @@ func TestExtract_InlineAutolinkEmail(t *testing.T) {
 	assert.Equal(t, "mailto:jeduden@gmail.com", auto["url"])
 }
 
+// TestExtract_InlineBreakAfterNonText verifies that a line break
+// following a non-text node (here an emphasis) records only the break
+// span. goldmark hosts the break flag on a zero-length text node it
+// inserts after the non-text node, which must not leak an empty
+// {span:text,value:""} into the projection.
+func TestExtract_InlineBreakAfterNonText(t *testing.T) {
+	got, diags := run(t, "## Headline\n\n*em*\nafter\n", inlineScope(), nil)
+	require.Empty(t, diags)
+	spans := got.(map[string]any)["headline"].(map[string]any)["inline"].([]any)
+	for i, s := range spans {
+		if m := s.(map[string]any); m["span"] == "text" {
+			assert.NotEqual(t, "", m["value"], "span %d is an empty text span", i)
+		}
+	}
+	require.Len(t, spans, 3)
+	assert.Equal(t, "emphasis", spans[0].(map[string]any)["span"])
+	assert.Equal(t, map[string]any{"span": "break", "hard": false}, spans[1])
+	assert.Equal(t, map[string]any{"span": "text", "value": "after"}, spans[2])
+}
+
 // TestExtract_InlineRejectsImage is a hard error: an image has no
 // inline-span representation in the mapping table.
 func TestExtract_InlineRejectsImage(t *testing.T) {

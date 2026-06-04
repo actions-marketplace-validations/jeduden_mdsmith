@@ -44,12 +44,24 @@ func (p *projector) walkInlineChildren(key string, parent ast.Node) []any {
 		if span == nil {
 			continue
 		}
-		spans = append(spans, span)
+		// goldmark hosts a soft/hard line-break flag on a zero-length
+		// Text node it inserts after a non-text inline node; skip that
+		// empty text span (the break span below still records the wrap)
+		// so the projection never carries an empty {span:text,value:""}.
+		if !isEmptyTextSpan(span) {
+			spans = append(spans, span)
+		}
 		if br := breakSpan(c); br != nil {
 			spans = append(spans, br)
 		}
 	}
 	return spans
+}
+
+// isEmptyTextSpan reports whether span is a text span with no value —
+// the artifact of goldmark's zero-length, break-hosting Text node.
+func isEmptyTextSpan(span map[string]any) bool {
+	return span["span"] == "text" && span["value"] == ""
 }
 
 // breakSpan returns a `break` span when n is a Text node ending in a
