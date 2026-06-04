@@ -574,6 +574,8 @@ func countCells(content string) int {
 
 // countUnescapedPipes counts the number of unescaped '|' characters in s.
 // A '\|' pair is treated as one escaped-pipe literal, not a cell delimiter.
+// The escape rule is identical to containsUnescapedPipe — both must stay in sync
+// if tablefmt's GFM escape semantics ever change.
 func countUnescapedPipes(s string) int {
 	n := 0
 	for i := 0; i < len(s); i++ {
