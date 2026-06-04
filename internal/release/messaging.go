@@ -144,6 +144,16 @@ func splitHeadlineSpans(spans []headlineSpan) (pre, em, post string, err error) 
 			} else {
 				postB.WriteString(s.Value)
 			}
+		case "break":
+			// A reflowed headline projects a soft/hard line break
+			// between text runs; render it as a space (matching the
+			// plain-text extractor) so wrapping the source line does
+			// not fail sync-messaging.
+			if emCount == 0 {
+				preB.WriteByte(' ')
+			} else {
+				postB.WriteByte(' ')
+			}
 		case "emphasis":
 			emCount++
 			if emCount > 1 {
@@ -181,11 +191,18 @@ func splitHeadlineSpans(spans []headlineSpan) (pre, em, post string, err error) 
 func flattenTextChildren(children []headlineSpan) (string, error) {
 	var b strings.Builder
 	for _, c := range children {
-		if c.Span != "text" {
+		switch c.Span {
+		case "text":
+			b.WriteString(c.Value)
+		case "break":
+			// A break inside the emphasized run (the emphasis wrapped
+			// across source lines) renders as a space, same as the
+			// top-level handling.
+			b.WriteByte(' ')
+		default:
 			return "", errors.New(
 				"headline emphasis must contain plain text only")
 		}
-		b.WriteString(c.Value)
 	}
 	return b.String(), nil
 }

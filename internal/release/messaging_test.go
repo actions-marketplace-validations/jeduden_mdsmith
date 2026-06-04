@@ -218,6 +218,28 @@ func TestMessaging_Headline(t *testing.T) {
 			"website hero splits into pre/em/post")
 }
 
+func TestSplitHeadlineSpans_BreakRendersAsSpace(t *testing.T) {
+	// A reflowed headline projects `break` spans between text runs
+	// (and may carry one inside the emphasis). They render as spaces
+	// instead of failing the split, so wrapping the source line does
+	// not break sync-messaging.
+	pre, em, post, err := splitHeadlineSpans([]headlineSpan{
+		textSpan("Mark"),
+		{Span: "break"},
+		textSpan("smith"),
+		{Span: "emphasis", Level: 1, Children: []headlineSpan{
+			textSpan("ma"), {Span: "break"}, textSpan("gic"),
+		}},
+		textSpan(","),
+		{Span: "break"},
+		textSpan("fast."),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Mark smith", pre)
+	assert.Equal(t, "ma gic", em)
+	assert.Equal(t, ", fast.", post)
+}
+
 func TestLoadMessaging_HeadlineError(t *testing.T) {
 	// headline.inline is non-empty but carries no emphasis span;
 	// the split surfaces an error and LoadMessaging wraps it with a

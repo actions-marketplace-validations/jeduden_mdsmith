@@ -151,7 +151,7 @@ A scope or content entry can set an optional
 
 - `bind: <name>` renames a scope's key (replacing
   the slugified heading) or a content entry's key
-  (replacing `code` / `items` / `rows` / `text`).
+  (replacing `code` / `inline` / `items` / `rows` / `text`).
 - `bind: ""` on a scope hoists its children and
   content directly into the parent — useful when a
   wrapper heading exists only for document structure

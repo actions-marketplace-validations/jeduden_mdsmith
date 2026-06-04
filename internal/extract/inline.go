@@ -89,7 +89,14 @@ func (p *projector) inlineSpan(key string, n ast.Node) map[string]any {
 	case *ast.CodeSpan:
 		return map[string]any{"span": "code", "value": p.codeSpanText(node)}
 	case *ast.AutoLink:
+		// node.URL gives the raw target; for an email autolink the
+		// goldmark URL() returns the bare address (no scheme), so add
+		// the mailto: prefix the HTML renderer would, keeping `url` a
+		// usable href for consumers.
 		url := string(node.URL(p.f.Source))
+		if node.AutoLinkType == ast.AutoLinkEmail {
+			url = "mailto:" + url
+		}
 		return map[string]any{
 			"span":  "autolink",
 			"value": string(node.Label(p.f.Source)),

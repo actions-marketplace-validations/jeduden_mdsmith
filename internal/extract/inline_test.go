@@ -136,6 +136,20 @@ func TestExtract_InlineAutolink(t *testing.T) {
 	assert.Equal(t, "https://example.com", auto["url"])
 }
 
+// TestExtract_InlineAutolinkEmail verifies an email autolink emits a
+// usable mailto: href in url while value keeps the bare address.
+func TestExtract_InlineAutolinkEmail(t *testing.T) {
+	got, diags := run(t, "## Headline\n\nmail <jeduden@gmail.com>\n",
+		inlineScope(), nil)
+	require.Empty(t, diags)
+	spans := got.(map[string]any)["headline"].(map[string]any)["inline"].([]any)
+	require.Len(t, spans, 2)
+	auto := spans[1].(map[string]any)
+	assert.Equal(t, "autolink", auto["span"])
+	assert.Equal(t, "jeduden@gmail.com", auto["value"])
+	assert.Equal(t, "mailto:jeduden@gmail.com", auto["url"])
+}
+
 // TestExtract_InlineRejectsImage is a hard error: an image has no
 // inline-span representation in the mapping table.
 func TestExtract_InlineRejectsImage(t *testing.T) {
