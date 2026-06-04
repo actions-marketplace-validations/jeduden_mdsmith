@@ -80,16 +80,17 @@ func websiteLinkProbes(prefix string) []linkProbe {
 	hrefEq := `href="?` // allow both quoted (default) and unquoted (minified) emission
 	return []linkProbe{
 		{
+			// A `.md` content link must render to the target
+			// page's clean permalink (trailing slash, no `.md`).
+			// reference/index.md links its sibling `cli.md`, which
+			// Hugo serves at /reference/cli/. Pinned to a stable
+			// user-facing page; the previous form pointed at a
+			// docs/development/ page that the maintainer-doc prune
+			// removed from the published site.
 			name: "sibling .md resolves to target permalink",
-			path: "development/merge-queue/index.html",
+			path: "reference/index.html",
 			wantMatch: regexp.MustCompile(
-				hrefEq + q(prefix) + `/development/pr-fixup-workflow/`),
-		},
-		{
-			name: "index.md drop resolves to section URL on leaf page",
-			path: "development/architecture-audit/index.html",
-			wantMatch: regexp.MustCompile(
-				hrefEq + q(prefix) + `/development/architecture/`),
+				hrefEq + q(prefix) + `/reference/cli/`),
 		},
 		{
 			// The rewriter emits site-absolute `/rules/<id>/`

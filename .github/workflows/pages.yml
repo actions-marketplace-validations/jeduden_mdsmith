@@ -11,11 +11,12 @@ name: Deploy mdsmith.dev
 # site is pure HTML built from docs/**/*.md and the homepage data
 # files, so it never needs the registry-publish credentials.
 #
-# The `build-content` job (synced-tree lint) runs on push to main
-# AND on every pull_request that touches the same paths, so a
-# broken-link regression fails the PR rather than only surfacing
-# after merge. The `deploy` job is gated to main, so PR runs stop
-# at the lint and never publish.
+# The `build-content` job runs on push to main AND on every
+# pull_request that touches the same paths. It lints the synced
+# tree, then renders the site with Hugo and runs the rendered-HTML
+# probes (verify-website-links), so a broken-link OR render-link
+# regression fails the PR rather than only surfacing after merge.
+# The `deploy` job is gated to main, so PR runs stop before publish.
 on:
   push:
     branches: [main]
@@ -75,13 +76,14 @@ jobs:
     uses: ./.github/workflows/mdsmith-check.yml
 
   build-content:
-    # The synced-tree lint: build the Hugo content tree from
-    # docs/, then run `mdsmith check` against it with the
-    # build-output config (link integrity on, style rules off).
-    # Catches broken-link regressions on PR rather than only on
-    # the post-merge deploy. deploy `needs: build-content`, so
-    # push / workflow_dispatch / workflow_call runs all gate on
-    # this lint before publishing.
+    # Build the Hugo content tree from docs/, run `mdsmith check`
+    # against it with the build-output config (link integrity on,
+    # style rules off), then render the site with Hugo and probe the
+    # rendered HTML (verify-website-links). Catches both broken-link
+    # and render-link regressions on PR rather than only on the
+    # post-merge deploy. deploy `needs: build-content`, so push /
+    # workflow_dispatch / workflow_call runs all gate on this job
+    # before publishing.
     #
     # deploy re-runs the same sync and lint after the
     # version-stamp + site-assets pulls (which mutate docs/
@@ -96,6 +98,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # Render the site with the same Hugo the deploy uses so the
+      # rendered-HTML probes below run on PR, not only post-merge.
+      HUGO_VERSION: "0.161.1"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -125,6 +131,45 @@ jobs:
             --config ./website/build-output.mdsmith.yml \
             --no-gitignore \
             ./website/content/docs
+      - name: Install Hugo
+        # `go install` resolves via the Go module proxy with sumdb
+        # checksum verification, so the binary is pinned by content
+        # hash even though the version selector is a tag.
+        run: go install github.com/gohugoio/hugo@v${HUGO_VERSION}
+      - name: Render site
+        # Render the synced tree so the steps below can probe the
+        # real rendered HTML. The synced-tree lint above operates on
+        # the markdown filesystem (pre-render) and cannot see the
+        # render-link hook output, which is exactly what broke the
+        # deploy after the maintainer-doc prune: a probe pinned to a
+        # now-unpublished page. Root baseURL — the production deploy
+        # is served from the domain root, so relURL emits root paths.
+        working-directory: website
+        env:
+          HUGO_ENVIRONMENT: production
+        run: hugo --minify --baseURL "/"
+      - name: Verify render-link hook output
+        # Probe the rendered HTML for the render-link behaviors
+        # (.md → permalink, site-absolute /rules/ hrefs, no leaked
+        # README.md / javascript: / data: targets). The probes live
+        # in internal/release/verifylinks.go with unit-test coverage.
+        # The deploy job runs the same check, but only on main; this
+        # PR-time copy fails a regression before merge.
+        run: |
+          go run ./cmd/mdsmith-release verify-website-links \
+            --dir ./website/public --base-url ""
+      - name: Verify baseURL prefix on absolute hrefs
+        # Re-render with a fake subpath baseURL and re-probe, so a
+        # render-link regression in the relURL prefixing (which a
+        # root-baseURL render cannot exercise) also fails the PR.
+        working-directory: website
+        run: |
+          hugo --minify --baseURL "https://example.com/mdsmith/" \
+            --destination /tmp/baseurl-probe
+          cd ..
+          go run ./cmd/mdsmith-release verify-website-links \
+            --dir /tmp/baseurl-probe \
+            --base-url "https://example.com/mdsmith/"
 
   deploy:
     name: Deploy mdsmith.dev to GitHub Pages
