@@ -14,9 +14,9 @@ import (
 )
 
 // TestFixDoesNotImportEngine guards the architecture rule that
-// internal/fix must not import internal/engine. The engine layer sits
-// above the fix layer, so the dependency arrow must point downward
-// (fix → shared helpers → engine), not upward (fix → engine).
+// internal/fix must not import internal/engine. Both layers sit above
+// internal/checker (shared helpers); each imports downward into helpers,
+// but fix must not import engine (that arrow would invert the layering).
 func TestFixDoesNotImportEngine(t *testing.T) {
 	wd, err := os.Getwd()
 	require.NoError(t, err)
