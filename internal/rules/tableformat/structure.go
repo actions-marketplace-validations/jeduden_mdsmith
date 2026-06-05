@@ -551,17 +551,45 @@ func logicalCells(content string) []string {
 	return splitCells(t)
 }
 
-// countCells returns the logical cell count of a row. A row that is
-// only edge pipes or empty has no cells.
+// countCells returns the logical cell count of a row. An empty row or
+// a row consisting of a single bare pipe ("|") has zero cells. A
+// bordered row whose interior is all whitespace (e.g. "|  |") has one
+// empty cell, not zero.
+//
+// This avoids allocating a []string via logicalCells: it strips edge
+// pipes directly, then counts unescaped interior pipes.
 func countCells(content string) int {
-	cells := logicalCells(content)
-	if len(cells) == 1 && strings.TrimSpace(cells[0]) == "" {
-		t := strings.TrimSpace(content)
-		if t == "" || t == "|" {
-			return 0
+	t := strings.TrimSpace(content)
+	if t == "" || t == "|" {
+		return 0
+	}
+	s := strings.TrimPrefix(t, "|")
+	if endsWithUnescapedPipe(s) {
+		s = s[:len(s)-1]
+	}
+	if strings.TrimSpace(s) == "" {
+		// Bordered row like "|  |" has one empty cell, not zero.
+		return 1
+	}
+	return countUnescapedPipes(s) + 1
+}
+
+// countUnescapedPipes counts the number of unescaped '|' characters in s.
+// A '\|' pair is treated as one escaped-pipe literal, not a cell delimiter.
+// The escape rule is identical to containsUnescapedPipe — both must stay in sync
+// if tablefmt's GFM escape semantics ever change.
+func countUnescapedPipes(s string) int {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && s[i+1] == '|' {
+			i++ // skip escaped pipe
+			continue
+		}
+		if s[i] == '|' {
+			n++
 		}
 	}
-	return len(cells)
+	return n
 }
 
 // splitCells splits a row body on unescaped pipes. A `\|` pair is

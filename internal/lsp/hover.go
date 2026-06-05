@@ -63,12 +63,12 @@ func directiveDocFor(name string) (string, bool) {
 // directives rather than crashing.
 func loadDirectiveDocs(fsys fs.FS) map[string]string {
 	docs := make(map[string]string)
-	seen := make(map[string]bool)
+	seen := make(map[string]struct{})
 	for _, fname := range directiveToDocFile {
-		if seen[fname] {
+		if _, ok := seen[fname]; ok {
 			continue
 		}
-		seen[fname] = true
+		seen[fname] = struct{}{}
 		data, err := fs.ReadFile(fsys, fname)
 		if err != nil {
 			continue
@@ -168,16 +168,19 @@ func relatedHoverLink(ri diagnosticRelatedInformation) string {
 // remediation hint. Unknown rules degrade to the code plus a
 // `mdsmith help rule` pointer.
 func ruleIdentityBlock(d Diagnostic) string {
-	header := "`" + d.Code + "`"
+	var b strings.Builder
+	b.WriteByte('`')
+	b.WriteString(d.Code)
+	b.WriteByte('`')
 	if d.Data != nil && d.Data.RuleName != "" {
-		header += " · " + d.Data.RuleName
+		b.WriteString(" · ")
+		b.WriteString(d.Data.RuleName)
 	}
 	info, ok := cachedRuleInfo(d.Code)
 	if ok && info.Description != "" {
-		header += " — " + info.Description
+		b.WriteString(" — ")
+		b.WriteString(info.Description)
 	}
-	var b strings.Builder
-	b.WriteString(header)
 	if d.CodeDescription != nil && d.CodeDescription.Href != "" {
 		fmt.Fprintf(&b, "\n\n[Open rule docs ↗](%s)", d.CodeDescription.Href)
 	} else {

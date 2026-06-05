@@ -2,7 +2,7 @@ package mdtext
 
 import (
 	"bytes"
-	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -50,7 +50,7 @@ type TOCItem struct {
 // base slug matches an earlier heading's disambiguated anchor.
 func CollectTOCItems(root ast.Node, source []byte) []TOCItem {
 	var items []TOCItem
-	usedAnchors := make(map[string]bool)
+	usedAnchors := make(map[string]struct{})
 	slugCounts := make(map[string]int)
 	_ = ast.Walk(root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -68,19 +68,19 @@ func CollectTOCItems(root ast.Node, source []byte) []TOCItem {
 
 		// Find a unique anchor by incrementing suffix until unused.
 		anchor := slug
-		if usedAnchors[anchor] {
+		if _, used := usedAnchors[anchor]; used {
 			count := slugCounts[slug]
 			for {
 				count++
-				anchor = fmt.Sprintf("%s-%d", slug, count)
-				if !usedAnchors[anchor] {
+				anchor = slug + "-" + strconv.Itoa(count)
+				if _, used = usedAnchors[anchor]; !used {
 					break
 				}
 			}
 			slugCounts[slug] = count
 		}
 
-		usedAnchors[anchor] = true
+		usedAnchors[anchor] = struct{}{}
 		items = append(items, TOCItem{Level: h.Level, Text: text, Anchor: anchor})
 		return ast.WalkContinue, nil
 	})

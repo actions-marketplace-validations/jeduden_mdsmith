@@ -242,7 +242,7 @@ func ReadQAAnnotationsCSV(path string) ([]QAAnnotation, error) {
 		return nil, fmt.Errorf("read qa annotations: %w", err)
 	}
 	if len(rows) == 0 {
-		return []QAAnnotation{}, nil
+		return nil, nil
 	}
 
 	start := 0
