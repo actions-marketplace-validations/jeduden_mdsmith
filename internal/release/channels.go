@@ -304,14 +304,19 @@ func CheckChannelsData(root string, chs []Channel) (bool, error) {
 // Hugo template consumed, so a render probe compares the page against
 // its true input rather than a parallel source.
 func LoadChannelsFromDataFile(root string) ([]Channel, error) {
-	path := filepath.Join(root, ChannelsDataFile)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(channelsDataPath(root))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", ChannelsDataFile, err)
 	}
 	var chs []Channel
 	if err := yaml.Unmarshal(data, &chs); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", ChannelsDataFile, err)
+	}
+	// An empty or truncated data file unmarshals to a nil slice with
+	// no error; without this guard a render probe would expect zero
+	// install rows and pass vacuously on a broken picker.
+	if len(chs) == 0 {
+		return nil, fmt.Errorf("%s has no channels", ChannelsDataFile)
 	}
 	return chs, nil
 }

@@ -388,4 +388,14 @@ func TestLoadChannelsFromDataFile_Errors(t *testing.T) {
 	require.NoError(t, os.WriteFile(p, []byte("title: not-a-list\n  bad: ]["), 0o644))
 	_, err = LoadChannelsFromDataFile(root)
 	require.Error(t, err)
+
+	// Present but empty (comment-only) → no channels, error rather
+	// than a silent empty slice that would pass a probe vacuously.
+	root = t.TempDir()
+	p = filepath.Join(root, ChannelsDataFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+	require.NoError(t, os.WriteFile(p, []byte("# generated, then emptied\n"), 0o644))
+	_, err = LoadChannelsFromDataFile(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no channels")
 }
