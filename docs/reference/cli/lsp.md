@@ -91,42 +91,41 @@ prints:
 - **`quickfix`** — one per fixable diagnostic. Each
   edit replaces the whole document with the output of
   running the single rule, so it covers every
-  occurrence of that rule (the action title reads
-  "Fix all `<rule>` with mdsmith"). Within one
+  occurrence of that rule. The action title is the
+  rule's own quick-fix label (e.g. "Remove trailing
+  whitespace"); a rule that supplies none falls back
+  to "Fix all `<rule>` with mdsmith". Within one
   request all quick-fix actions for the same rule
   share one `WorkspaceEdit`; the fix is run once
   regardless of how many diagnostics carry that
-  rule. Generated-section rules (catalog, toc,
-  include) regenerate the section in their fix; the
-  action surfaces normally and the title
-  ("Fix all `<rule>` with mdsmith") is explicit
-  about the whole-file scope.
+  rule. Quick fixes apply immediately (see Fix
+  preview below). Generated-section rules (catalog,
+  toc, include) regenerate the section in their fix;
+  the action surfaces normally.
 - **`source.fixAll.mdsmith`** — runs `mdsmith fix` on the
   current buffer; produces the same bytes the on-disk fixer
   would write.
 
 ### Fix preview (ChangeAnnotation)
 
-Set `mdsmith.previewFix: true` to open Refactor Preview before
-any fix lands. Both capabilities below must appear in
-`initialize`:
+Set `mdsmith.previewFix: true` to preview the
+`source.fixAll.mdsmith` edit before it writes. That action
+is what fix-on-save runs. The preview is scoped to it:
+quick fixes apply right away. Both capabilities below must
+appear in `initialize`:
 
 - `workspace.workspaceEdit.documentChanges`
 - `workspace.workspaceEdit.changeAnnotationSupport`
 
-When both are present, edits use `AnnotatedTextEdit`
-(LSP 3.16) with `needsConfirmation: true`. The
-`edits` slice carries one entry per line-aligned
-diff hunk, not one whole-file replacement (which
-Refactor Preview would render as "old file → new
-file" with no visible delta). All hunks share an
-`annotationId`.
-
-Each quick fix carries the id
-`mdsmith-fix-<rule-name>`. The fix-all action uses
-`mdsmith-fix-all`. Drop either capability and the
-server emits the legacy `changes` map. A warning
-goes to `window/logMessage` once per session.
+When both are present, the `source.fixAll.mdsmith` edit
+uses `AnnotatedTextEdit` (LSP 3.16) with
+`needsConfirmation: true`. The `edits` slice carries one
+entry per line-aligned diff hunk, not one whole-file
+replacement (which Refactor Preview would render as "old
+file → new file" with no visible delta). All hunks share
+the `mdsmith-fix-all` `annotationId`. Drop either
+capability and the server emits the legacy `changes` map.
+A warning goes to `window/logMessage` once per session.
 
 ## Symbol navigation
 

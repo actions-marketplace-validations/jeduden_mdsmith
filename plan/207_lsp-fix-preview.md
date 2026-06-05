@@ -5,14 +5,28 @@ status: "✅"
 summary: >-
   Opt-in `mdsmith.previewFix` setting that attaches
   an LSP `ChangeAnnotation` flagged
-  `needsConfirmation: true` to every quick-fix and
-  `source.fixAll.mdsmith` WorkspaceEdit, so VS Code
-  opens its Refactor Preview pane with a diff
-  before applying.
+  `needsConfirmation: true` to the
+  `source.fixAll.mdsmith` (fix-on-save) WorkspaceEdit,
+  so VS Code opens its Refactor Preview pane with a
+  diff before applying. Interactive quick fixes apply
+  immediately (see the Revision note).
 model: sonnet
 depends-on: []
 ---
 # LSP fix preview via ChangeAnnotation
+
+## Revision
+
+This was later narrowed. Only the fix-all action
+(`source.fixAll.mdsmith`, run on save) asks for a preview
+now. Lightbulb quick fixes apply right away. A quick fix is
+the one fix you just chose, so there is nothing to confirm.
+
+A forced preview hid the edit in a pane whose Apply button
+is easy to miss, and a second click hit the open preview.
+The lightbulb still has its own Preview (the chevron, or
+Ctrl+Enter). See
+[`internal/lsp/server.go`](../internal/lsp/server.go).
 
 ## Goal
 
@@ -253,10 +267,10 @@ the matrix:
       server falls back to the legacy `changes`
       shape and logs the fallback once per
       session.
-- [x] Quick-fix actions carry one annotation per
-      rule (`mdsmith-fix-<rule>`);
-      `source.fixAll.mdsmith` carries
-      `mdsmith-fix-all`.
+- [x] `source.fixAll.mdsmith` carries the
+      `mdsmith-fix-all` annotation. (Revised: quick
+      fixes no longer carry a per-rule annotation —
+      they apply immediately. See the Revision note.)
 - [x] [`docs/guides/editors/vscode.md`](../docs/guides/editors/vscode.md)
       documents the setting and the
       `previewFix` × `fixOnSave` interaction.
