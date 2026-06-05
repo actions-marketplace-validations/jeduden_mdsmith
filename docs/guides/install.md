@@ -290,7 +290,17 @@ PowerShell required; the steps are a browser download
 and the Settings UI. On the
 [releases page](https://github.com/jeduden/mdsmith/releases),
 open the latest release and download
-`mdsmith-windows-amd64.exe` from its Assets. Then:
+`mdsmith-windows-amd64.exe` from its Assets.
+
+To verify it before installing, also download
+`checksums.txt` from the same Assets. In the download
+folder, run
+`certutil -hashfile mdsmith-windows-amd64.exe SHA256`
+(Command Prompt or PowerShell — `certutil` ships with
+Windows). Compare its hash to the
+`mdsmith-windows-amd64.exe` line in `checksums.txt`.
+
+Then install it:
 
 1. Make a folder to keep it in — for example
    `%LOCALAPPDATA%\Programs\mdsmith` — and move the
@@ -300,13 +310,6 @@ open the latest release and download
    environment variables for your account* from the
    Start menu, edit `Path`, add the folder, and save.
 3. Open a new terminal and run `mdsmith version`.
-
-To verify the download first, also grab `checksums.txt`
-from the same Assets and run
-`certutil -hashfile mdsmith-windows-amd64.exe SHA256`
-in any terminal (Command Prompt or PowerShell —
-`certutil` ships with Windows). Compare its hash to the
-`mdsmith-windows-amd64.exe` line in `checksums.txt`.
 
 **Scripted install (PowerShell).** Download the binary
 and the checksums file:

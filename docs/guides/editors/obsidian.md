@@ -91,10 +91,9 @@ to the [GitHub release][gh]. To install it:
 4. In Obsidian, open **Settings → Community plugins**,
    then enable **mdsmith**.
 
-The path is the same on Windows, macOS, and Linux: the
-plugin is one `.wasm` file, with no per-OS binary to place.
-The `.obsidian` folder is hidden. Rather than browse to it,
-open the plugins folder from **Settings → Community
+This vault-relative path is the same on every OS. The
+`.obsidian` folder is hidden, though. Rather than browse to
+it, open the plugins folder from **Settings → Community
 plugins** — the folder icon by **Installed plugins** — and
 drop the unzipped files there.
 

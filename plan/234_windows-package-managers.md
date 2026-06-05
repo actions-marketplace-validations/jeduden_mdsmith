@@ -31,8 +31,9 @@ package-manager channel, so every Windows install is a
 manual download-and-PATH step.
 
 [Plan 130](130_binary-distribution-and-versioning.md) shipped
-npm, PyPI, and the VS Code marketplaces and explicitly
-deferred Scoop and Chocolatey as follow-ups. Peer linters
+npm, PyPI, and the VS Code marketplaces and left the OS
+package managers — Scoop and Chocolatey among them — out of
+scope as follow-ups. Peer linters
 already publish to Windows repositories (mise ships via
 WinGet, Scoop, and Chocolatey), so this is a known gap, not
 a new direction.
@@ -100,14 +101,19 @@ version, URL, and hash substitution red/green.
 
 ## Picker, table, and install guide
 
-Both channel docs feed `website/data/channels.yaml` through
-`mdsmith-release sync-channels`. The install picker and the
-install-table catalog then gain Scoop and WinGet rows
-automatically. Both are CLI binary-download channels. They
+Both channel docs feed `channels.yaml` through
+`sync-channels`. The picker and the install table then gain
+Scoop and WinGet rows with no manual edit.
+
+Both are CLI binary-download channels. They
 should sort among the CLI channels (Homebrew 7, asdf 9,
-GitHub Releases 10), not after the editor ones. Assign their
-weights there and renumber the editor channels (currently
-11–14) accordingly.
+GitHub Releases 10), ahead of the higher-weighted ones.
+Weights only need to be `>= 1` and sort ascending; they need
+not be unique or contiguous. So give Scoop and WinGet weights
+just above GitHub Releases. Bump the channels now at 11–14
+(the two marketplaces, Flatpak, and Obsidian) to make room,
+or let weights tie — the stable sort keeps ties in file
+order.
 
 Update the Windows section of the
 [install guide](../docs/guides/install.md). Replace the
