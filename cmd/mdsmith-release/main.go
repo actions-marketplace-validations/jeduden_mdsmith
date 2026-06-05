@@ -25,6 +25,8 @@
 //	mdsmith-release bench [workdir]
 //	mdsmith-release pull-site-assets
 //	mdsmith-release sync-messaging [--check]
+//	mdsmith-release render-scoop-manifest <version> <checksums-file>
+//	mdsmith-release render-winget-manifest --out <dir> <version> <checksums-file>
 //
 // Each subcommand operates relative to the current working
 // directory, which is the repo root in CI.
@@ -70,6 +72,10 @@ Commands:
                                   (or check drift).
   sync-channels [--check]         Regenerate website/data/channels.yaml from the channel files
                                   (or check drift).
+  render-scoop-manifest <ver> <checksums>
+                                  Emit the Scoop bucket/mdsmith.json manifest to stdout.
+  render-winget-manifest --out <dir> <ver> <checksums>
+                                  Write the three WinGet YAML manifests to <dir>.
 `
 
 func main() {
@@ -148,6 +154,10 @@ func dispatchGenerators(cmd, root string, rest []string) int {
 		return runSyncParityRules(root, rest)
 	case "sync-channels":
 		return runSyncChannels(root, rest)
+	case "render-scoop-manifest":
+		return runRenderScoopManifest(root, rest)
+	case "render-winget-manifest":
+		return runRenderWingetManifest(root, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "mdsmith-release: unknown command %q\n%s", cmd, usageText)
 		return 2
