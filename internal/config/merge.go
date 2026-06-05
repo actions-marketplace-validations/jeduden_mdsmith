@@ -1,6 +1,11 @@
 package config
 
-import "github.com/jeduden/mdsmith/internal/rule"
+import (
+	"strconv"
+	"strings"
+
+	"github.com/jeduden/mdsmith/internal/rule"
+)
 
 // Merge merges a loaded config on top of defaults. The loaded config's rules
 // override the defaults; any rule not mentioned in loaded keeps its default
@@ -322,9 +327,47 @@ func EffectiveAll(
 	cfg *Config, filePath string, fmKinds []string, fmFields map[string]any,
 ) (map[string]RuleCfg, map[string]bool, map[string]bool) {
 	kinds := resolveEffectiveKinds(cfg, filePath, fmKinds, fmFields)
+	return EffectiveAllForKinds(cfg, filePath, kinds)
+}
+
+// EffectiveAllForKinds is EffectiveAll with the effective kind list
+// already resolved (see EffectiveSignature). The engine resolves kinds
+// once to build a memo key, then passes them here so a cache miss does
+// not re-resolve them.
+func EffectiveAllForKinds(
+	cfg *Config, filePath string, kinds []string,
+) (map[string]RuleCfg, map[string]bool, map[string]bool) {
 	return effectiveRules(cfg, filePath, kinds),
 		effectiveCats(cfg, filePath, kinds),
 		effectiveExplicit(cfg, filePath, kinds)
+}
+
+// EffectiveSignature returns a key that uniquely determines the result of
+// EffectiveAll for (filePath, fmKinds, fmFields), along with the resolved
+// kind list. filePath influences EffectiveAll only through the resolved
+// kinds and the overrides whose patterns match it; effectiveRules,
+// effectiveCats, and effectiveExplicit consult no other path-derived
+// input. A key built from the ordered kind list plus the matching
+// override indices is therefore sufficient — equal signatures yield
+// identical (rules, categories, explicit) maps — so the engine can
+// memoize on it and reuse the returned kinds for EffectiveAllForKinds.
+func EffectiveSignature(
+	cfg *Config, filePath string, fmKinds []string, fmFields map[string]any,
+) (string, []string) {
+	kinds := resolveEffectiveKinds(cfg, filePath, fmKinds, fmFields)
+	var b strings.Builder
+	for _, k := range kinds {
+		b.WriteString(k)
+		b.WriteByte(0x1f) // unit separator; kind names are YAML-parsed, so cannot contain control bytes
+	}
+	b.WriteByte(0x1e) // record separator between the kinds and the overrides
+	for i := range cfg.Overrides {
+		if matchesAny(cfg.Overrides[i].Patterns(), filePath) {
+			b.WriteString(strconv.Itoa(i))
+			b.WriteByte(',')
+		}
+	}
+	return b.String(), kinds
 }
 
 func effectiveRules(cfg *Config, filePath string, kinds []string) map[string]RuleCfg {

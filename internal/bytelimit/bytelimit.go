@@ -65,7 +65,12 @@ func readLimited(r io.Reader, name string, max int64) ([]byte, error) {
 		}
 	}
 
-	data, err := io.ReadAll(io.LimitReader(r, max+1))
+	// Pre-size the read buffer from the stat size (like os.ReadFile) so
+	// the common in-cap read is a single allocation rather than
+	// io.ReadAll's repeated grow-and-copy. Read through LimitReader(max+1)
+	// regardless so a file that grew past the cap since the stat is still
+	// flagged as too large.
+	data, err := readAllSized(io.LimitReader(r, max+1), actualSize, max)
 	if err != nil {
 		return nil, err
 	}
@@ -77,4 +82,37 @@ func readLimited(r io.Reader, name string, max int64) ([]byte, error) {
 		return nil, fmt.Errorf("file too large (%d bytes, max %d)", reported, max)
 	}
 	return data, nil
+}
+
+// readAllSized reads r to EOF. When sizeHint is a usable in-cap file
+// size it seeds the buffer so the whole file lands in one allocation
+// (mirroring os.ReadFile); otherwise it starts small and grows like
+// io.ReadAll. Callers wrap r in a LimitReader, so a file that grew past
+// the cap since the stat is still bounded by the +1 sentinel read.
+//
+// The grow loop is inlined rather than delegating to bytes.Buffer or
+// io.ReadAll: both over-reserve (Buffer keeps MinRead headroom; ReadAll
+// can leave up to 2x slack) or copy on the way out, whereas the goal
+// here is exactly one right-sized sizeHint+1 allocation.
+func readAllSized(r io.Reader, sizeHint, max int64) ([]byte, error) {
+	capHint := 512
+	if sizeHint >= 0 && sizeHint <= max {
+		if h := sizeHint + 1; int64(int(h)) == h { // +1 for the EOF read; guard int overflow
+			capHint = int(h)
+		}
+	}
+	data := make([]byte, 0, capHint)
+	for {
+		if len(data) >= cap(data) {
+			data = append(data, 0)[:len(data)] // grow, preserve len
+		}
+		n, err := r.Read(data[len(data):cap(data)])
+		data = data[:len(data)+n]
+		if err != nil {
+			if err == io.EOF {
+				err = nil
+			}
+			return data, err
+		}
+	}
 }

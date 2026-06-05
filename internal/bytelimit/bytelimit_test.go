@@ -90,6 +90,32 @@ func TestReadFileLimited_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestReadFileLimited_PreSizesBuffer(t *testing.T) {
+	// A large in-cap file should land in a single stat-sized buffer
+	// rather than io.ReadAll's repeated grow-and-copy. With a 1 MB file
+	// ReadAll reallocates ~11 times; a pre-sized read is open+stat+one
+	// buffer. Bound the allocations between the two so a regression to
+	// ReadAll trips this test.
+	dir := t.TempDir()
+	p := filepath.Join(dir, "big.md")
+	content := make([]byte, 1024*1024)
+	for i := range content {
+		content[i] = byte('a' + i%26)
+	}
+	require.NoError(t, os.WriteFile(p, content, 0o644))
+
+	var gotLen int
+	var gotErr error
+	allocs := testing.AllocsPerRun(20, func() {
+		data, err := bytelimit.ReadFileLimited(p, 2*1024*1024)
+		gotLen, gotErr = len(data), err
+	})
+	require.NoError(t, gotErr)
+	require.Equal(t, len(content), gotLen)
+	assert.LessOrEqualf(t, allocs, float64(6),
+		"expected a pre-sized read; got %v allocations (io.ReadAll regression?)", allocs)
+}
+
 func TestReadFileLimited_MaxInt64Unlimited(t *testing.T) {
 	// MaxInt64 must be treated as unlimited to avoid overflow in max+1.
 	dir := t.TempDir()
