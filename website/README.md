@@ -105,7 +105,7 @@ release-channel docs, gated against drift in CI:
   `hugo.Data.channels` (the generated
   `website/data/channels.yaml`). It renders every channel
   with platform-tag filter chips.
-- **"Published to" strip** — the release-channel docs
+- **"Available on" strip** — the release-channel docs
   `../docs/development/release-channels/*.md`. Each
   carries a canonical `channelurl:` and an ordering
   `weight:`; `logos-strip.html` ranges the synced
