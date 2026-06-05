@@ -124,9 +124,19 @@ func TestRunFiles_SequentialMatchesParallel(t *testing.T) {
 	}
 }
 
+// newRunResolve builds the per-run resolver lintFile expects, mirroring
+// what runFiles constructs, for tests that call lintFile directly.
+func (r *Runner) newRunResolve() runResolve {
+	return runResolve{
+		mdRules:   markdownRulesFrom(r.Rules, r.ConfigPath),
+		catLookup: ruleCategoryLookup(r.Rules),
+		effCache:  &effectiveCache{},
+	}
+}
+
 func TestLintFile_ReadErrorReturnsErrs(t *testing.T) {
 	r := &Runner{Config: &config.Config{}}
-	out := r.lintFile(filepath.Join(t.TempDir(), "missing.md"), nil, 1, lint.NewRunCache())
+	out := r.lintFile(filepath.Join(t.TempDir(), "missing.md"), 1, lint.NewRunCache(), r.newRunResolve())
 	assert.Empty(t, out.diags)
 	require.Len(t, out.errs, 1)
 	assert.Contains(t, out.errs[0].Error(), "reading")
@@ -140,7 +150,7 @@ func TestLintFile_HappyReturnsDiags(t *testing.T) {
 		Config: &config.Config{Rules: map[string]config.RuleCfg{"mock-rule": {Enabled: true}}},
 		Rules:  []rule.Rule{&mockRule{id: "MDS999", name: "mock-rule"}},
 	}
-	out := r.lintFile(p, r.Rules, 1, lint.NewRunCache())
+	out := r.lintFile(p, 1, lint.NewRunCache(), r.newRunResolve())
 	require.Len(t, out.diags, 1)
 	assert.Empty(t, out.errs)
 	assert.Equal(t, p, out.diags[0].File)

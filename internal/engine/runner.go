@@ -266,9 +266,20 @@ func (r *Runner) runFiles(work []string, cache *lint.RunCache) []fileOutcome {
 	outcomes := make([]fileOutcome, len(work))
 	workers := ResolveWorkers(r.Concurrency, len(work))
 	intraCap := resolveIntraFileWorkers(r.IntraFileConcurrency, workers)
+	// Hoisted out of the per-file loop: the rule→category lookup is a
+	// pure function of r.Rules (constant for the run), and the
+	// effective-config cache is shared across workers so a uniform
+	// config resolves once rather than per file.
+	catLookup := ruleCategoryLookup(r.Rules)
+	effCache := &effectiveCache{}
 	if workers <= 1 {
+		rr := runResolve{
+			mdRules:   markdownRulesFrom(r.Rules, r.ConfigPath),
+			catLookup: catLookup,
+			effCache:  effCache,
+		}
 		for i, path := range work {
-			outcomes[i] = r.lintFile(path, r.Rules, intraCap, cache)
+			outcomes[i] = r.lintFile(path, intraCap, cache, rr)
 		}
 		return outcomes
 	}
@@ -278,13 +289,18 @@ func (r *Runner) runFiles(work []string, cache *lint.RunCache) []fileOutcome {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rules := cloneRules(r.Rules)
+			// Each worker filters its own rule clones once, not per file.
+			rr := runResolve{
+				mdRules:   markdownRulesFrom(cloneRules(r.Rules), r.ConfigPath),
+				catLookup: catLookup,
+				effCache:  effCache,
+			}
 			for {
 				i := int(next.Add(1)) - 1
 				if i >= len(work) {
 					return
 				}
-				outcomes[i] = r.lintFile(work[i], rules, intraCap, cache)
+				outcomes[i] = r.lintFile(work[i], intraCap, cache, rr)
 			}
 		}()
 	}
@@ -302,15 +318,17 @@ func cloneRules(rules []rule.Rule) []rule.Rule {
 	return out
 }
 
-// lintFile reads, parses, and checks a single file with the given rule
-// set (the worker's private clones) and returns its diagnostics and
-// errors. It touches no shared Runner state except the mutex-guarded
-// gitignore cache. intraFileCap controls how many non-NodeChecker
-// rules run concurrently for this one file — see runFiles for how
-// the cap is computed from Runner.IntraFileConcurrency. cache is
-// installed on the per-File so catalog/include rules share one
-// target read across every host file in this pass.
-func (r *Runner) lintFile(path string, rules []rule.Rule, intraFileCap int, cache *lint.RunCache) (out fileOutcome) {
+// lintFile reads, parses, and checks a single file and returns its
+// diagnostics and errors. rr carries the worker's private rule clones,
+// the run's rule→category lookup, and the shared effective-config cache
+// (see runResolve). It touches no shared Runner state except the
+// mutex-guarded gitignore cache and the concurrency-safe rr.effCache.
+// intraFileCap controls how many non-NodeChecker rules run concurrently
+// for this one file — see runFiles for how the cap is computed from
+// Runner.IntraFileConcurrency. cache is installed on the per-File so
+// catalog/include rules share one target read across every host file in
+// this pass.
+func (r *Runner) lintFile(path string, intraFileCap int, cache *lint.RunCache, rr runResolve) (out fileOutcome) {
 	// When verbose, log into a per-file buffer instead of the shared
 	// logger; Run flushes these in input order so concurrent workers
 	// don't interleave -v output. The named return + defer attaches
@@ -353,11 +371,10 @@ func (r *Runner) lintFile(path string, rules []rule.Rule, intraFileCap int, cach
 
 	f.GeneratedRanges = gensection.FindAllGeneratedRanges(f)
 
-	effective := r.effectiveWithCategories(path, fmKinds, fmFields)
-	mdRules := markdownRulesFrom(rules, r.ConfigPath)
-	logRulesTo(flog, mdRules, effective)
+	effective := r.effectiveCached(path, fmKinds, fmFields, rr)
+	logRulesTo(flog, rr.mdRules, effective)
 
-	diags, errs := checkRulesWithIntraFile(f, mdRules, effective, r.SkipSourceContext, intraFileCap)
+	diags, errs := checkRulesWithIntraFile(f, rr.mdRules, effective, r.SkipSourceContext, intraFileCap)
 	if r.Explain {
 		explain.Attach(diags, r.Config, path, fmKinds, fmFields)
 	}
@@ -651,6 +668,54 @@ func (r *Runner) effectiveWithCategories(
 ) map[string]config.RuleCfg {
 	effective, categories, explicit := config.EffectiveAll(r.Config, path, fmKinds, fmFields)
 	return config.ApplyCategories(effective, categories, ruleCategoryLookup(r.Rules), explicit)
+}
+
+// effectiveCache memoizes effective rule configs by config signature for
+// the span of one runFiles call. File workers read and write it
+// concurrently, so it wraps sync.Map. The stored maps are read-only
+// downstream — classifyRules clones a rule's settings before applying
+// them — so sharing one map across files is safe.
+type effectiveCache struct{ m sync.Map }
+
+func (c *effectiveCache) get(key string) (map[string]config.RuleCfg, bool) {
+	v, ok := c.m.Load(key)
+	if !ok {
+		return nil, false
+	}
+	return v.(map[string]config.RuleCfg), true
+}
+
+func (c *effectiveCache) put(key string, v map[string]config.RuleCfg) {
+	c.m.Store(key, v)
+}
+
+// runResolve carries the per-Run resolution state lintFile needs: the
+// worker's own markdown rule clones (mdRules), the rule→category lookup
+// (constant across the run, built once), and the effective-config cache
+// (shared across workers). Bundling them keeps lintFile's signature
+// small and hoists work the per-file loop used to repeat.
+type runResolve struct {
+	mdRules   []rule.Rule
+	catLookup func(string) string
+	effCache  *effectiveCache
+}
+
+// effectiveCached is the hot-path config resolver: it memoizes the
+// effective rule config on rr.effCache keyed by the file's config
+// signature and reuses the prebuilt rr.catLookup, so a corpus that
+// shares one config resolves it once instead of per file. Cold callers
+// (RunSource, config-target, defaults) keep using effectiveWithCategories.
+func (r *Runner) effectiveCached(
+	path string, fmKinds []string, fmFields map[string]any, rr runResolve,
+) map[string]config.RuleCfg {
+	key, kinds := config.EffectiveSignature(r.Config, path, fmKinds, fmFields)
+	if v, ok := rr.effCache.get(key); ok {
+		return v
+	}
+	effective, categories, explicit := config.EffectiveAllForKinds(r.Config, path, kinds)
+	res := config.ApplyCategories(effective, categories, rr.catLookup, explicit)
+	rr.effCache.put(key, res)
+	return res
 }
 
 // runCacheForCall returns the run-scoped read cache to thread through
