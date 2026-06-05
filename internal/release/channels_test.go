@@ -359,3 +359,19 @@ func TestExtractAllChannels_RunExtractError(t *testing.T) {
 		[]string{"docs/development/release-channels/does-not-exist.md"})
 	require.Error(t, err)
 }
+
+func TestLoadChannelsFromDataFile(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ChannelsDataFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(
+		"- title: Go\n  command: go install\n  weight: 1\n"+
+			"- title: GH\n  command: curl\n  command-windows: iwr x.exe\n  weight: 10\n"),
+		0o644))
+	chs, err := LoadChannelsFromDataFile(root)
+	require.NoError(t, err)
+	require.Len(t, chs, 2)
+	assert.Equal(t, "Go", chs[0].Title)
+	assert.Empty(t, chs[0].CommandWindows)
+	assert.Equal(t, "iwr x.exe", chs[1].CommandWindows)
+}

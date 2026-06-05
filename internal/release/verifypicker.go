@@ -2,140 +2,178 @@ package release
 
 import (
 	"fmt"
-	"html"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"golang.org/x/net/html"
 )
 
-// pickerDefaultRe and pickerWindowsRe extract the install picker's
-// command attributes from rendered HTML. Channel commands always
-// contain spaces (a URL, flags), so Hugo keeps the surrounding
-// double quotes even under `--minify`; the captured value is then
-// HTML-unescaped before comparison, so the probe is agnostic to
-// whether the renderer left `<` as `&lt;` (default) or as `<`
-// (minify normalizes it inside attribute values).
-var (
-	pickerDefaultRe = regexp.MustCompile(`data-cmd-default="([^"]*)"`)
-	pickerWindowsRe = regexp.MustCompile(`data-cmd-windows="([^"]*)"`)
-)
+// pickerRow is one install-row parsed from the rendered homepage.
+type pickerRow struct {
+	cmdDefault  string
+	cmdWindows  string
+	hasNoscript bool
+	noscriptCmd string
+}
 
-// VerifyInstallPicker probes the rendered homepage HTML produced
-// by `hugo --minify ...` and asserts that the install picker
-// (website/layouts/partials/install-picker.html) matches the
-// channel source of truth in channels. The partial emits one
-// `install-row` per channel, each carrying a `data-cmd-default`
-// attribute equal to the channel `command`. For the channels that
-// declare a Windows-specific `command-windows`, the row also
-// carries a `data-cmd-windows` attribute (the filter JS swaps to
-// it under the Windows chip) plus a <noscript> fallback (class
-// `install-cmd-noscript`) that surfaces the same command as text
-// when JavaScript is off.
+// VerifyInstallPicker probes the rendered homepage HTML produced by
+// `hugo --minify ...` and asserts that the install picker
+// (website/layouts/partials/install-picker.html) faithfully rendered
+// channels. The partial emits one `install-row` per channel, in
+// channels.yaml order, each carrying a `data-cmd-default` attribute
+// equal to the channel `command`. For the channels that declare a
+// Windows-specific `command-windows`, the row also carries a
+// `data-cmd-windows` attribute (the filter JS swaps to it under the
+// Windows chip) plus a <noscript> fallback whose `.cmd` span repeats
+// the same command as text when JavaScript is off.
 //
-// None of this is visible to the channels.yaml round-trip test
-// (it covers the Go <-> YAML layer, not the Hugo template), so
-// without this probe a typo in the partial's `index . "command-
-// windows"` key, its `{{ with $cw }}` guard, or an attribute name
-// ships green while the user-visible Windows command silently
-// disappears.
+// None of this is visible to the channels.yaml round-trip test (it
+// covers the Go <-> YAML layer, not the Hugo template), so without
+// this probe a typo in the partial's `index . "command-windows"` key,
+// its `{{ with $cw }}` guard, or an attribute name ships green while
+// the user-visible Windows command silently disappears.
 //
-// htmlDir is the Hugo output root (`public/` under website/). The
-// picker renders once, on the homepage. Probes fail closed with a
-// single returned error describing the first mismatch.
+// The page is parsed as a DOM (scripting disabled, so the <noscript>
+// fallback's elements are readable) rather than pattern-matched, so
+// the probe is agnostic to attribute quoting and HTML escaping, both
+// of which `--minify` normalizes. channels must be the same list the
+// template rendered from (see LoadChannelsFromDataFile), so rows and
+// channels line up by position. The picker renders once, on the
+// homepage. Probes fail closed with a single error on the first
+// mismatch.
 func VerifyInstallPicker(htmlDir string, channels []Channel) error {
 	indexPath := filepath.Join(htmlDir, "index.html")
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
 		return fmt.Errorf("read rendered homepage: %w", err)
 	}
-	page := string(data)
-
-	// One row per channel, each with a data-cmd-default attribute.
-	defaults := unescapedMatches(pickerDefaultRe, page)
-	if len(defaults) != len(channels) {
-		return fmt.Errorf("install picker: found %d data-cmd-default rows in %s, want %d (one per channel)",
-			len(defaults), indexPath, len(channels))
+	doc, err := html.ParseWithOptions(strings.NewReader(string(data)),
+		html.ParseOptionEnableScripting(false))
+	if err != nil {
+		return fmt.Errorf("parse rendered homepage %s: %w", indexPath, err)
 	}
-	wins := unescapedMatches(pickerWindowsRe, page)
+	rows := parseInstallRows(doc)
 
-	windows := 0
-	for _, c := range channels {
-		if !contains(defaults, c.Command) {
-			return fmt.Errorf("install picker: no row with data-cmd-default %q (channel %q) in %s",
-				c.Command, c.Title, indexPath)
+	if len(rows) != len(channels) {
+		return fmt.Errorf("install picker: found %d install-row elements in %s, want %d (one per channel)",
+			len(rows), indexPath, len(channels))
+	}
+	for i, c := range channels {
+		r := rows[i]
+		if r.cmdDefault != c.Command {
+			return fmt.Errorf("install picker: row %d (channel %q) has data-cmd-default %q, want %q",
+				i, c.Title, r.cmdDefault, c.Command)
 		}
 		if c.CommandWindows == "" {
+			// A channel with no override renders neither artifact.
+			if r.cmdWindows != "" {
+				return fmt.Errorf("install picker: row %d (channel %q) has a stray data-cmd-windows %q",
+					i, c.Title, r.cmdWindows)
+			}
+			if r.hasNoscript {
+				return fmt.Errorf("install picker: row %d (channel %q) has a stray <noscript> fallback",
+					i, c.Title)
+			}
 			continue
 		}
-		windows++
-		if !contains(wins, c.CommandWindows) {
-			return fmt.Errorf("install picker: channel %q declares command-windows but no data-cmd-windows %q in %s",
-				c.Title, c.CommandWindows, indexPath)
+		if r.cmdWindows != c.CommandWindows {
+			return fmt.Errorf("install picker: row %d (channel %q) has data-cmd-windows %q, want %q",
+				i, c.Title, r.cmdWindows, c.CommandWindows)
 		}
-		if !containsNoscriptCommand(page, c.CommandWindows) {
-			return fmt.Errorf("install picker: channel %q has no <noscript> Windows fallback in %s",
-				c.Title, indexPath)
+		if !r.hasNoscript || r.noscriptCmd != c.CommandWindows {
+			return fmt.Errorf("install picker: row %d (channel %q) has no <noscript> Windows fallback for %q",
+				i, c.Title, c.CommandWindows)
 		}
-	}
-
-	// No stray Windows artifacts beyond the channels that declare
-	// an override — a channel without command-windows must render
-	// neither the attribute nor the fallback.
-	if len(wins) != windows {
-		return fmt.Errorf("install picker: %d data-cmd-windows attributes in %s, want %d (channels with an override)",
-			len(wins), indexPath, windows)
-	}
-	if got := strings.Count(page, "install-cmd-noscript"); got != windows {
-		return fmt.Errorf("install picker: %d <noscript> fallbacks in %s, want %d (channels with an override)",
-			got, indexPath, windows)
 	}
 	return nil
 }
 
-// unescapedMatches returns the HTML-unescaped first capture group
-// of every match of re in page.
-func unescapedMatches(re *regexp.Regexp, page string) []string {
-	ms := re.FindAllStringSubmatch(page, -1)
-	out := make([]string, 0, len(ms))
-	for _, m := range ms {
-		out = append(out, html.UnescapeString(m[1]))
-	}
-	return out
+// parseInstallRows returns the install-row elements of doc, in
+// document order — which the partial renders in channels.yaml order.
+func parseInstallRows(doc *html.Node) []pickerRow {
+	var rows []pickerRow
+	forEachElement(doc, func(n *html.Node) {
+		if n.Data != "div" || !hasClass(n, "install-row") {
+			return
+		}
+		r := pickerRow{
+			cmdDefault: attrVal(n, "data-cmd-default"),
+			cmdWindows: attrVal(n, "data-cmd-windows"),
+		}
+		if ns := findElement(n, func(m *html.Node) bool { return m.Data == "noscript" }); ns != nil {
+			r.hasNoscript = true
+			if span := findElement(ns, func(m *html.Node) bool {
+				return m.Data == "span" && hasClass(m, "cmd")
+			}); span != nil {
+				r.noscriptCmd = strings.TrimSpace(textContent(span))
+			}
+		}
+		rows = append(rows, r)
+	})
+	return rows
 }
 
-func contains(xs []string, want string) bool {
-	for _, x := range xs {
-		if x == want {
+// forEachElement calls fn on every element node in n's subtree
+// (inclusive), in document order.
+func forEachElement(n *html.Node, fn func(*html.Node)) {
+	if n.Type == html.ElementNode {
+		fn(n)
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		forEachElement(c, fn)
+	}
+}
+
+// findElement returns the first element in n's subtree (inclusive)
+// for which pred is true, in document order, or nil.
+func findElement(n *html.Node, pred func(*html.Node) bool) *html.Node {
+	if n.Type == html.ElementNode && pred(n) {
+		return n
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if got := findElement(c, pred); got != nil {
+			return got
+		}
+	}
+	return nil
+}
+
+// attrVal returns the value of n's key attribute, or "" if absent.
+// The html parser already decodes HTML entities in attribute values.
+func attrVal(n *html.Node, key string) string {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return a.Val
+		}
+	}
+	return ""
+}
+
+// hasClass reports whether n's class attribute contains want as a
+// whitespace-separated token.
+func hasClass(n *html.Node, want string) bool {
+	for _, c := range strings.Fields(attrVal(n, "class")) {
+		if c == want {
 			return true
 		}
 	}
 	return false
 }
 
-// containsNoscriptCommand reports whether cmd appears inside a
-// <noscript> install-cmd line. It scopes the search to each
-// <noscript>...</noscript> region and unescapes the block, so a
-// match in the row's data-cmd-windows attribute does not count —
-// the point is to prove the no-JS fallback text is present, not
-// just the attribute.
-func containsNoscriptCommand(page, cmd string) bool {
-	rest := page
-	for {
-		open := strings.Index(rest, "<noscript")
-		if open < 0 {
-			return false
+// textContent returns the concatenated text of n's subtree, with
+// HTML entities already decoded by the parser.
+func textContent(n *html.Node) string {
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(m *html.Node) {
+		if m.Type == html.TextNode {
+			b.WriteString(m.Data)
 		}
-		rest = rest[open:]
-		end := strings.Index(rest, "</noscript>")
-		if end < 0 {
-			return false
+		for c := m.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
 		}
-		block := rest[:end]
-		if strings.Contains(block, "install-cmd-noscript") &&
-			strings.Contains(html.UnescapeString(block), cmd) {
-			return true
-		}
-		rest = rest[end+len("</noscript>"):]
 	}
+	walk(n)
+	return b.String()
 }

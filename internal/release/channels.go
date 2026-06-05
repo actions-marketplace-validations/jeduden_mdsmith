@@ -296,3 +296,22 @@ func CheckChannelsData(root string, chs []Channel) (bool, error) {
 	}
 	return !bytes.Equal(old, out), nil
 }
+
+// LoadChannelsFromDataFile reads the generated channels.yaml under
+// root and unmarshals it into the channel list the install picker
+// renders from. Unlike LoadChannels, which re-derives the list from
+// the per-channel docs frontmatter, this returns exactly what the
+// Hugo template consumed, so a render probe compares the page against
+// its true input rather than a parallel source.
+func LoadChannelsFromDataFile(root string) ([]Channel, error) {
+	path := filepath.Join(root, ChannelsDataFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", ChannelsDataFile, err)
+	}
+	var chs []Channel
+	if err := yaml.Unmarshal(data, &chs); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", ChannelsDataFile, err)
+	}
+	return chs, nil
+}

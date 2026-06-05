@@ -95,7 +95,37 @@ func TestVerifyInstallPicker_FailsOnRowCountMismatch(t *testing.T) {
 	root := writePickerSite(t, pickerPage(chs[:1]))
 	err := VerifyInstallPicker(root, chs)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "data-cmd-default rows")
+	assert.Contains(t, err.Error(), "install-row")
+}
+
+// A single-token command renders as an unquoted attribute under
+// `hugo --minify` (`data-cmd-default=mdsmith`); the DOM parse must
+// still read it, where a quoted-only matcher would miss the row.
+func TestVerifyInstallPicker_AcceptsUnquotedSpacelessCommand(t *testing.T) {
+	chs := []Channel{{Title: "Bare", Command: "mdsmith", Platforms: []string{"linux"}}}
+	page := `<html><body><div class="install-picker">` +
+		`<div class="install-row" data-platforms=linux data-cmd-default=mdsmith>` +
+		`<code class="install-cmd"><span class="cmd">mdsmith</span></code>` +
+		`</div></div></body></html>`
+	root := writePickerSite(t, page)
+	require.NoError(t, VerifyInstallPicker(root, chs))
+}
+
+// Each channel's <noscript> fallback is checked in its own row, so a
+// match in a different channel's block does not satisfy it: channel A
+// here has its command as a substring of channel B's command, and
+// dropping A's own fallback must still fail.
+func TestVerifyInstallPicker_NoscriptIsRowScoped(t *testing.T) {
+	chs := []Channel{
+		{Title: "A", Command: "a", CommandWindows: "x.exe", Platforms: []string{"windows"}},
+		{Title: "B", Command: "b", CommandWindows: "run x.exe now", Platforms: []string{"windows"}},
+	}
+	page := strings.Replace(pickerPage(chs), noscriptLine("x.exe"), "", 1)
+	root := writePickerSite(t, page)
+	err := VerifyInstallPicker(root, chs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"A"`)
+	assert.Contains(t, err.Error(), "noscript")
 }
 
 func TestVerifyInstallPicker_FailsOnWrongDefaultCommand(t *testing.T) {

@@ -367,10 +367,10 @@ func runVerifyInstallPicker(root string, args []string) int {
 				"picker contract: one data-cmd-default row per channel,\n"+
 				"and for every channel that declares command-windows a\n"+
 				"matching data-cmd-windows attribute plus a <noscript>\n"+
-				"fallback. The expected commands are read from the channel\n"+
-				"docs, so a Hugo-template regression that the channels.yaml\n"+
-				"round-trip cannot see fails here. Exits non-zero on the\n"+
-				"first mismatch.\n")
+				"fallback. The expected commands come from the picker's\n"+
+				"own input, website/data/channels.yaml, so a Hugo-template\n"+
+				"regression that the channels.yaml round-trip cannot see\n"+
+				"fails here. Exits non-zero on the first mismatch.\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		if code := reportFlagParseErr(err, os.Stderr, "mdsmith-release: verify-install-picker"); code >= 0 {
@@ -381,7 +381,11 @@ func runVerifyInstallPicker(root string, args []string) int {
 		fs.Usage()
 		return 2
 	}
-	channels, err := release.LoadChannels(root)
+	// Compare the render against its actual input (channels.yaml),
+	// not a re-derivation from the docs — docs<->yaml drift is the
+	// sync-channels check's job, kept separate so this probe points
+	// only at template regressions.
+	channels, err := release.LoadChannelsFromDataFile(root)
 	if err != nil {
 		return reportError(err)
 	}
