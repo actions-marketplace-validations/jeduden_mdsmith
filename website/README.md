@@ -47,6 +47,24 @@ cd website && hugo --minify
 hugo server -D
 ```
 
+## End-to-end tests
+
+Interactive JavaScript behavior is tested with
+Playwright. See [`e2e/README.md`](e2e/README.md) for
+the full workflow. Quick start:
+
+```bash
+cd website/e2e
+npm ci
+npx playwright install chromium
+npx playwright test
+```
+
+The CI job is `.github/workflows/e2e.yml`. It uses the
+same `e2e/scripts/serve.sh` entrypoint as the
+`webServer` config in `playwright.config.ts`, so local
+runs and CI render byte-identical Hugo output.
+
 ## Source layout
 
 `docs/**/*.md` is the single source of truth. The website

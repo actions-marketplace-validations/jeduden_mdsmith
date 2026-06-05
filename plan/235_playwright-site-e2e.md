@@ -1,7 +1,7 @@
 ---
 id: 235
 title: Playwright end-to-end tests for the website, runnable by CI and agents
-status: "🔲"
+status: "✅"
 summary: >-
   Add a Playwright e2e suite for the Hugo site under
   `website/e2e/`, covering the interactive JavaScript the Go
@@ -185,20 +185,20 @@ browser bump is a deliberate, reviewed change.
 
 ## Acceptance Criteria
 
-- [ ] `npx playwright test` passes locally and in CI against
+- [x] `npx playwright test` passes locally and in CI against
       the shared-script server.
-- [ ] Breaking the install-picker swap JS turns the suite
+- [x] Breaking the install-picker swap JS turns the suite
       red (it guards the behavior, not just the markup).
-- [ ] The `javaScriptEnabled: false` spec confirms the
+- [x] The `javaScriptEnabled: false` spec confirms the
       `<noscript>` Windows fallback is visible.
-- [ ] CI runs chromium-only with cached browsers and uploads
+- [x] CI runs chromium-only with cached browsers and uploads
       a report/trace artifact on failure.
-- [ ] `mdsmith-site` is in `marketplace.json`; the
+- [x] `mdsmith-site` is in `marketplace.json`; the
       `site-e2e` skill builds, serves, runs the suite, and
       screenshots a page; the Playwright MCP can click the
       Windows chip and read the swapped command.
-- [ ] `@playwright/test`, the browser, and Hugo are version-
+- [x] `@playwright/test`, the browser, and Hugo are version-
       pinned.
-- [ ] `mdsmith check .` passes (new Markdown lints clean).
-- [ ] `go test ./...` and `go tool golangci-lint run` stay
+- [x] `mdsmith check .` passes (new Markdown lints clean).
+- [x] `go test ./...` and `go tool golangci-lint run` stay
       green.

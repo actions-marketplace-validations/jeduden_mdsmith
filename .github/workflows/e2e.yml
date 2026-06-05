@@ -1,0 +1,96 @@
+name: Website end-to-end tests
+
+# Run on every PR and push to main that touches site sources or the
+# e2e suite itself, so a regression in the interactive JS fails the PR
+# rather than shipping silently.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "docs/**"
+      - "internal/rules/index.md"
+      - "internal/rules/MDS*/**"
+      - "cmd/mdsmith-release/**"
+      - "internal/release/**"
+      - ".github/workflows/e2e.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "docs/**"
+      - "internal/rules/index.md"
+      - "internal/rules/MDS*/**"
+      - "cmd/mdsmith-release/**"
+      - "internal/release/**"
+      - ".github/workflows/e2e.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Playwright e2e (chromium)
+    runs-on: ubuntu-latest
+    env:
+      # Pin Hugo to the same version the deploy job uses (pages.yml)
+      # so serve.sh renders byte-identical output in CI.
+      HUGO_VERSION: "0.161.1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Install npm dependencies
+        working-directory: website/e2e
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/ms-playwright
+          # Key on the Playwright version from the lock file so a
+          # version bump automatically invalidates the cache.
+          key: playwright-${{ runner.os }}-${{ hashFiles('website/e2e/package-lock.json') }}
+
+      - name: Install Playwright chromium
+        # Only install chromium (not all browsers) to bound download time.
+        # --with-deps installs the OS dependencies for the headless browser.
+        working-directory: website/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Hugo
+        # `go install` resolves via the Go module proxy with sumdb
+        # checksum verification, so the binary is pinned by content hash.
+        run: go install "github.com/gohugoio/hugo@v${HUGO_VERSION}"
+
+      - name: Run Playwright tests
+        # CI=true enables retries (1 per test) and forbids test.only.
+        # The webServer in playwright.config.ts calls serve.sh which
+        # calls `go run ./cmd/mdsmith-release build-website` and then
+        # Hugo, so no separate build step is needed.
+        working-directory: website/e2e
+        env:
+          CI: "true"
+        run: npx playwright test
+
+      - name: Upload test report and traces
+        # Always upload so a failed run's report is available.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report
+          path: |
+            website/e2e/playwright-report/
+            website/e2e/test-results/
+          retention-days: 30

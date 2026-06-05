@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "mdsmith-site",
+  "description": "Playwright end-to-end test skill and browser MCP for the mdsmith.dev website — build, serve, run the suite, screenshot pages, and drive the install picker from inside Claude Code.",
+  "homepage": "https://github.com/jeduden/mdsmith",
+  "repository": "https://github.com/jeduden/mdsmith",
+  "license": "MIT",
+  "keywords": [
+    "website",
+    "playwright",
+    "e2e",
+    "testing",
+    "mdsmith"
+  ],
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    }
+  }
+}
