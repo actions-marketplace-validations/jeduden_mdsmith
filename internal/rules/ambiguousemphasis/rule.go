@@ -103,8 +103,8 @@ type escape struct {
 // returns the unescaped delimiter runs and escaped-delimiter
 // positions.
 func scanLine(line []byte) ([]emphRun, []escape) {
-	runs := make([]emphRun, 0, 4)
-	escapes := make([]escape, 0, 4)
+	var runs []emphRun
+	var escapes []escape
 
 	var cur *emphRun
 	closeRun := func() {
