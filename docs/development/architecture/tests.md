@@ -30,7 +30,8 @@ different place in the tree:
   Markdown fixtures.
 - **E2E** — the built binary (or the
   packaged extension) against a
-  fixture workspace.
+  fixture workspace. Website JS is
+  covered by `website/e2e/`.
 
 The pyramid shape — many unit, fewer
 contract, fewer integration, fewest

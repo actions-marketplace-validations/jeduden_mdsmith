@@ -36,6 +36,11 @@
       "name": "mdsmith-autofix",
       "source": "./editors/claude-code-autofix",
       "description": "Post-edit hook that runs mdsmith fix on .md files"
+    },
+    {
+      "name": "mdsmith-site",
+      "source": "./editors/claude-code-site",
+      "description": "Playwright e2e suite and browser MCP for the mdsmith.dev website"
     }
   ]
 }
