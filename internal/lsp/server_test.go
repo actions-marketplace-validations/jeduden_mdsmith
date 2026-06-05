@@ -2455,7 +2455,7 @@ func TestComputeCodeActionsDedupesPerRule(t *testing.T) {
 			"quickfix actions for the same rule must share the cached edit")
 	}
 	for _, a := range actions {
-		assert.Equal(t, "Fix all no-trailing-spaces with mdsmith", a.Title)
+		assert.Equal(t, "Remove trailing whitespace", a.Title)
 	}
 }
 
