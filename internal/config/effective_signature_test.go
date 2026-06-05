@@ -37,6 +37,21 @@ func TestEffectiveSignature_OverrideMatchChangesKey(t *testing.T) {
 	assert.NotEqual(t, kNoMatch, kMatch, "a matching override must change the signature")
 }
 
+func TestEffectiveSignature_KindsDimension(t *testing.T) {
+	cfg := sigTestConfig()
+	// Files outside docs/** share override matches, so only the resolved
+	// kinds distinguish them: different kinds ⇒ different keys.
+	ka, kindsA := config.EffectiveSignature(cfg, "src/x.md", []string{"a"}, nil)
+	kb, _ := config.EffectiveSignature(cfg, "src/y.md", []string{"b"}, nil)
+	assert.Equal(t, []string{"a"}, kindsA)
+	assert.NotEqual(t, ka, kb, "different resolved kinds must produce different signatures")
+
+	// Same kinds + same (no) override match ⇒ one shared key, so the
+	// engine memo serves both files from a single resolution.
+	ka2, _ := config.EffectiveSignature(cfg, "lib/z.md", []string{"a"}, nil)
+	assert.Equal(t, ka, ka2, "same kinds + same overrides must share a signature")
+}
+
 func TestEffectiveAllForKinds_MatchesEffectiveAll(t *testing.T) {
 	cfg := sigTestConfig()
 	for _, path := range []string{"src/a.md", "docs/a.md", "docs/sub/c.md"} {

@@ -358,7 +358,7 @@ func EffectiveSignature(
 	var b strings.Builder
 	for _, k := range kinds {
 		b.WriteString(k)
-		b.WriteByte(0x1f) // unit separator: kind names cannot contain it
+		b.WriteByte(0x1f) // unit separator; kind names are YAML-parsed, so cannot contain control bytes
 	}
 	b.WriteByte(0x1e) // record separator between the kinds and the overrides
 	for i := range cfg.Overrides {

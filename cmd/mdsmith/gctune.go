@@ -10,8 +10,9 @@ import (
 // live heap doubles; on a workspace walk that means re-scanning the
 // pointer-rich AST set constantly (profiling attributes ~40% of executed
 // instructions to GC). A batch process is about to exit, so a laxer
-// target trades a little peak memory — already bounded by the 512 MB
-// SetMemoryLimit in run() — for markedly less wall time. 400 was the
+// target trades a little peak memory — already bounded by the soft
+// memory limit in run() (512 MB by default, or the user's GOMEMLIMIT) —
+// for markedly less wall time. 400 was the
 // measured sweet spot on the parity corpus; GOGC=off was slower because
 // an unbounded heap wrecks cache locality.
 const batchGCPercent = 400

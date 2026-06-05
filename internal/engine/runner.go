@@ -685,15 +685,20 @@ func (c *effectiveCache) get(key string) (map[string]config.RuleCfg, bool) {
 	return v.(map[string]config.RuleCfg), true
 }
 
-func (c *effectiveCache) put(key string, v map[string]config.RuleCfg) {
-	c.m.Store(key, v)
+// loadOrStore returns the cached map for key, storing and returning v
+// when none exists yet. Concurrent misses on the same key thus converge
+// on one shared instance instead of each keeping its own equal copy.
+func (c *effectiveCache) loadOrStore(key string, v map[string]config.RuleCfg) map[string]config.RuleCfg {
+	actual, _ := c.m.LoadOrStore(key, v)
+	return actual.(map[string]config.RuleCfg)
 }
 
-// runResolve carries the per-Run resolution state lintFile needs: the
-// worker's own markdown rule clones (mdRules), the rule→category lookup
-// (constant across the run, built once), and the effective-config cache
-// (shared across workers). Bundling them keeps lintFile's signature
-// small and hoists work the per-file loop used to repeat.
+// runResolve bundles the resolution state lintFile needs, across two
+// lifetimes: mdRules is per-worker (each worker filters its own rule
+// clones), while catLookup and effCache are per-run — built once and
+// shared across all workers (effCache is concurrency-safe). Bundling
+// keeps lintFile's signature small and hoists work the per-file loop
+// used to repeat.
 type runResolve struct {
 	mdRules   []rule.Rule
 	catLookup func(string) string
@@ -714,8 +719,7 @@ func (r *Runner) effectiveCached(
 	}
 	effective, categories, explicit := config.EffectiveAllForKinds(r.Config, path, kinds)
 	res := config.ApplyCategories(effective, categories, rr.catLookup, explicit)
-	rr.effCache.put(key, res)
-	return res
+	return rr.effCache.loadOrStore(key, res)
 }
 
 // runCacheForCall returns the run-scoped read cache to thread through

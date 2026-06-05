@@ -89,6 +89,11 @@ func readLimited(r io.Reader, name string, max int64) ([]byte, error) {
 // (mirroring os.ReadFile); otherwise it starts small and grows like
 // io.ReadAll. Callers wrap r in a LimitReader, so a file that grew past
 // the cap since the stat is still bounded by the +1 sentinel read.
+//
+// The grow loop is inlined rather than delegating to bytes.Buffer or
+// io.ReadAll: both over-reserve (Buffer keeps MinRead headroom; ReadAll
+// can leave up to 2x slack) or copy on the way out, whereas the goal
+// here is exactly one right-sized sizeHint+1 allocation.
 func readAllSized(r io.Reader, sizeHint, max int64) ([]byte, error) {
 	capHint := 512
 	if sizeHint >= 0 && sizeHint <= max {
