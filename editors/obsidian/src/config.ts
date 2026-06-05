@@ -28,9 +28,12 @@ export interface ConfigAdapter {
 
 // discoverConfigYAML returns the text of the vault-root .mdsmith.yml, or
 // "" when none is present. A read that fails after the existence check —
-// a race with a delete, a permission error — also degrades to "" so a
-// missing or unreadable config never blocks the engine; it falls back to
-// the built-in defaults exactly as an empty config does.
+// a race with a delete, a permission error — also degrades to "", so a
+// missing or unreadable file falls back to the built-in defaults rather
+// than throwing. It does NOT validate the contents: a present, readable
+// but malformed .mdsmith.yml is the engine's to reject — NewSession
+// surfaces the parse error on session creation, exactly as the CLI does
+// for a discovered config.
 export async function discoverConfigYAML(
   adapter: ConfigAdapter,
   name: string = CONFIG_FILE_NAME,

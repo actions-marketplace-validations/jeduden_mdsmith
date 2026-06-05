@@ -331,6 +331,19 @@ describe("loadConfigYAML — config resolution + auto-discovery", () => {
     );
     expect(await load(plugin)).toBe("rules:\n  no-bare-urls: false\n");
   });
+
+  test('an unreadable explicit Config path degrades to "" (notice + defaults), not to discovery', async () => {
+    // configPath names a file the adapter cannot read, so read() rejects.
+    // The explicit-path branch surfaces a Notice (stubbed in tests) and
+    // returns "" — it must NOT silently fall through to the vault-root
+    // .mdsmith.yml, which would mask the user's broken path with an
+    // unrelated config. The present .mdsmith.yml is the bait.
+    const plugin = makeConfigPlugin(
+      { ".mdsmith.yml": "rules:\n  line-length: false\n" },
+      "cfg/missing.yml",
+    );
+    expect(await load(plugin)).toBe("");
+  });
 });
 
 describe("engine-down / restart safety (Copilot review)", () => {

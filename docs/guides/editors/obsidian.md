@@ -137,7 +137,11 @@ in `<vault>/.obsidian/plugins/mdsmith/` — `main.js`,
 `manifest.json`, `styles.css`, `mdsmith.wasm`, and
 `wasm_exec.js`. A missing `mdsmith.wasm` or
 `wasm_exec.js` is the usual cause. Re-unzip the
-release and reload the plugin.
+release and reload the plugin. If the notice instead
+reads `parsing config file: …`, your `.mdsmith.yml`
+has a syntax error — the engine refuses an invalid
+config rather than linting on defaults — so fix the
+YAML and run `mdsmith: Restart session`.
 
 **No diagnostics appear.** Check that **Run mode** is
 not `off`. With `onSave`, diagnostics refresh only
