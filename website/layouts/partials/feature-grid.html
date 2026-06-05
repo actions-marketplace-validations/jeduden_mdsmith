@@ -1,20 +1,54 @@
-{{- /* Feature cards are driven by the shared Markdown in
-       docs/features/ (synced and served at /features/ by
-       `mdsmith-release build-website`). The repository README
-       includes the same source via <?include?>, so the card
-       copy and the README cannot drift. Cards are grouped into
-       the five "pillars" via each page's `group` front-matter
-       field, so the homepage mirrors the README's grouped
-       overview. Groups render in weight order (first
-       appearance); cards within a group render by weight.
+{{- /*
+  Feature grid — "Why mdsmith" section homepage pillar layout.
 
-       Bento featured-first layout: the first card in each group
-       gets `feature-card--hero` (a 2-column anchor tile), and the
-       group's card count is stamped as `data-count` on
-       `.feature-grid`. All void-filling for non-multiple-of-3
-       counts is pure CSS keyed on `data-count` and the
-       `:last-child` / `:nth-last-child(2)` of the cards — see the
-       feature-grid rules in app.css. No per-section config. */ -}}
+  STRUCTURE
+  ─────────
+  Five pillars, one per feature group. Each pillar emits:
+    • A .pillar-header with a zero-padded number, the group name,
+      and a .pillar-rule hairline that fills the remaining width.
+    • A .card-grid[data-count=N] containing N cards.
+    • The first card of a group with a mapped artifact is the LEAD
+      card: it gets class card--lead and a device-frame artifact
+      partial after .card-body. (An unmapped group has no lead — its
+      first card is a plain .card.)
+    • All other cards are plain .card elements.
+
+  ARTIFACT MAP
+  ─────────────
+  Each lead card renders an artifact partial from
+  website/layouts/partials/feature-artifacts/. The map below
+  ties a group name to its artifact partial. Groups not listed
+  render their first card as a normal (non-lead) grid card — a
+  graceful fallback, no crash.
+
+    "Clean, consistent Markdown"            → terminal  (dark)
+    "One engine, every surface"             → editor    (light)
+    "A connected docs tree"                 → graph     (light)
+    "Markdown as a single source of truth"  → doc       (light)
+    "Built for your pipeline"               → ci        (light)
+
+  These artifact frames are website-only marketing visuals.
+  The repository README includes the same feature descriptions
+  via <?include?> directives — the artifacts do not appear there.
+
+  DATA
+  ────
+  All copy (title, summary, icon, rules, href) comes from
+  docs/features/*.md front matter, mirrored to
+  website/content/docs/features/ by `mdsmith-release build-website`.
+  Cards are grouped by the `group:` field; groups render in
+  first-appearance order (weight); cards within a group by weight.
+*/ -}}
+
+{{- /* Artifact map: group name → artifact partial path. */ -}}
+{{- $artifactMap := dict
+  "Clean, consistent Markdown"           "feature-artifacts/terminal"
+  "One engine, every surface"            "feature-artifacts/editor"
+  "A connected docs tree"                "feature-artifacts/graph"
+  "Markdown as a single source of truth" "feature-artifacts/doc"
+  "Built for your pipeline"              "feature-artifacts/ci"
+-}}
+
 {{- $features := site.GetPage "/features" -}}
 {{- if $features -}}
 {{- $pages := $features.Pages.ByWeight -}}
@@ -24,34 +58,43 @@
     {{- if not (in $groups .) }}{{ $groups = $groups | append . }}{{ end -}}
   {{- end -}}
 {{- end -}}
-{{- range $group := $groups }}
+
+{{- range $gi, $group := $groups -}}
   {{- $groupPages := where $pages "Params.group" $group -}}
   {{- $count := len $groupPages -}}
-  <div class="feature-group">
-    <h3 class="feature-group-title">{{ $group }}</h3>
-    <div class="feature-grid" data-count="{{ $count }}">
-      {{- range $i, $page := $groupPages }}
-      <a class="feature-card{{ if eq $i 0 }} feature-card--hero{{ end }}" href="{{ $page.RelPermalink }}">
-        <span class="icon" aria-hidden="true">
-          <i data-lucide="{{ $page.Params.icon | default "check" }}" width="{{ if eq $i 0 }}20{{ else }}18{{ end }}" height="{{ if eq $i 0 }}20{{ else }}18{{ end }}"></i>
-        </span>
-        <h4>{{ $page.Title }}</h4>
-        {{/* Inline render so the summary's inline markup
-             (code spans, links) does not nest a block <p>
-             inside this wrapping <p>. summary is required by
-             the `feature` kind's schema, so `mdsmith check`
-             fails on an incomplete page before it can ship —
-             no template-side guard needed. */}}
-        <p>{{ $page.RenderString (dict "display" "inline") $page.Params.summary }}</p>
-        {{- with $page.Params.rules }}
-        <div class="feature-rules">
-          {{ range . }}<span class="rule-chip">{{ . }}</span>{{ end }}
-        </div>
-        {{- end }}
-        <span class="feature-more">Learn more <i data-lucide="arrow-right" width="14" height="14" aria-hidden="true"></i></span>
-      </a>
-      {{- end }}
-    </div>
+  {{- $artifact := index $artifactMap $group -}}
+<div class="pillar">
+  <div class="pillar-header">
+    <span class="pillar-num">{{ printf "%02d" (add $gi 1) }}</span>
+    <h3 class="pillar-name">{{ $group }}</h3>
+    <span class="pillar-rule" aria-hidden="true"></span>
   </div>
-{{- end }}
+  <div class="card-grid" data-count="{{ $count }}">
+    {{- range $i, $page := $groupPages -}}
+      {{- /* Lead = first card of a group that has a mapped artifact;
+             index returns nil for an unmapped group, which is falsy. */ -}}
+      {{- $isLead := false -}}
+      {{- if and (eq $i 0) $artifact }}{{ $isLead = true }}{{ end -}}
+    <a class="card{{ if $isLead }} card--lead{{ end }}" href="{{ $page.RelPermalink }}">
+      <div class="card-body{{ if $isLead }} card-body--lead{{ end }}">
+        <span class="card-icon" aria-hidden="true">
+          <i data-lucide="{{ $page.Params.icon | default "check" }}" width="{{ if $isLead }}24{{ else }}18{{ end }}" height="{{ if $isLead }}24{{ else }}18{{ end }}"></i>
+        </span>
+        <div class="card-content">
+          <h4 class="card-title">{{ $page.Title }}</h4>
+          <p class="card-desc">{{ $page.RenderString (dict "display" "inline") $page.Params.summary }}</p>
+          {{- with $page.Params.rules }}
+          <div class="card-rules">
+            {{ range . }}<span class="rule-chip">{{ . }}</span>{{ end }}
+          </div>
+          {{- end }}
+          <span class="card-more">Learn more <i data-lucide="arrow-right" width="12" height="12" aria-hidden="true"></i></span>
+        </div>
+      </div>
+      {{- if $isLead }}{{ partial $artifact . }}{{ end -}}
+    </a>
+    {{- end }}
+  </div>
+</div>
+{{- end -}}
 {{- end -}}
