@@ -775,6 +775,80 @@ jobs:
             -f event_type=mdsmith-release \
             -f "client_payload[version]=${VERSION#v}"
 
+  # Nudge the Scoop bucket to bump its manifest to this version right
+  # away. Best-effort glue, not part of the gated publish: the bucket
+  # at jeduden/scoop-mdsmith also self-bumps via its `checkver` +
+  # `autoupdate` blocks on a daily schedule, so a missing token or a
+  # failed dispatch never blocks a release. The token is a fine-grained
+  # PAT with Contents: write on the bucket repo, stored as the
+  # SCOOP_BUCKET_DISPATCH_TOKEN repo secret.
+  notify-scoop-bucket:
+    needs: [release]
+    if: *release_repo_trigger_ok
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch a manifest bump to the Scoop bucket
+        env:
+          GH_TOKEN: ${{ secrets.SCOOP_BUCKET_DISPATCH_TOKEN }}
+          VERSION: ${{ env.VERSION }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::SCOOP_BUCKET_DISPATCH_TOKEN unset; the bucket will self-bump via checkver."
+            exit 0
+          fi
+          gh api repos/jeduden/scoop-mdsmith/dispatches \
+            -f event_type=mdsmith-release \
+            -f "client_payload[version]=${VERSION#v}"
+
+  # Submit the WinGet manifest for this release. Best-effort: if
+  # WINGET_PR_TOKEN is unset, komac cannot be fetched, or the
+  # submission fails, the job logs a notice/warning and exits 0 so
+  # the release is never blocked. komac builds the manifest from the
+  # published Windows installer URL and opens the PR — the same
+  # approach peers like mise use (via the winget-releaser action).
+  # `komac update` targets an existing package, so the first version
+  # is bootstrapped manually with `mdsmith-release
+  # render-winget-manifest`, mirroring how render-scoop-manifest
+  # bootstraps the Scoop bucket. The token is a PAT with fork+PR
+  # rights on microsoft/winget-pkgs, stored as the WINGET_PR_TOKEN
+  # repo secret gated by the `release` environment (same gate as the
+  # other publish jobs) so a stolen token cannot silently submit
+  # manifests without reviewer approval.
+  winget-submit:
+    needs: [release]
+    if: *release_repo_trigger_ok
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Submit the WinGet manifest via komac
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_PR_TOKEN }}
+          VERSION: ${{ env.VERSION }}
+        run: |
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            echo "::notice::WINGET_PR_TOKEN unset; skipping WinGet submission."
+            exit 0
+          fi
+          # Best-effort past this point: a WinGet hiccup must never
+          # fail an otherwise-successful release, so each fallible
+          # step logs a warning and exits 0.
+          KOMAC_VERSION="2.10.0"
+          if ! curl -fsSL \
+            "https://github.com/russellbanks/Komac/releases/download/v${KOMAC_VERSION}/komac-${KOMAC_VERSION}-x86_64-unknown-linux-musl" \
+            -o /usr/local/bin/komac; then
+            echo "::warning::could not download komac; skipping WinGet submission."
+            exit 0
+          fi
+          chmod +x /usr/local/bin/komac
+          installer="https://github.com/jeduden/mdsmith/releases/download/${VERSION}/mdsmith-windows-amd64.exe"
+          if ! komac update jeduden.mdsmith \
+            --version "${VERSION#v}" \
+            --urls "${installer}" \
+            --submit; then
+            echo "::warning::komac submission failed; submit the WinGet PR manually (see docs/development/release-channels/winget.md)."
+            exit 0
+          fi
+
   # A tool release also ships the website. The deploy itself lives
   # in pages.yml (its own workflow, also triggered by docs-only
   # pushes to main and by manual workflow_dispatch); this job just

@@ -107,6 +107,8 @@ func TestSubcommandHelpExitsZero(t *testing.T) {
 		"sync-messaging",
 		"sync-parity-rules",
 		"sync-channels",
+		"render-scoop-manifest",
+		"render-winget-manifest",
 	} {
 		assert.Equal(t, 0, run([]string{sub, "--help"}), "%s --help", sub)
 	}
@@ -123,6 +125,8 @@ func TestSubcommandRejectsUnknownFlag(t *testing.T) {
 		"sync-messaging",
 		"sync-parity-rules",
 		"sync-channels",
+		"render-scoop-manifest",
+		"render-winget-manifest",
 	} {
 		assert.Equal(t, 2, run([]string{sub, "--bogus"}), "%s --bogus", sub)
 	}
@@ -585,6 +589,146 @@ func TestRunCheckSecretRotationsRejectsUnknownFlag(t *testing.T) {
 // reportFlagParseErr branch of runRecordRotation.
 func TestRunRecordRotationRejectsUnknownFlag(t *testing.T) {
 	assert.Equal(t, 2, run([]string{"record-rotation", "--bogus", "T", "2026-05-12"}))
+}
+
+// TestRunRenderScoopManifestEndToEnd dispatches through
+// `run render-scoop-manifest` against a temp checksums.txt so the
+// subcommand wiring (arity check, open, parse, render, stdout) is
+// exercised end-to-end.
+func TestRunRenderScoopManifestEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	checksums := filepath.Join(dir, "checksums.txt")
+	require.NoError(t, os.WriteFile(checksums,
+		[]byte("deadbeef1234deadbeef1234deadbeef1234deadbeef1234deadbeef1234dead  mdsmith-windows-amd64.exe\n"),
+		0o644))
+
+	// Redirect stdout to capture manifest output.
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+
+	code := run([]string{"render-scoop-manifest", "1.2.3", checksums})
+
+	_ = w.Close()
+	os.Stdout = old
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	out := buf.String()
+
+	assert.Equal(t, 0, code)
+	assert.Contains(t, out, `"version": "1.2.3"`)
+	assert.Contains(t, out, "v1.2.3")
+	assert.Contains(t, out, "deadbeef1234deadbeef1234deadbeef1234deadbeef1234deadbeef1234dead")
+}
+
+// TestRunRenderScoopManifestBadArity covers the arity check in
+// runRenderScoopManifest.
+func TestRunRenderScoopManifestBadArity(t *testing.T) {
+	assert.Equal(t, 2, run([]string{"render-scoop-manifest"}))
+	assert.Equal(t, 2, run([]string{"render-scoop-manifest", "1.2.3"}))
+}
+
+// TestRunRenderScoopManifestMissingChecksums covers the os.Open
+// error branch.
+func TestRunRenderScoopManifestMissingChecksums(t *testing.T) {
+	assert.Equal(t, 1, run([]string{"render-scoop-manifest", "1.2.3",
+		filepath.Join(t.TempDir(), "no-such-file.txt")}))
+}
+
+// TestRunRenderScoopManifestMissingHash covers the ParseChecksumFor
+// error branch (file exists but target is absent).
+func TestRunRenderScoopManifestMissingHash(t *testing.T) {
+	dir := t.TempDir()
+	checksums := filepath.Join(dir, "checksums.txt")
+	require.NoError(t, os.WriteFile(checksums,
+		[]byte("abc123  mdsmith-linux-amd64\n"), 0o644))
+	assert.Equal(t, 1, run([]string{"render-scoop-manifest", "1.2.3", checksums}))
+}
+
+// TestRunRenderWingetManifestEndToEnd dispatches through
+// `run render-winget-manifest` and asserts the three YAML files
+// land in the output directory.
+func TestRunRenderWingetManifestEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	checksums := filepath.Join(dir, "checksums.txt")
+	require.NoError(t, os.WriteFile(checksums,
+		[]byte("cafe0000cafe0000cafe0000cafe0000cafe0000cafe0000cafe0000cafe0000  mdsmith-windows-amd64.exe\n"),
+		0o644))
+	outDir := filepath.Join(dir, "manifests")
+
+	code := run([]string{"render-winget-manifest", "--out", outDir, "0.13.0", checksums})
+	assert.Equal(t, 0, code)
+
+	for _, name := range []string{
+		"jeduden.mdsmith.yaml",
+		"jeduden.mdsmith.installer.yaml",
+		"jeduden.mdsmith.locale.en-US.yaml",
+	} {
+		data, err := os.ReadFile(filepath.Join(outDir, name))
+		require.NoError(t, err, name)
+		assert.Contains(t, string(data), "jeduden.mdsmith", name)
+	}
+}
+
+// TestRunRenderWingetManifestBadArity covers the arity and missing
+// --out checks.
+func TestRunRenderWingetManifestBadArity(t *testing.T) {
+	assert.Equal(t, 2, run([]string{"render-winget-manifest"}))
+	assert.Equal(t, 2, run([]string{"render-winget-manifest", "1.2.3", "x.txt"})) // missing --out
+}
+
+// TestRunRenderWingetManifestMissingChecksums covers the os.Open
+// error branch.
+func TestRunRenderWingetManifestMissingChecksums(t *testing.T) {
+	assert.Equal(t, 1, run([]string{"render-winget-manifest", "--out",
+		t.TempDir(), "1.2.3",
+		filepath.Join(t.TempDir(), "no-such-file.txt")}))
+}
+
+// TestRunRenderWingetManifestMissingHash covers the ParseChecksumFor
+// error branch: the checksums file exists but lacks the Windows exe
+// entry, so the subcommand exits 1.
+func TestRunRenderWingetManifestMissingHash(t *testing.T) {
+	dir := t.TempDir()
+	checksums := filepath.Join(dir, "checksums.txt")
+	require.NoError(t, os.WriteFile(checksums,
+		[]byte("abc123  mdsmith-linux-amd64\n"), 0o644))
+	assert.Equal(t, 1, run([]string{"render-winget-manifest", "--out",
+		filepath.Join(dir, "manifests"), "1.2.3", checksums}))
+}
+
+// TestRunRenderWingetManifestMkdirError covers the os.MkdirAll error
+// branch: --out points under a regular file, so the directory cannot
+// be created and the subcommand exits 1.
+func TestRunRenderWingetManifestMkdirError(t *testing.T) {
+	dir := t.TempDir()
+	checksums := filepath.Join(dir, "checksums.txt")
+	require.NoError(t, os.WriteFile(checksums,
+		[]byte("deadbeef1234deadbeef1234deadbeef1234deadbeef1234deadbeef1234dead  mdsmith-windows-amd64.exe\n"),
+		0o644))
+	// A regular file cannot have children, so MkdirAll(blocker/sub) fails.
+	blocker := filepath.Join(dir, "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
+	assert.Equal(t, 1, run([]string{"render-winget-manifest", "--out",
+		filepath.Join(blocker, "sub"), "1.2.3", checksums}))
+}
+
+// TestRunRenderWingetManifestWriteError covers the os.WriteFile error
+// branch: the first manifest's target path is pre-created as a
+// directory, so writing the file fails and the subcommand exits 1.
+func TestRunRenderWingetManifestWriteError(t *testing.T) {
+	dir := t.TempDir()
+	checksums := filepath.Join(dir, "checksums.txt")
+	require.NoError(t, os.WriteFile(checksums,
+		[]byte("deadbeef1234deadbeef1234deadbeef1234deadbeef1234deadbeef1234dead  mdsmith-windows-amd64.exe\n"),
+		0o644))
+	outDir := filepath.Join(dir, "manifests")
+	// Pre-create the first output name as a directory so os.WriteFile
+	// to that path fails with "is a directory".
+	require.NoError(t, os.MkdirAll(filepath.Join(outDir, "jeduden.mdsmith.yaml"), 0o755))
+	assert.Equal(t, 1, run([]string{"render-winget-manifest", "--out",
+		outDir, "0.13.0", checksums}))
 }
 
 // TestPrintCheckResult verifies the three formatting branches

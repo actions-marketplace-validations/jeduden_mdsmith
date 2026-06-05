@@ -30,11 +30,13 @@ header: |
   |--------|----------|--------------|---------------|
 row: "| [{title}]({filename}) | {provider} | {lastRotated} | {periodDays} |"
 ?>
-| Secret                                                     | Provider     | Last rotated | Period (days) |
-| ---------------------------------------------------------- | ------------ | ------------ | ------------- |
-| [MERGE_QUEUE_TOKEN](secret-rotations/merge-queue-token.md) | GitHub       | 2026-05-12   | 335           |
-| [OVSX_PAT](secret-rotations/ovsx-pat.md)                   | Open VSX     | 2026-05-12   | 335           |
-| [VSCE_PAT](secret-rotations/vsce-pat.md)                   | Azure DevOps | 2026-05-12   | 335           |
+| Secret                                                                         | Provider     | Last rotated | Period (days) |
+| ------------------------------------------------------------------------------ | ------------ | ------------ | ------------- |
+| [MERGE_QUEUE_TOKEN](secret-rotations/merge-queue-token.md)                     | GitHub       | 2026-05-12   | 335           |
+| [OVSX_PAT](secret-rotations/ovsx-pat.md)                                       | Open VSX     | 2026-05-12   | 335           |
+| [SCOOP_BUCKET_DISPATCH_TOKEN](secret-rotations/scoop-bucket-dispatch-token.md) | GitHub       | 2026-06-05   | 335           |
+| [VSCE_PAT](secret-rotations/vsce-pat.md)                                       | Azure DevOps | 2026-05-12   | 335           |
+| [WINGET_PR_TOKEN](secret-rotations/winget-pr-token.md)                         | GitHub       | 2026-06-05   | 335           |
 <?/catalog?>
 
 The 335-day default `periodDays` leaves a 30-day

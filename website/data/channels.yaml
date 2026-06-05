@@ -124,6 +124,16 @@
     - windows
   url: https://github.com/jeduden/mdsmith/releases
   weight: 10
+- title: Scoop
+  summary: The `jeduden/scoop-mdsmith` bucket installs the checksum-verified prebuilt binary for Windows amd64 via Scoop.
+  mechanism: pull
+  artifact: cli
+  command: scoop install mdsmith
+  audience: Windows users with Scoop installed
+  platforms:
+    - windows
+  url: https://github.com/jeduden/scoop-mdsmith
+  weight: 11
 - title: Visual Studio Marketplace
   summary: The mdsmith VS Code extension `.vsix`, published via a long-lived Marketplace publisher PAT.
   mechanism: push
@@ -133,6 +143,16 @@
   platforms:
     - editor
   url: https://marketplace.visualstudio.com/items?itemName=jeduden.mdsmith
+  weight: 11
+- title: WinGet
+  summary: A `jeduden.mdsmith` manifest submitted to `microsoft/winget-pkgs` installs mdsmith via `winget install jeduden.mdsmith` once the PR is merged.
+  mechanism: pull
+  artifact: cli
+  command: winget install jeduden.mdsmith
+  audience: Windows users with WinGet (Windows 11+)
+  platforms:
+    - windows
+  url: https://github.com/microsoft/winget-pkgs
   weight: 11
 - title: Open VSX
   summary: The same `.vsix` republished to Open VSX so VSCodium, Cursor, Theia, and Gitpod can install it.
