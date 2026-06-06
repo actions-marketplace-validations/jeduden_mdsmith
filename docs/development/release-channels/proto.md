@@ -12,6 +12,7 @@ credential: '[if mechanism == "push" {string & != ""}, (string | *"")][0]'
 job: '[if mechanism == "push" {string & != ""}, (string | *"")][0]'
 channelurl: 'string & =~ "^https?://"'
 weight: 'int & >=1'
+unlisted: 'bool | *false'
 ---
 # {title}
 

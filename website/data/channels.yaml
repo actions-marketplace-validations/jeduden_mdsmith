@@ -144,16 +144,6 @@
     - editor
   url: https://marketplace.visualstudio.com/items?itemName=jeduden.mdsmith
   weight: 11
-- title: WinGet
-  summary: A `jeduden.mdsmith` manifest submitted to `microsoft/winget-pkgs` installs mdsmith via `winget install jeduden.mdsmith` once the PR is merged.
-  mechanism: pull
-  artifact: cli
-  command: winget install jeduden.mdsmith
-  audience: Windows users with WinGet (Windows 11+)
-  platforms:
-    - windows
-  url: https://github.com/microsoft/winget-pkgs
-  weight: 11
 - title: Open VSX
   summary: The same `.vsix` republished to Open VSX so VSCodium, Cursor, Theia, and Gitpod can install it.
   mechanism: push
