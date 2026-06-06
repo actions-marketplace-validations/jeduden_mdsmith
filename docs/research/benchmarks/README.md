@@ -403,16 +403,21 @@ Four gates in CI:
   hand-edited fragment or a stale number fails the build.
   The cross-tool numbers only move when fresh JSON is
   promoted into `data/` — by the per-release
-  `benchmark-refresh` job or a local `run.sh`.
-- **Per-release regression gate + refresh** — on every
-  release, `release.yml`'s `benchmark-refresh` job
-  re-measures on the runner and runs
+  `benchmark-publish` job or a local `run.sh`.
+- **Per-release measure, publish, and regression gate** —
+  on every release, `release.yml`'s `benchmark-publish`
+  job re-measures on the runner, uploads the fragments as
+  the `benchmark-numbers` artifact (which the website
+  deploy downloads and bakes in, so each release ships its
+  own freshly-measured figures), and opens a PR that
+  refreshes the committed snapshot, so the published
+  numbers never freeze between releases. The separate
+  `bench-regression-gate` job runs
   `mdsmith-release bench-check`, which compares mdsmith's
   ratio to mado (machine- and corpus-size-independent)
   against the committed baseline and fails on a real
-  relative slowdown. The same job opens a PR that refreshes
-  the committed snapshot, so the published numbers never
-  freeze between releases.
+  relative slowdown — visibly, but without blocking the
+  deploy, so an honest-but-slower release still ships.
 - **Required checks** — CI runs on every PR and the
   merge queue, so these jobs gate queue merges. A
   maintainer must also add `check-bench` and
