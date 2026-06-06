@@ -52,10 +52,9 @@ the conflict. No partial edit is written.
 | `--follow-symlinks` | config  | Follow symlinks; tri-state — see below     |
 | `--max-input-size`  | `2MB`   | Max file size (e.g. `2MB`, `0`=none)       |
 
-`--follow-symlinks` semantics match
-[`mdsmith check`](check.md#flags). File discovery follows
-the `files:` patterns in `.mdsmith.yml` and the same
-`ignore:` rules `check` and `fix` use.
+`--follow-symlinks` and file discovery (the `files:` and
+`ignore:` patterns in `.mdsmith.yml`) match
+[`mdsmith check`](check.md#flags).
 
 ## Output
 
