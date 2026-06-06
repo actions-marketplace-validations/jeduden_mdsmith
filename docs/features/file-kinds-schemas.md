@@ -19,12 +19,11 @@ not a missing Decision section or an invented `status` value. A
 directory of similar files drifts as it grows.
 
 A **kind** gives each file a role; a **schema** gives that role a
-contract. Bind files to a kind by front matter, a
-`kind-assignment` glob, or a `path-pattern`. The kind's schema
-then constrains required headings, section order, and front-matter
-fields. Declare it inline on the kind, or share it from a
-`proto.md` template so a whole directory validates against one
-source of truth.
+contract. Bind files to a kind by a front-matter `kinds:` field or
+a `kind-assignment` glob. The kind's schema then constrains
+required headings, section order, and front-matter fields. Declare
+it inline on the kind, or share it from a `proto.md` template so a
+whole directory validates against one source of truth.
 
 For example, an `rfc` kind can declare its schema inline in
 `.mdsmith.yml`:
@@ -40,7 +39,7 @@ kinds:
         - heading: "Decision"
 ```
 
-Tag a file with that kind, then write it against the contract:
+Tag a file with that kind:
 
 ```markdown
 ---
@@ -64,6 +63,6 @@ RFC-0007.md:7:1 MDS020 ## Decision: got <missing>, expected section to be presen
 ```
 
 Schemas go further: they nest sections, repeat them, and inherit
-from one another. See the [file-kinds guide](../guides/file-kinds.md)
+from a parent. See the [file-kinds guide](../guides/file-kinds.md)
 and the [schemas guide](../guides/schemas.md) for the full
 vocabulary.
