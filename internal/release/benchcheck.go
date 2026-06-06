@@ -66,8 +66,11 @@ type BenchCheckConfig struct {
 	// (default "mado" — the leanest, most run-to-run stable peer).
 	BaselineTool string
 	// Tolerance is the fractional worsening of the ratio allowed before
-	// it counts as a regression (default 0.15 = 15%).
-	Tolerance float64
+	// it counts as a regression. A nil pointer applies the default 0.15
+	// (15%); a non-nil value is used as-is, so an explicit 0 is a strict
+	// zero-tolerance gate — which a plain float64 could not tell apart
+	// from "unset".
+	Tolerance *float64
 	// Corpora are the export file names compared (default
 	// corpus_repo.json and corpus_neutral.json).
 	Corpora []string
@@ -80,8 +83,9 @@ func (c *BenchCheckConfig) applyDefaults() {
 	if c.BaselineTool == "" {
 		c.BaselineTool = "mado"
 	}
-	if c.Tolerance == 0 {
-		c.Tolerance = 0.15
+	if c.Tolerance == nil {
+		d := 0.15
+		c.Tolerance = &d
 	}
 	if len(c.Corpora) == 0 {
 		c.Corpora = []string{"corpus_repo.json", "corpus_neutral.json"}
@@ -99,7 +103,7 @@ func (c *BenchCheckConfig) applyDefaults() {
 func BenchCheck(w io.Writer, baselineDir, freshDir string, cfg BenchCheckConfig) error {
 	cfg.applyDefaults()
 	_, _ = fmt.Fprintf(w, "perf regression check: %s vs %s, tolerance %.0f%%\n",
-		cfg.Tool, cfg.BaselineTool, cfg.Tolerance*100)
+		cfg.Tool, cfg.BaselineTool, *cfg.Tolerance*100)
 	var regressed []string
 	for _, corpus := range cfg.Corpora {
 		base, err := ratioFor(filepath.Join(baselineDir, corpus), cfg.Tool, cfg.BaselineTool)
@@ -112,7 +116,7 @@ func BenchCheck(w io.Writer, baselineDir, freshDir string, cfg BenchCheckConfig)
 		}
 		delta := (fresh - base) / base
 		verdict := "ok"
-		if fresh > base*(1+cfg.Tolerance) {
+		if fresh > base*(1+*cfg.Tolerance) {
 			verdict = "REGRESSION"
 			regressed = append(regressed, corpus)
 		}
@@ -121,7 +125,7 @@ func BenchCheck(w io.Writer, baselineDir, freshDir string, cfg BenchCheckConfig)
 	}
 	if len(regressed) > 0 {
 		return fmt.Errorf("perf regression: %s slowed relative to %s beyond %.0f%% on %v",
-			cfg.Tool, cfg.BaselineTool, cfg.Tolerance*100, regressed)
+			cfg.Tool, cfg.BaselineTool, *cfg.Tolerance*100, regressed)
 	}
 	_, _ = fmt.Fprintln(w, "no perf regression")
 	return nil

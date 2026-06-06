@@ -883,8 +883,11 @@ jobs:
   # not in the publish gating chain: the cross-tool fetch (pinned
   # tarballs, npm, Rust clones) has enough external moving parts that a
   # flake should not block shipping. The PR lands through the normal
-  # review-and-merge path; the bench-fragments gate verifies the
-  # fragments match the data before it merges.
+  # review-and-merge path; the bench-fragments gate re-checks the
+  # fragments against the data when the PR is enqueued in the merge
+  # queue, before it merges. (Like record-secret-rotation.yml, the PR
+  # is opened with the default token, so ci.yml does not auto-run on
+  # PR open — the merge queue is where the gate fires.)
   benchmark-refresh:
     needs: [release]
     if: *release_repo_trigger_ok

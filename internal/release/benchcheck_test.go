@@ -11,6 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// f64 returns a pointer to v, for the *float64 Tolerance field.
+func f64(v float64) *float64 { return &v }
+
 // writeExport writes a hyperfine-shaped export with the given per-tool
 // median wall times (seconds) into dir/name.
 func writeExport(t *testing.T, dir, name string, medians map[string]float64) {
@@ -86,20 +89,6 @@ func TestBenchCheck(t *testing.T) {
 		require.NoError(t, BenchCheck(&bytes.Buffer{}, bDir, fDir, BenchCheckConfig{}))
 	})
 
-	t.Run("custom config overrides the defaults", func(t *testing.T) {
-		// rumdl vs mado, single corpus, 50% tolerance: 2.0x -> 2.8x
-		// (+40%) is within 50%, so not a regression.
-		one := map[string]float64{"rumdl": 0.10, "mado": 0.05}
-		freshOne := map[string]float64{"rumdl": 0.14, "mado": 0.05}
-		bDir, fDir := stageCorpora(t,
-			map[string]map[string]float64{"corpus_repo.json": one},
-			map[string]map[string]float64{"corpus_repo.json": freshOne})
-		require.NoError(t, BenchCheck(&bytes.Buffer{}, bDir, fDir, BenchCheckConfig{
-			Tool: "rumdl", BaselineTool: "mado", Tolerance: 0.5,
-			Corpora: []string{"corpus_repo.json"},
-		}))
-	})
-
 	t.Run("missing fresh export errors", func(t *testing.T) {
 		bDir, _ := stageCorpora(t, both(0.25, 0.05), nil)
 		err := BenchCheck(&bytes.Buffer{}, bDir, t.TempDir(), BenchCheckConfig{})
@@ -112,6 +101,42 @@ func TestBenchCheck(t *testing.T) {
 		err := BenchCheck(&bytes.Buffer{}, t.TempDir(), fDir, BenchCheckConfig{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "read ")
+	})
+}
+
+// TestBenchCheckTolerance covers the tolerance handling split out of
+// TestBenchCheck (for funlen): a non-default config and an explicit
+// zero tolerance, which the *float64 distinguishes from an unset
+// (default-0.15) one.
+func TestBenchCheckTolerance(t *testing.T) {
+	t.Run("custom config overrides the defaults", func(t *testing.T) {
+		// rumdl vs mado, single corpus, 50% tolerance: 2.0x -> 2.8x
+		// (+40%) is within 50%, so not a regression.
+		bDir, fDir := stageCorpora(t,
+			map[string]map[string]float64{"corpus_repo.json": {"rumdl": 0.10, "mado": 0.05}},
+			map[string]map[string]float64{"corpus_repo.json": {"rumdl": 0.14, "mado": 0.05}})
+		require.NoError(t, BenchCheck(&bytes.Buffer{}, bDir, fDir, BenchCheckConfig{
+			Tool: "rumdl", BaselineTool: "mado", Tolerance: f64(0.5),
+			Corpora: []string{"corpus_repo.json"},
+		}))
+	})
+
+	t.Run("explicit zero tolerance is honored, not the 0.15 default", func(t *testing.T) {
+		// +4% at the default 15% is ok; an explicit 0 makes it a
+		// regression. A plain float64 zero-value could not express this
+		// ("unset" vs "strict zero" collide) — hence the *float64.
+		base := map[string]map[string]float64{
+			"corpus_repo.json":    {"mdsmith": 0.25, "mado": 0.05},
+			"corpus_neutral.json": {"mdsmith": 0.25, "mado": 0.05},
+		}
+		fresh := map[string]map[string]float64{
+			"corpus_repo.json":    {"mdsmith": 0.26, "mado": 0.05},
+			"corpus_neutral.json": {"mdsmith": 0.26, "mado": 0.05},
+		}
+		bDir, fDir := stageCorpora(t, base, fresh)
+		err := BenchCheck(&bytes.Buffer{}, bDir, fDir, BenchCheckConfig{Tolerance: f64(0)})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "perf regression")
 	})
 }
 

@@ -602,8 +602,7 @@ func (t *Toolkit) writeCorpusSizes(workdir, dataDir string) error {
 	// branch. The bytes match json.MarshalIndent(..., "", "  ") plus a
 	// trailing newline — the exact form gen_fragments.py reads and the
 	// bench-fragments idempotency gate expects.
-	sizes := corpusSizes{Repo: repoN, Neutral: neutralN}
-	body := []byte(fmt.Sprintf("{\n  %q: %d,\n  %q: %d\n}\n", "repo", sizes.Repo, "neutral", sizes.Neutral))
+	body := []byte(fmt.Sprintf("{\n  %q: %d,\n  %q: %d\n}\n", "repo", repoN, "neutral", neutralN))
 	dst := filepath.Join(dataDir, "corpus_sizes.json")
 	if err := t.fs.WriteFile(dst, body, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", dst, err)

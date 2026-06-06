@@ -66,7 +66,8 @@ Commands:
   record-rotation <title> <date>  Update lastRotated in a per-secret rotation file.
   merge-coverage -o <out> <p>...  Merge coverage profiles by summing hit counts.
   bench [workdir]                 Run the pinned cross-tool benchmark; promote JSON + fragments.
-  pull-site-assets                Fetch the published demo GIF + benchmark numbers for the site build.
+  bench-check <base> <fresh>      Fail if mdsmith regressed vs mado between two benchmark snapshots.
+  pull-site-assets                Fetch the published demo GIF for the site build.
   sync-messaging [--check]        Propagate docs/brand/messaging.md into every tracked surface (or check drift).
   sync-parity-rules [--check]     Regenerate the parity-convention disabled-rules fragment
                                   (or check drift).
@@ -558,7 +559,7 @@ func runBenchCheck(_ string, args []string) int {
 		return 2
 	}
 	return reportError(release.BenchCheck(os.Stdout, fs.Arg(0), fs.Arg(1),
-		release.BenchCheckConfig{Tolerance: *tolerance}))
+		release.BenchCheckConfig{Tolerance: tolerance}))
 }
 
 func runPullSiteAssets(root string, args []string) int {
