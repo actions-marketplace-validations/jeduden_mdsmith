@@ -67,8 +67,8 @@ workflow only runs for same-repo PRs targeting
 ### 2. Verify readiness
 
 Confirm CI is green, no review threads are
-unresolved, and the latest commit has a Copilot
-review before enqueuing.
+unresolved, and a high-effort code review leaves
+nothing to fix before enqueuing.
 
 Check CI:
 
@@ -108,34 +108,20 @@ are more than 100 threads and you must paginate
 before trusting the count.
 
 Stop if the count is greater than zero. Run
-`/pr-fixup` first to address the remaining
+`/gh-pr-fixup` first to address the remaining
 threads.
 
-Check that Copilot reviewed the latest commit:
+Run a final high-effort code review and auto-apply
+its fixes:
 
-```bash
-gh api --paginate "repos/$OWNER/$REPO/pulls/$PR/reviews" \
-  -q '[.[] | select(.user.login ==
-  "copilot-pull-request-reviewer[bot]")]
-  | last | .commit_id'
+```text
+/code-review xhigh --fix
 ```
 
-Compare the returned commit SHA with the PR head:
-
-```bash
-gh pr view "$PR" --json commits \
-  -q '.commits[-1].oid'
-```
-
-If the two SHAs do not match, Copilot has not
-reviewed the latest push. Request a review and
-wait before enqueuing:
-
-```bash
-gh api --method POST \
-  "repos/$OWNER/$REPO/pulls/$PR/requested_reviewers" \
-  -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
-```
+If the review changes any files, the branch is not
+ready — run `/gh-pr-fixup` to commit, push, and
+re-run CI before enqueuing. If it makes no changes,
+the review is clean; proceed.
 
 ### 3. Add the `queue` label
 

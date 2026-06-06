@@ -428,7 +428,7 @@ since this is what shows in the Agent's status line).
 
 When the Agent returns, relay its summary to the user
 in two or three sentences plus the PR URL from step 8.
-The user can then run `/pr-fixup` to babysit CI and
+The user can then run `/gh-pr-fixup` to babysit CI and
 review comments.
 
 ## Gotchas
