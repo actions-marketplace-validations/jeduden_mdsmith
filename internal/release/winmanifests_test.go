@@ -95,9 +95,21 @@ func TestRenderWingetManifest_InstallerFields(t *testing.T) {
 	manifests := RenderWingetManifests("0.13.0", "cafe0000cafe0000cafe0000cafe0000cafe0000cafe0000cafe0000cafe0000")
 	combined := strings.Join(manifests, "\n")
 
-	// Installer type must be exe or inno — Windows exe installs
-	// unconventionally for a CLI so we use exe.
-	assert.Contains(t, combined, "InstallerType: exe")
+	// mdsmith-windows-amd64.exe is a bare CLI binary, not an installer,
+	// so the manifest must use the portable installer type: WinGet then
+	// stores the binary and links it onto PATH itself instead of
+	// executing it as an installer. PortableCommandAlias exposes it as
+	// `mdsmith` — without the alias the shim is named after the asset
+	// stem (mdsmith-windows-amd64).
+	assert.Contains(t, combined, "InstallerType: portable")
+	assert.Contains(t, combined, "PortableCommandAlias: mdsmith")
+
+	// The installer-only fields must be gone: a bare binary has no
+	// silent-install switch, and running `mdsmith /S` would fail rather
+	// than install.
+	assert.NotContains(t, combined, "InstallerType: exe")
+	assert.NotContains(t, combined, "InstallModes")
+	assert.NotContains(t, combined, "Silent:")
 
 	// The architecture for the single Windows asset.
 	assert.Contains(t, combined, "x64")
