@@ -871,3 +871,131 @@ jobs:
     uses: ./.github/workflows/pages.yml
     with:
       version: ${{ inputs.version }}
+
+  # Re-measure the cross-tool benchmark on every release and open a PR
+  # with the refreshed numbers and the pages that embed them, so the
+  # committed snapshot the README, the benchmark doc, and the website
+  # read never freezes between releases (there is no local run.sh step
+  # in the normal flow). bench-check is the regression gate: it compares
+  # mdsmith's ratio to mado -- machine- and corpus-size-independent, the
+  # "same code, same factor" signal -- and fails this job, visibly, on a
+  # real relative slowdown. It runs AFTER `release` and is intentionally
+  # not in the publish gating chain: the cross-tool fetch (pinned
+  # tarballs, npm, Rust clones) has enough external moving parts that a
+  # flake should not block shipping. The PR lands through the normal
+  # review-and-merge path; the bench-fragments gate re-checks the
+  # fragments against the data when the PR is enqueued in the merge
+  # queue, before it merges. (Like record-secret-rotation.yml, the PR
+  # is opened with the default token, so ci.yml does not auto-run on
+  # PR open — the merge queue is where the gate fires.)
+  benchmark-refresh:
+    needs: [release]
+    if: *release_repo_trigger_ok
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # contents: write to push the refresh branch; pull-requests: write
+    # for `gh pr create`. The change to main still goes through the
+    # normal review-and-merge path -- this token only opens the PR.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Never persist the token in git config; the push step
+          # authenticates explicitly via a one-shot, masked header.
+          persist-credentials: false
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          # markdownlint-cli2 installs via `npm ci` from the committed
+          # docs/research/benchmarks/npm/ lockfile.
+          node-version: "24"
+      - name: Snapshot the committed baseline
+        # The committed data/ is the previous release's numbers. Keep a
+        # copy so bench-check can compare the fresh ratios against it
+        # after the measurement overwrites data/ in place.
+        run: |
+          # rm first so a re-run on a persistent runner replaces the
+          # baseline rather than nesting it under /tmp/baseline-data/data.
+          rm -rf /tmp/baseline-data
+          cp -r docs/research/benchmarks/data /tmp/baseline-data
+      - name: Re-measure the cross-tool benchmark
+        run: go run ./cmd/mdsmith-release bench /tmp/mdsmith-bench
+      - name: Re-splice the fragment includes
+        run: |
+          go run ./cmd/mdsmith fix \
+            docs/research/benchmarks/results.fragment.md \
+            docs/research/benchmarks/headline.fragment.md
+          go run ./cmd/mdsmith fix \
+            README.md docs/research/benchmarks/README.md
+      - name: Check for regression and open the refresh PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Ratio-based regression gate: mdsmith vs mado within each
+          # run, so the runner speed and the (growing) corpus cancel and
+          # only a real relative slowdown trips it. Capture the verdict
+          # for the PR body and defer failing the job until after the PR
+          # is opened, so a regressed run still leaves a reviewable diff.
+          verdict=$(go run ./cmd/mdsmith-release bench-check \
+            /tmp/baseline-data docs/research/benchmarks/data 2>&1) && rc=0 || rc=$?
+          echo "$verdict"
+
+          git add docs/research/benchmarks/data \
+                  docs/research/benchmarks/results.fragment.md \
+                  docs/research/benchmarks/headline.fragment.md \
+                  docs/research/benchmarks/README.md \
+                  README.md
+          if git diff --staged --quiet; then
+            echo "::notice::benchmark numbers unchanged -- no PR opened"
+            exit "$rc"
+          fi
+
+          branch="bench/refresh-${VERSION}-${GITHUB_RUN_ID}"
+          git checkout -b "$branch"
+          git commit -m "bench: refresh cross-tool benchmark numbers for ${VERSION}"
+          # Authenticate the push via a masked http.extraheader rather
+          # than embedding the token in the remote URL.
+          auth_header=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth_header"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            push origin "HEAD:refs/heads/${branch}"
+
+          # Build the PR body with echo appends (no heredoc) so dedent
+          # and backtick expansion cannot bite. Single quotes keep the
+          # Markdown backticks literal.
+          {
+            echo 'Automated refresh of the committed cross-tool benchmark snapshot,'
+            echo "re-measured on the CI runner during the ${VERSION} release."
+            echo ''
+            echo 'Review the number diff under `docs/research/benchmarks/data/` and the'
+            echo 'regenerated fragments. Absolute times wobble on a shared runner, so the'
+            echo '**ratio** is the signal -- the regression gate compares mdsmith to mado,'
+            echo 'which cancels both the runner speed and the corpus size:'
+            echo ''
+            echo '```'
+            echo "$verdict"
+            echo '```'
+          } > /tmp/pr-body.md
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "bench: refresh cross-tool benchmark numbers for ${VERSION}" \
+            --body-file /tmp/pr-body.md
+
+          if [ "$rc" -ne 0 ]; then
+            # rc!=0 is either a real regression or bench-check failing to
+            # read the data (missing tool/file); the verdict echoed above
+            # says which. Either way fail the job so it is visible.
+            echo "::error::bench-check failed — perf regression, or it could not read the benchmark data (see the verdict above). The refresh PR opened for review; this run is marked failed."
+            exit "$rc"
+          fi

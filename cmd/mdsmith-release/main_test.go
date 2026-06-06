@@ -109,6 +109,9 @@ func TestSubcommandHelpExitsZero(t *testing.T) {
 		"sync-channels",
 		"render-scoop-manifest",
 		"render-winget-manifest",
+		"pull-site-assets",
+		"bench",
+		"bench-check",
 	} {
 		assert.Equal(t, 0, run([]string{sub, "--help"}), "%s --help", sub)
 	}
@@ -775,4 +778,48 @@ func TestPrintCheckResult(t *testing.T) {
 			}
 		})
 	}
+}
+
+// writeBenchExport writes a minimal hyperfine export with mdsmith and
+// mado medians (passed as JSON number literals) into path.
+func writeBenchExport(t *testing.T, path, mdsmith, mado string) {
+	t.Helper()
+	body := `{"results":[{"command":"mdsmith","median":` + mdsmith +
+		`},{"command":"mado","median":` + mado + `}]}`
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+}
+
+// TestBenchCheckCommand drives the bench-check subcommand: the
+// arg-count guard, a clean pass, a regression (non-zero exit), and the
+// --tolerance flag widening the threshold.
+func TestBenchCheckCommand(t *testing.T) {
+	t.Run("wrong arg count prints usage", func(t *testing.T) {
+		assert.Equal(t, 2, run([]string{"bench-check"}))
+		assert.Equal(t, 2, run([]string{"bench-check", "only-one"}))
+	})
+
+	stage := func(t *testing.T, freshMdsmith string) (string, string) {
+		t.Helper()
+		base, fresh := t.TempDir(), t.TempDir()
+		for _, c := range []string{"corpus_repo.json", "corpus_neutral.json"} {
+			writeBenchExport(t, filepath.Join(base, c), "0.25", "0.05") // 5.0x
+			writeBenchExport(t, filepath.Join(fresh, c), freshMdsmith, "0.05")
+		}
+		return base, fresh
+	}
+
+	t.Run("no regression returns zero", func(t *testing.T) {
+		base, fresh := stage(t, "0.27") // 5.4x, +8%
+		assert.Equal(t, 0, run([]string{"bench-check", base, fresh}))
+	})
+
+	t.Run("regression returns nonzero", func(t *testing.T) {
+		base, fresh := stage(t, "0.30") // 6.0x, +20%
+		assert.Equal(t, 1, run([]string{"bench-check", base, fresh}))
+	})
+
+	t.Run("tolerance flag widens the threshold", func(t *testing.T) {
+		base, fresh := stage(t, "0.30") // +20%, but tolerated at 50%
+		assert.Equal(t, 0, run([]string{"bench-check", "--tolerance", "0.5", base, fresh}))
+	})
 }

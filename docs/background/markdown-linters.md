@@ -538,9 +538,9 @@ names its inspiration (ruff), and states the drop-in promise
 up front. panache leads with one precise sentence that names
 its three jobs and its one technical edge (the lossless CST).
 mdsmith's own README applies the same lesson: a one-line
-tagline, then a reproducible number (about 0.2 s for its
-523 files, ~10x faster than Node markdownlint) and a note
-that it does more per file than the Rust linters.
+tagline, then a reproducible number (about 0.5 s, an order of
+magnitude faster than Node markdownlint) and a note that it
+does more per file than the Rust linters.
 
 ### Prose and Readability
 
@@ -660,7 +660,7 @@ access and is non-deterministic.
 ## Benchmarks
 
 Default mdsmith is substantially faster than
-markdownlint-cli2 on its own 523-file repo. With the
+markdownlint-cli2 on its own Markdown. With the
 mdsmith-only rules disabled (`mdsmith-parity`), it lands
 close to rumdl. See the [benchmark doc][bench] for the
 current ratios.

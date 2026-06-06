@@ -5,10 +5,15 @@ name: Cross-tool benchmark
 # pattern): both the refreshed numbers (data + fragments) and
 # the benchmark Markdown pages rendered from main's READMEs with
 # those numbers spliced in. Record-only: it never gates a merge
-# or a release, and it never pushes to protected main — the
-# in-repo committed snapshot stays the `bench-fragments` gate's
-# source of truth, hand-refreshed via run.sh. The website pulls
-# the assets numbers at build time.
+# or a release, and it never pushes to protected main. The
+# in-repo committed snapshot — hand-refreshed via run.sh and
+# reviewed in a PR — stays the `bench-fragments` gate's source of
+# truth AND the numbers the website reads at build time. This
+# per-merge run re-measures on a noisy shared runner, so it is a
+# record-only drift signal (a demo.gif-style artifact on the
+# assets branch), NOT a live source the website or docs read; if
+# it fed the published figures they would swing run-to-run with
+# whatever else shared the runner.
 
 on:
   push:

@@ -2,8 +2,6 @@ package release
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,45 +21,21 @@ func resp200(body string) struct {
 	}{200, []byte(body), nil}
 }
 
-// TestPullSiteAssets_TransportErrors covers the err != nil branch
-// of PullSiteAssets, which the status-based tests in bench_test.go
-// never reach: a transport failure on a non-required asset is
-// logged and skipped, while the same failure on the required demo
-// GIF fails the deploy with a wrapped error.
-func TestPullSiteAssets_TransportErrors(t *testing.T) {
+// TestPullSiteAssets_TransportError covers the err != nil branch
+// of PullSiteAssets for the demo GIF: a transport failure on it
+// fails the deploy with a wrapped error rather than being silently
+// swallowed.
+func TestPullSiteAssets_TransportError(t *testing.T) {
 	transport := errors.New("dial tcp: connection refused")
 
-	t.Run("non-required transport error keeps committed copy", func(t *testing.T) {
+	t.Run("transport error fails the deploy", func(t *testing.T) {
 		root := t.TempDir()
 		g := &fakeGetter{resp: map[string]struct {
 			status int
 			body   []byte
 			err    error
 		}{
-			// Both benchmark fragments fail at the transport level
-			// (non-required); the demo GIF still succeeds so the run
-			// completes without error.
-			rawAssetsBase + "benchmarks/results.fragment.md":  {0, nil, transport},
-			rawAssetsBase + "benchmarks/headline.fragment.md": {0, nil, transport},
-			rawAssetsBase + "demo.gif":                        resp200("GIF"),
-		}}
-		require.NoError(t, NewWithHTTP(osFS{}, g).PullSiteAssets(root))
-		// The GIF still lands; the fragments were skipped, not written.
-		gif, err := os.ReadFile(filepath.Join(root, "website", "static", "img", "demo.gif"))
-		require.NoError(t, err)
-		assert.Equal(t, "GIF", string(gif))
-	})
-
-	t.Run("required transport error fails the deploy", func(t *testing.T) {
-		root := t.TempDir()
-		g := &fakeGetter{resp: map[string]struct {
-			status int
-			body   []byte
-			err    error
-		}{
-			rawAssetsBase + "benchmarks/results.fragment.md":  resp200("R"),
-			rawAssetsBase + "benchmarks/headline.fragment.md": resp200("H"),
-			rawAssetsBase + "demo.gif":                        {0, nil, transport},
+			rawAssetsBase + "demo.gif": {0, nil, transport},
 		}}
 		err := NewWithHTTP(osFS{}, g).PullSiteAssets(root)
 		require.Error(t, err)
@@ -81,9 +55,7 @@ func TestPullSiteAssets_FSFaults(t *testing.T) {
 			body   []byte
 			err    error
 		}{
-			rawAssetsBase + "benchmarks/results.fragment.md":  resp200("R"),
-			rawAssetsBase + "benchmarks/headline.fragment.md": resp200("H"),
-			rawAssetsBase + "demo.gif":                        resp200("GIF"),
+			rawAssetsBase + "demo.gif": resp200("GIF"),
 		}}
 	}
 
