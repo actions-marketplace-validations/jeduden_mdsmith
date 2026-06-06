@@ -153,7 +153,7 @@ row: "- [{summary}]({filename})"
 
 ## PR Workflow
 
-Use the `/pr-fixup`, `/gh-resolve-threads`, and `/merge-queue`
+Use the `/gh-pr-fixup`, `/gh-resolve-threads`, and `/merge-queue`
 skills for PR work — they cover rebases, CI monitoring, thread
 resolution, and merge enqueuing. After every push, request a
 Copilot re-review (the skills do this automatically).

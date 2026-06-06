@@ -1,5 +1,5 @@
 ---
-name: pr-fixup
+name: gh-pr-fixup
 description: >-
   Push changes, monitor CI, and address review comments
   until the PR is clean. Run after creating or updating
@@ -135,12 +135,12 @@ gh api --method POST \
 
 ### 5. Schedule recurring polling
 
-Use the `/loop` skill to re-invoke `/pr-fixup` every
+Use the `/loop` skill to re-invoke `/gh-pr-fixup` every
 minute. This avoids blocking bash loops and long-running
 `--watch` commands:
 
 ```text
-/loop 1m /pr-fixup
+/loop 1m /gh-pr-fixup
 ```
 
 On each invocation, check CI and review threads. If
