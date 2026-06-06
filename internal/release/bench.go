@@ -33,6 +33,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -317,6 +318,13 @@ func (t *Toolkit) Bench(root, workdir string) error {
 		return err
 	}
 
+	// Record the file count each corpus actually carries so the
+	// fragment headings/headline track the real corpus instead of a
+	// frozen literal. gen_fragments.py reads this next.
+	if err := t.writeCorpusSizes(workdir, dataDir); err != nil {
+		return err
+	}
+
 	fmt.Println("bench: regenerating fragments via gen_fragments.py")
 	gen := filepath.Join(root, benchDirRel, "gen_fragments.py")
 	if err := t.runner.RunCommand(root, "python3", gen, dataDir, filepath.Join(root, benchDirRel)); err != nil {
@@ -388,13 +396,35 @@ func (t *Toolkit) installMarkdownlint(root, workdir string) (string, error) {
 // run.sh's `grep -vE '^(demo/|internal/rules/[^/]*/bad/)'`.
 var repoCorpusSkip = regexp.MustCompile(`^(demo/|internal/rules/[^/]*/bad/)`)
 
+// rustBookPinnedSHA and rustRefPinnedSHA pin the neutral corpus to
+// exact upstream commits so its content is reproducible run to
+// run. The old code cloned each repo at the moving default branch
+// tip, so the neutral corpus silently changed whenever upstream
+// landed a doc edit — the same drift the repo corpus suffered from
+// the growing file count. Both SHAs are real commits on the
+// respective default branches (book: main, reference: master),
+// confirmed reachable via `git fetch --depth 1 <url> <sha>`.
+// Refreshing the neutral corpus is now a deliberate two-line bump
+// here, reviewed in a PR, not an implicit follow-the-tip.
+const (
+	// rust-lang/book main: "Temporarily remove the link to
+	// `Drop::drop`" (2026-02-03).
+	rustBookPinnedSHA = "05d114287b7d6f6c9253d5242540f00fbd6172ab"
+	// rust-lang/reference master: "Merge pull request #1908 from
+	// ehuss/naked" (2026-05-31).
+	rustRefPinnedSHA = "01b0ee707f4571e803c8b2c471d8335a448f5d60"
+)
+
 // buildCorpora materializes the two benchmark corpora under
 // workdir, skipping each if already present (cheap local rerun):
 //
 //   - corpus_repo: this repo's own tracked Markdown, fixtures
 //     dropped (git ls-files, filtered).
 //   - corpus_neutral: third-party prose — the Rust Book and Rust
-//     Reference `src/` trees, shallow-cloned.
+//     Reference `src/` trees, fetched at the pinned commits
+//     (rustBookPinnedSHA / rustRefPinnedSHA) so the corpus is
+//     reproducible run to run rather than tracking each repo's
+//     moving default-branch tip.
 func (t *Toolkit) buildCorpora(root, workdir string) error {
 	repoCorpus := filepath.Join(workdir, "corpus_repo")
 	if !t.exists(repoCorpus) {
@@ -416,18 +446,18 @@ func (t *Toolkit) buildCorpora(root, workdir string) error {
 
 	neutralCorpus := filepath.Join(workdir, "corpus_neutral")
 	if !t.exists(neutralCorpus) {
-		fmt.Println("bench: building corpus_neutral (cloning Rust Book + Reference)")
-		clones := []struct{ url, dir string }{
-			{"https://github.com/rust-lang/book.git", "rust-book"},
-			{"https://github.com/rust-lang/reference.git", "rust-ref"},
+		fmt.Println("bench: building corpus_neutral (Rust Book + Reference at pinned commits)")
+		clones := []struct{ url, dir, sha string }{
+			{"https://github.com/rust-lang/book.git", "rust-book", rustBookPinnedSHA},
+			{"https://github.com/rust-lang/reference.git", "rust-ref", rustRefPinnedSHA},
 		}
 		for _, c := range clones {
 			dir := filepath.Join(workdir, c.dir)
 			if t.exists(dir) {
 				continue
 			}
-			if err := t.runner.RunCommand(workdir, "git", "clone", "--depth", "1", "-q", c.url, c.dir); err != nil {
-				return fmt.Errorf("clone %s: %w", c.url, err)
+			if err := t.checkoutPinned(dir, c.url, c.sha); err != nil {
+				return err
 			}
 		}
 		for _, src := range []string{
@@ -438,6 +468,28 @@ func (t *Toolkit) buildCorpora(root, workdir string) error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// checkoutPinned shallow-fetches exactly the pinned commit sha from
+// url into a fresh repo at dir and checks it out, so the neutral
+// corpus content is reproducible run to run rather than tracking the
+// moving default-branch tip. `git fetch --depth 1 <url> <sha>` pulls
+// just that commit's tree (one object graph, no history), which a
+// plain `git clone` cannot pin; FETCH_HEAD is then the pinned tree.
+func (t *Toolkit) checkoutPinned(dir, url, sha string) error {
+	if err := t.fs.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	if err := t.runner.RunCommand(dir, "git", "init", "-q"); err != nil {
+		return fmt.Errorf("git init %s: %w", dir, err)
+	}
+	if err := t.runner.RunCommand(dir, "git", "fetch", "--depth", "1", "-q", url, sha); err != nil {
+		return fmt.Errorf("fetch %s@%s: %w", url, sha, err)
+	}
+	if err := t.runner.RunCommand(dir, "git", "checkout", "-q", "FETCH_HEAD"); err != nil {
+		return fmt.Errorf("checkout %s@%s: %w", url, sha, err)
 	}
 	return nil
 }
@@ -475,6 +527,75 @@ func (t *Toolkit) copyMarkdownTree(srcRoot, dstRoot string) error {
 		rel := strings.TrimPrefix(filepath.ToSlash(p), "/")
 		return t.copyInto(p, filepath.Join(dstRoot, filepath.FromSlash(rel)))
 	})
+}
+
+// countMarkdownFiles reports how many *.md / *.markdown files were
+// materialized under root — i.e. the file count hyperfine actually
+// walks for that corpus. Counting the materialized tree (not the
+// git ls-files output or a literal) is what keeps corpus_sizes.json
+// honest even on a cached rerun where the corpus was built earlier.
+func (t *Toolkit) countMarkdownFiles(root string) (int, error) {
+	// A corpus that was never built (e.g. neutral before its first
+	// clone) counts zero rather than erroring: the caller only writes
+	// the JSON once both corpora are materialized, but an absent root
+	// is a legitimate zero, not a failure.
+	if !t.exists(root) {
+		return 0, nil
+	}
+	n := 0
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(p, ".md") || strings.HasSuffix(p, ".markdown") {
+			n++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("count markdown under %s: %w", root, err)
+	}
+	return n, nil
+}
+
+// corpusSizes is the {"repo": N, "neutral": M} shape gen_fragments.py
+// reads to title the result-fragment headings and the headline. The
+// field tags match the JSON keys it expects.
+type corpusSizes struct {
+	Repo    int `json:"repo"`
+	Neutral int `json:"neutral"`
+}
+
+// writeCorpusSizes counts the Markdown files in each materialized
+// corpus under workdir and writes corpus_sizes.json into dataDir,
+// alongside the promoted hyperfine JSON. gen_fragments.py reads it
+// so the published file count is computed from the real corpus, never
+// a hardcoded literal that silently goes stale as the repo's own
+// Markdown grows. The JSON is emitted with a trailing newline and
+// the same key order every run so a no-op rerun produces no diff.
+func (t *Toolkit) writeCorpusSizes(workdir, dataDir string) error {
+	repoN, err := t.countMarkdownFiles(filepath.Join(workdir, "corpus_repo"))
+	if err != nil {
+		return err
+	}
+	neutralN, err := t.countMarkdownFiles(filepath.Join(workdir, "corpus_neutral"))
+	if err != nil {
+		return err
+	}
+	body, err := json.MarshalIndent(corpusSizes{Repo: repoN, Neutral: neutralN}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal corpus sizes: %w", err)
+	}
+	body = append(body, '\n')
+	dst := filepath.Join(dataDir, "corpus_sizes.json")
+	if err := t.fs.WriteFile(dst, body, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", dst, err)
+	}
+	fmt.Printf("bench: corpus_sizes.json repo=%d neutral=%d\n", repoN, neutralN)
+	return nil
 }
 
 // runHyperfine drives the two benchmark passes per corpus with

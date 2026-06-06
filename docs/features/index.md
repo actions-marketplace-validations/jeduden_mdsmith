@@ -64,8 +64,8 @@ is republished to Open VSX for Cursor, VSCodium, and Theia.
 **[Fast on every run](performance.md).**
 One static Go binary, no runtime to start. The workspace walk runs
 across all cores, and includes are linted once. A full check of
-this repository's ~720 files takes about 1.3 s, roughly 4x faster
-than Node markdownlint.
+this repository's Markdown takes about 0.5 s, an order of
+magnitude faster than Node markdownlint.
 
 **[Installs everywhere](install-everywhere.md).**
 The same version-stamped binary ships through go install, npm,

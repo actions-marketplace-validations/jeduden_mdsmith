@@ -210,9 +210,9 @@ adapted to mdsmith.
    feature list. Paste what the tool actually
    prints; never fabricate output.
 4. **One concrete number, not adjectives.** mise:
-   "900+ tools, 1 toml file". mdsmith: "523 files
-   in ~0.2 s, ~10x Node markdownlint", linked to a
-   reproducible benchmark.
+   "900+ tools, 1 toml file". mdsmith: "checks its
+   Markdown in ~0.5 s, ~10x faster than Node
+   markdownlint", linked to a reproducible benchmark.
 5. **Short pitch, then detail.** Three to five
    benefit-named groups, one line each, before any
    long card list. Never open with the full

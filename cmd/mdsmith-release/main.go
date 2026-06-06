@@ -537,12 +537,14 @@ func runPullSiteAssets(root string, args []string) int {
 	fs := flag.NewFlagSet("pull-site-assets", flag.ContinueOnError)
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: mdsmith-release pull-site-assets\n\n"+
-			"Fetch the published demo GIF and cross-tool benchmark\n"+
-			"numbers from the orphan `assets` branch into the working\n"+
-			"tree before the Hugo build. The demo GIF is required;\n"+
-			"the benchmark fragments fall back to the committed\n"+
-			"in-repo snapshot when the assets branch has not yet\n"+
-			"published them. Run from the repo root.\n")
+			"Fetch the published demo GIF from the orphan `assets`\n"+
+			"branch into the working tree before the Hugo build. The\n"+
+			"demo GIF is required and fails the deploy if missing. The\n"+
+			"cross-tool benchmark numbers are not pulled: they always\n"+
+			"come from the committed in-repo snapshot under\n"+
+			"docs/research/benchmarks/ (refreshed via run.sh, reviewed\n"+
+			"in a PR), so the noisy per-merge benchmark re-measurement\n"+
+			"stays a record-only drift signal. Run from the repo root.\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		if code := reportFlagParseErr(err, os.Stderr, "mdsmith-release: pull-site-assets"); code >= 0 {

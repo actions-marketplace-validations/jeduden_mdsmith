@@ -6,8 +6,10 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -188,6 +190,88 @@ func TestPromoteBenchJSON(t *testing.T) {
 	})
 }
 
+// touch writes an empty file at dir/rel, creating parents. Helper
+// for staging a fake materialized corpus tree.
+func touch(t *testing.T, dir, rel string) {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+	require.NoError(t, os.WriteFile(p, nil, 0o644))
+}
+
+// TestCountMarkdownFiles checks that the corpus file count is read
+// from the materialized tree: every nested *.md / *.markdown counts,
+// non-Markdown is ignored, and a missing tree counts zero rather than
+// erroring (a corpus may legitimately be empty before it is built).
+func TestCountMarkdownFiles(t *testing.T) {
+	root := t.TempDir()
+	corpus := filepath.Join(root, "corpus")
+	touch(t, corpus, "a.md")
+	touch(t, corpus, "nested/deep/b.md")
+	touch(t, corpus, "c.markdown")
+	touch(t, corpus, "README.txt")  // not Markdown
+	touch(t, corpus, "notes/d.rst") // not Markdown
+
+	n, err := New().countMarkdownFiles(corpus)
+	require.NoError(t, err)
+	assert.Equal(t, 3, n, "two .md plus one .markdown, .txt/.rst ignored")
+
+	// A path that was never built counts zero, not an error: the
+	// neutral corpus does not exist until cloned.
+	zero, err := New().countMarkdownFiles(filepath.Join(root, "absent"))
+	require.NoError(t, err)
+	assert.Equal(t, 0, zero)
+}
+
+// TestWriteCorpusSizes is the heart of the dynamic-count fix: the
+// bench counts the Markdown actually placed in each corpus and writes
+// corpus_sizes.json — the file gen_fragments.py reads instead of a
+// hardcoded literal — with the {"repo","neutral"} keys and a stable,
+// trailing-newline form so a no-op rerun produces no diff.
+func TestWriteCorpusSizes(t *testing.T) {
+	workdir := t.TempDir()
+	touch(t, filepath.Join(workdir, "corpus_repo"), "docs/x.md")
+	touch(t, filepath.Join(workdir, "corpus_repo"), "y.markdown")
+	touch(t, filepath.Join(workdir, "corpus_repo"), "z.md")
+	touch(t, filepath.Join(workdir, "corpus_neutral"), "rust-book/src/ch01.md")
+	touch(t, filepath.Join(workdir, "corpus_neutral"), "rust-ref/src/types.md")
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, New().writeCorpusSizes(workdir, dataDir))
+
+	raw, err := os.ReadFile(filepath.Join(dataDir, "corpus_sizes.json"))
+	require.NoError(t, err)
+
+	var got corpusSizes
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.Equal(t, 3, got.Repo, "three repo-corpus Markdown files")
+	assert.Equal(t, 2, got.Neutral, "two neutral-corpus Markdown files")
+
+	// The on-disk shape is exactly what gen_fragments.py reads: the
+	// two keys it requires, 2-space indented, trailing newline, and
+	// byte-identical across repeated writes (idempotent gate).
+	want := "{\n  \"repo\": 3,\n  \"neutral\": 2\n}\n"
+	assert.Equal(t, want, string(raw))
+	require.NoError(t, New().writeCorpusSizes(workdir, dataDir))
+	raw2, err := os.ReadFile(filepath.Join(dataDir, "corpus_sizes.json"))
+	require.NoError(t, err)
+	assert.Equal(t, raw, raw2, "a second write is byte-identical")
+}
+
+// TestNeutralCorpusPinned documents the reproducibility pin (task 3):
+// the neutral corpus is checked out at fixed upstream commits, not the
+// moving default-branch tip, so its content does not drift run to run.
+// The SHAs are full 40-hex git object IDs; a stray edit that blanks or
+// truncates one trips here.
+func TestNeutralCorpusPinned(t *testing.T) {
+	full := regexp.MustCompile(`^[0-9a-f]{40}$`)
+	assert.Regexp(t, full, rustBookPinnedSHA, "rust-lang/book pin is a full SHA")
+	assert.Regexp(t, full, rustRefPinnedSHA, "rust-lang/reference pin is a full SHA")
+	assert.NotEqual(t, rustBookPinnedSHA, rustRefPinnedSHA,
+		"the two corpora pin distinct commits")
+}
+
 // fakeGetter is an in-memory HTTPGetter keyed by URL.
 type fakeGetter struct {
 	resp map[string]struct {
@@ -207,50 +291,47 @@ func (f *fakeGetter) Get(url string) (int, []byte, error) {
 	return r.status, r.body, r.err
 }
 
+// TestPullSiteAssets covers the build-time asset pull. Only the
+// demo GIF is fetched now: the cross-tool benchmark numbers come
+// from the committed in-repo snapshot (refreshed via run.sh,
+// reviewed in a PR), so the noisy per-merge benchmark.yml run never
+// moves the published figures. A 200 writes the GIF as a first-party
+// asset; a required miss fails the deploy. (The transport-error and
+// FS-fault branches are covered in siteassets_coverage_test.go.)
 func TestPullSiteAssets(t *testing.T) {
-	t.Run("200 writes every destination", func(t *testing.T) {
+	t.Run("200 writes the demo gif", func(t *testing.T) {
 		root := t.TempDir()
 		g := &fakeGetter{resp: map[string]struct {
 			status int
 			body   []byte
 			err    error
 		}{
-			rawAssetsBase + "benchmarks/results.fragment.md":  {200, []byte("RESULTS-TABLE"), nil},
-			rawAssetsBase + "benchmarks/headline.fragment.md": {200, []byte("HEADLINE"), nil},
-			rawAssetsBase + "demo.gif":                        {200, []byte("GIF89a-bytes"), nil},
+			rawAssetsBase + "demo.gif": {200, []byte("GIF89a-bytes"), nil},
 		}}
 		require.NoError(t, NewWithHTTP(osFS{}, g).PullSiteAssets(root))
 
-		res, err := os.ReadFile(filepath.Join(root, benchDirRel, "results.fragment.md"))
-		require.NoError(t, err)
-		assert.Equal(t, "RESULTS-TABLE", string(res))
 		gif, err := os.ReadFile(filepath.Join(root, "website", "static", "img", "demo.gif"))
 		require.NoError(t, err)
 		assert.Equal(t, "GIF89a-bytes", string(gif))
 	})
 
-	t.Run("missing benchmark fragments keep the committed snapshot", func(t *testing.T) {
+	t.Run("benchmark fragments are never fetched", func(t *testing.T) {
 		root := t.TempDir()
-		// Pre-seed a committed snapshot the deploy must not lose.
-		snap := filepath.Join(root, benchDirRel, "results.fragment.md")
-		require.NoError(t, os.MkdirAll(filepath.Dir(snap), 0o755))
-		require.NoError(t, os.WriteFile(snap, []byte("COMMITTED-SNAPSHOT"), 0o644))
-
 		g := &fakeGetter{resp: map[string]struct {
 			status int
 			body   []byte
 			err    error
 		}{
-			// benchmarks/* absent (404 default); only the demo GIF
-			// is published.
 			rawAssetsBase + "demo.gif": {200, []byte("GIF"), nil},
 		}}
 		require.NoError(t, NewWithHTTP(osFS{}, g).PullSiteAssets(root))
 
-		kept, err := os.ReadFile(snap)
-		require.NoError(t, err)
-		assert.Equal(t, "COMMITTED-SNAPSHOT", string(kept),
-			"a non-required miss must not overwrite the committed fragment")
+		// The committed snapshot is the source of truth; the pull
+		// must not even request the fragments off the assets branch.
+		for _, u := range g.calls {
+			assert.NotContains(t, u, "benchmarks/",
+				"benchmark fragments come from the committed snapshot, not the assets branch")
+		}
 	})
 
 	t.Run("required demo gif miss fails the deploy", func(t *testing.T) {
@@ -260,9 +341,7 @@ func TestPullSiteAssets(t *testing.T) {
 			body   []byte
 			err    error
 		}{
-			rawAssetsBase + "benchmarks/results.fragment.md":  {200, []byte("R"), nil},
-			rawAssetsBase + "benchmarks/headline.fragment.md": {200, []byte("H"), nil},
-			rawAssetsBase + "demo.gif":                        {404, []byte("nope"), nil},
+			rawAssetsBase + "demo.gif": {404, []byte("nope"), nil},
 		}}
 		err := NewWithHTTP(osFS{}, g).PullSiteAssets(root)
 		require.Error(t, err)
