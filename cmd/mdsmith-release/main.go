@@ -134,8 +134,6 @@ func dispatch(cmd, root string, rest []string) int {
 		return runRecordRotation(root, rest)
 	case "merge-coverage":
 		return runMergeCoverage(root, rest)
-	case "bench":
-		return runBench(root, rest)
 	case "pull-site-assets":
 		return runPullSiteAssets(root, rest)
 	default:
@@ -143,9 +141,9 @@ func dispatch(cmd, root string, rest []string) int {
 	}
 }
 
-// dispatchGenerators routes the doc-generation subcommands, split
-// from dispatch so each routing function stays short. Unknown
-// commands fall through to the usage error here.
+// dispatchGenerators routes the doc-generation and benchmark
+// subcommands, split from dispatch so each routing function stays
+// short. Unknown commands fall through to the usage error here.
 func dispatchGenerators(cmd, root string, rest []string) int {
 	switch cmd {
 	case "sync-messaging":
@@ -158,6 +156,10 @@ func dispatchGenerators(cmd, root string, rest []string) int {
 		return runRenderScoopManifest(root, rest)
 	case "render-winget-manifest":
 		return runRenderWingetManifest(root, rest)
+	case "bench":
+		return runBench(root, rest)
+	case "bench-check":
+		return runBenchCheck(root, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "mdsmith-release: unknown command %q\n%s", cmd, usageText)
 		return 2
@@ -531,6 +533,32 @@ func runBench(root string, args []string) int {
 		workdir = fs.Arg(0)
 	}
 	return reportError(release.Bench(root, workdir))
+}
+
+func runBenchCheck(_ string, args []string) int {
+	fs := flag.NewFlagSet("bench-check", flag.ContinueOnError)
+	tolerance := fs.Float64("tolerance", 0.15,
+		"allowed fractional worsening of the mdsmith/mado ratio before it is a regression")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: mdsmith-release bench-check <baseline-dir> <fresh-dir>\n\n"+
+			"Fail when mdsmith regressed relative to the baseline tool\n"+
+			"(mado) between two hyperfine snapshots. Compares the\n"+
+			"within-run mdsmith/mado ratio, not the absolute time, so a\n"+
+			"slower runner and a grown corpus cancel and only a real\n"+
+			"relative slowdown trips it. Each dir holds corpus_repo.json\n"+
+			"and corpus_neutral.json (hyperfine --export-json).\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		if code := reportFlagParseErr(err, os.Stderr, "mdsmith-release: bench-check"); code >= 0 {
+			return code
+		}
+	}
+	if fs.NArg() != 2 {
+		fs.Usage()
+		return 2
+	}
+	return reportError(release.BenchCheck(os.Stdout, fs.Arg(0), fs.Arg(1),
+		release.BenchCheckConfig{Tolerance: *tolerance}))
 }
 
 func runPullSiteAssets(root string, args []string) int {

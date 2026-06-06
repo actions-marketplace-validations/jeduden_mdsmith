@@ -385,7 +385,7 @@ re-scoped, and a CI gate now guards the real number.
 
 ### Gates
 
-Three gates, all in CI:
+Four gates in CI:
 
 - **Tiered check budgets** —
   `BenchmarkCheckCorpus{Small,Large}` in
@@ -401,8 +401,18 @@ Three gates, all in CI:
   `data/*.json` via `gen_fragments.py`, re-runs
   `mdsmith fix`, and `git diff --exit-code`s. A
   hand-edited fragment or a stale number fails the build.
-  The cross-tool numbers only move when `run.sh` promotes
-  fresh JSON into `data/`.
+  The cross-tool numbers only move when fresh JSON is
+  promoted into `data/` — by the per-release
+  `benchmark-refresh` job or a local `run.sh`.
+- **Per-release regression gate + refresh** — on every
+  release, `release.yml`'s `benchmark-refresh` job
+  re-measures on the runner and runs
+  `mdsmith-release bench-check`, which compares mdsmith's
+  ratio to mado (machine- and corpus-size-independent)
+  against the committed baseline and fails on a real
+  relative slowdown. The same job opens a PR that refreshes
+  the committed snapshot, so the published numbers never
+  freeze between releases.
 - **Required checks** — CI runs on every PR and the
   merge queue, so these jobs gate queue merges. A
   maintainer must also add `check-bench` and
