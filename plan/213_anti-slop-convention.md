@@ -178,37 +178,37 @@ silently diverge.
 
 ## Tasks
 
-1. **MDS055 / MDS056 list-merger.** Implement
+1. [x] **MDS055 / MDS056 list-merger.** Implement
    `SettingMergeMode("starts") == MergeAppend` on
    MDS055 and `SettingMergeMode("contains") ==
    MergeAppend` on MDS056. Add a failing unit
    test asserting that a layered config (kind +
    override) unions the lists rather than
    replacing. Make it pass.
-2. **Convention entry.** Add `"no-llm-tells"` to
+2. [x] **Convention entry.** Add `"no-llm-tells"` to
    `conventions` in
    `internal/convention/convention.go`. Add a
    convention-loader unit test that loads it,
    confirms the right rules are enabled, and
    confirms the lists deep-merge with a user's
    own forbidden entries.
-3. **Forbidden lists.** Add the curated word /
+3. [x] **Forbidden lists.** Add the curated word /
    phrase / opener lists as package-level
    functions next to the convention entry. Source
    from `slop-patterns.md`.
-4. **Drift-checker test.** Integration test that
+4. [x] **Drift-checker test.** Integration test that
    reads `.claude/skills/docs-author/slop-patterns.md`,
    extracts the items under "Vocabulary tells",
    "Phrasal tells", and "Sentence openers", and
    asserts the convention's lists are a subset of
    each. Fails CI when one source drifts from the
    other.
-5. **Docs.** Add a `no-llm-tells` section to
+5. [x] **Docs.** Add a `no-llm-tells` section to
    [`docs/reference/conventions.md`](../docs/reference/conventions.md)
    matching the format of `portable` / `github` /
    `obsidian` / `plain`. Add a short pointer from
    `slop-patterns.md` back to the convention.
-6. **Skill update.** Add a one-paragraph note to
+6. [x] **Skill update.** Add a one-paragraph note to
    `.claude/skills/docs-author/SKILL.md`
    explaining that the mechanical layer ships as
    the `no-llm-tells` convention, and that
@@ -218,23 +218,25 @@ silently diverge.
 
 ## Acceptance Criteria
 
-- [ ] `convention: no-llm-tells` in a project's
+- [x] `convention: no-llm-tells` in a project's
       `.mdsmith.yml` enables MDS055, MDS056,
       MDS024, MDS023, and MDS063 with the
       documented settings.
-- [ ] A project that also sets `rules.forbidden-text.contains:`
+- [x] A project that also sets `rules.forbidden-text.contains:`
       with extra strings unions its list with the
       convention's list; neither side is dropped.
-- [ ] Same for `rules.forbidden-paragraph-starts.starts:`.
-- [ ] The drift-checker test fails when an item
+- [x] Same for `rules.forbidden-paragraph-starts.starts:`.
+- [x] The drift-checker test fails when an item
       is removed from either source.
-- [ ] `mdsmith check .` against a fixture with
-      "delve" or "It's important to note that"
-      produces an MDS056 diagnostic.
-- [ ] `mdsmith check .` against a fixture
+- [x] `mdsmith check .` against a fixture with
+      "delve" or "it's important to note that"
+      produces an MDS056 diagnostic. (MDS056 is
+      case-sensitive; the catalog form is
+      lowercase.)
+- [x] `mdsmith check .` against a fixture
       starting a paragraph with "Certainly," or
       "Moreover," produces an MDS055 diagnostic.
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no
       issues.
-- [ ] `mdsmith check .` passes.
+- [x] `mdsmith check .` passes.
