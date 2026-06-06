@@ -76,7 +76,7 @@ jobs:
              docs/research/benchmarks/headline.fragment.md \
              artifacts/benchmarks/
           cp docs/research/benchmarks/data/*.json artifacts/benchmarks/data/
-          cp README.md artifacts/benchmarks/pages/README.md
+          cp README.md artifacts/benchmarks/pages/repo-readme.md
           cp docs/research/benchmarks/README.md \
              artifacts/benchmarks/pages/benchmark.md
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
