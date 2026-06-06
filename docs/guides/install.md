@@ -42,6 +42,7 @@ into the binary at build time. Pick one path:
 glob:
   - "../development/release-channels/*.md"
   - "!../development/release-channels/proto.md"
+  - "!../development/release-channels/winget.md"
 where: 'artifact: "cli"'
 sort: numeric:weight
 header: |
@@ -62,7 +63,6 @@ row: "| {title} | `{command}` | {audience} |"
 | asdf            | `asdf plugin add mdsmith https://github.com/jeduden/asdf-mdsmith.git`                      | Repos standardized on asdf                        |
 | GitHub Releases | `curl -LO https://github.com/jeduden/mdsmith/releases/latest/download/mdsmith-<os>-<arch>` | Air-gapped hosts and direct binary control        |
 | Scoop           | `scoop install mdsmith`                                                                    | Windows users with Scoop installed                |
-| WinGet          | `winget install jeduden.mdsmith`                                                           | Windows users with WinGet (Windows 11+)           |
 | Flatpak         | `flatpak install ./mdsmith-x86_64.flatpak`                                                 | Sandboxed Linux x86_64 desktops via Flatpak       |
 <?/catalog?>
 
@@ -283,9 +283,9 @@ also controls `release.yml` on `jeduden/mdsmith`.
 ### Windows
 
 Windows ships one binary: `mdsmith-windows-amd64.exe`.
-The package-manager channels are the recommended
-install paths; the direct download is the fallback
-for offline and air-gapped hosts.
+Scoop is the recommended install path; the direct
+download is the fallback for offline and air-gapped
+hosts.
 
 **Scoop.** Install once; upgrades are automatic.
 
@@ -295,18 +295,6 @@ scoop install mdsmith
 ```
 
 Upgrade with `scoop update mdsmith`.
-
-**WinGet.** WinGet ships with Windows 11 and is
-available on Windows 10 via the App Installer.
-
-```powershell
-winget install jeduden.mdsmith
-```
-
-The `winget install` form works once the initial
-manifest PR is merged and Microsoft moderation
-approves it. Until that PR lands, use Scoop or the
-direct download below.
 
 **Direct download.** No package manager required.
 There is one Windows asset, `mdsmith-windows-amd64.exe`

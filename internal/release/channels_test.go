@@ -77,6 +77,20 @@ func TestLoadChannelsSortsByWeightAndSkipsProto(t *testing.T) {
 	assert.Equal(t, "A", chs[1].Title)
 }
 
+func TestLoadChannels_SkipsUnlisted(t *testing.T) {
+	root := seedChannelDir(t, "live.md", "pending.md")
+	pending := mkChannelDoc("Pending", "pull", "cli", "install pending", "aud", 5)
+	pending.Frontmatter.Unlisted = true
+	stubExtractAll(t, map[string]channelDoc{
+		relKey("live.md"):    mkChannelDoc("Live", "pull", "cli", "install live", "aud", 1),
+		relKey("pending.md"): pending,
+	})
+	chs, err := LoadChannels(root)
+	require.NoError(t, err)
+	require.Len(t, chs, 1, "a channel with unlisted: true is dropped")
+	assert.Equal(t, "Live", chs[0].Title)
+}
+
 func TestLoadChannels_CommandWindows(t *testing.T) {
 	root := seedChannelDir(t, "gh.md", "go.md")
 	gh := mkChannelDoc("GitHub Releases", "push", "cli", "curl <os>", "aud", 10)

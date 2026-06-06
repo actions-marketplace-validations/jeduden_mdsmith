@@ -73,12 +73,20 @@ release `.exe` `url`, and its SHA-256 `hash` (from
 A `jeduden.mdsmith` manifest is submitted to
 `microsoft/winget-pkgs` by a release job. `komac`
 builds the manifest from the release's Windows
-installer URL and opens the PR. It computes the
+binary URL and opens the PR. It computes the
 SHA-256 itself. The first version is bootstrapped
 by hand with
 `mdsmith-release render-winget-manifest`. That
 mirrors `render-scoop-manifest` for the Scoop
 bucket.
+
+The asset is a bare CLI binary, not an installer, so
+the manifest declares `InstallerType: portable` with
+`PortableCommandAlias: mdsmith`. WinGet then stores
+the binary and links it onto PATH as `mdsmith`. An
+`exe` type with `Silent: /S` would instead make WinGet
+run `mdsmith-windows-amd64.exe /S`, which the linter
+rejects as a bad argument — nothing would install.
 
 - Install: `winget install jeduden.mdsmith`. The short
   form works only after the manifest lands and Microsoft
@@ -91,7 +99,10 @@ bucket.
   token skips the job and never fails the release.
 - Channel doc: `docs/development/release-channels/winget.md`,
   `command: winget install jeduden.mdsmith`,
-  `platforms: [windows]`.
+  `platforms: [windows]`, `unlisted: true`. The flag
+  keeps WinGet out of the install picker and table
+  until the manifest PR merges, since nothing installs
+  through WinGet before then; the doc and tooling stay.
 
 ## Manifest generation belongs in mdsmith-release
 
@@ -106,8 +117,11 @@ version, URL, and hash substitution red/green.
 ## Picker, table, and install guide
 
 Both channel docs feed `channels.yaml` through
-`sync-channels`. The picker and the install table then gain
-Scoop and WinGet rows with no manual edit.
+`sync-channels`. The picker and the install table gain the
+Scoop row with no manual edit. WinGet's doc carries
+`unlisted: true`, so `sync-channels` drops it from the
+picker and the install-table catalog excludes it by glob —
+it stays out of both until the manifest PR merges.
 
 Both are CLI binary-download channels. They
 should sort among the CLI channels (Homebrew 7, asdf 9,
@@ -121,9 +135,10 @@ order.
 
 Update the Windows section of the
 [install guide](../docs/guides/install.md). Replace the
-"no package-manager channel yet" lead with the Scoop and
-WinGet one-liners. Keep the manual `.exe` download as the
-offline or air-gapped path.
+"no package-manager channel yet" lead with the Scoop
+one-liner. Keep the manual `.exe` download as the offline
+or air-gapped path. The WinGet one-liner is added back
+when the manifest PR merges and `unlisted` is dropped.
 
 ## Secrets and rotation
 
@@ -145,8 +160,9 @@ default-Windows reach (WinGet ships with Windows 11).
 
 1. [x] Add `mdsmith-release render-scoop-manifest` with unit
    tests (version, URL, and SHA-256 from `checksums.txt`).
-2. Create the `jeduden/scoop-mdsmith` bucket repo with the
-   manifest, `checkver`, and `autoupdate`. (external)
+2. [x] Create the `jeduden/scoop-mdsmith` bucket repo with the
+   manifest, `checkver`, and `autoupdate`. (external — repo
+   now available)
 3. [x] Add the `notify-scoop-bucket` job and
    `SCOOP_BUCKET_DISPATCH_TOKEN`; document its rotation.
 4. [x] Add `docs/development/release-channels/scoop.md`.
@@ -156,8 +172,8 @@ default-Windows reach (WinGet ships with Windows 11).
    `WINGET_PR_TOKEN`; document its rotation.
 7. [x] Add `docs/development/release-channels/winget.md`.
 8. [x] Run `sync-channels`; confirm the picker and table show
-   the Scoop and WinGet rows, weighted among the CLI
-   channels.
+   the Scoop row, weighted among the CLI channels. WinGet is
+   `unlisted` until its manifest PR merges.
 9. [x] Update the Windows section of the install guide.
 
 ## Acceptance Criteria
@@ -172,12 +188,15 @@ default-Windows reach (WinGet ships with Windows 11).
       (`render-scoop-manifest`, `render-winget-manifest`),
       not inline workflow shell; the recurring
       `winget-submit` job has `komac` generate the WinGet
-      manifest from the installer URL.
+      manifest from the binary URL. The manifest is a
+      `portable` installer type, so WinGet links the binary
+      onto PATH as `mdsmith` instead of executing it.
 - [x] A missing `SCOOP_BUCKET_DISPATCH_TOKEN` or
       `WINGET_PR_TOKEN` logs a notice and never fails the
       release.
-- [x] The install picker and table show Scoop and WinGet
-      rows for Windows.
+- [x] The install picker and table show the Scoop row for
+      Windows; WinGet carries `unlisted: true` and is held
+      out of both until its manifest PR merges.
 - [x] secret-rotations tracks both tokens under the 30-day
       reminder.
 - [x] All tests pass: `go test ./...`

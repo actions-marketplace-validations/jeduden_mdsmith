@@ -65,6 +65,12 @@ type channelDoc struct {
 		Platforms      []string `json:"platforms"`
 		ChannelURL     string   `json:"channelurl"`
 		Weight         int      `json:"weight"`
+		// Unlisted hides a channel from the user-facing install picker
+		// and table while keeping its dev doc and release tooling. It
+		// is set on a channel whose tool does not install mdsmith yet —
+		// e.g. WinGet, pending the microsoft/winget-pkgs PR. Defaults to
+		// false (listed) when the frontmatter omits it.
+		Unlisted bool `json:"unlisted"`
 	} `json:"frontmatter"`
 }
 
@@ -187,6 +193,13 @@ func LoadChannels(root string) ([]Channel, error) {
 			return nil, fmt.Errorf("decode %s json: %w", rel, err)
 		}
 		f := doc.Frontmatter
+		// An unlisted channel keeps its dev doc and release tooling but
+		// stays out of the picker data file. The install-table catalog
+		// excludes the same files by glob, since its CUE `where` filter
+		// would require every channel to declare the field.
+		if f.Unlisted {
+			continue
+		}
 		ch := Channel{
 			Title:          f.Title,
 			Summary:        f.Summary,
