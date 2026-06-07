@@ -683,6 +683,30 @@ func TestResolveTargetFile_EmptyFSPathReturnsNotFound(t *testing.T) {
 	require.False(t, ok, "fsPath='' after TrimPrefix must return not found")
 }
 
+// TestTargetExists_ParentTraversalViaRootFS mirrors the WASM/Session
+// shape: a workspace-relative source path in a subdirectory, a
+// project-root RootFS, and an up-and-over link. The OS branch cannot
+// help (no on-disk file) and the legacy FS branch would hand ".." to
+// io/fs (which rejects it); RootFS-relative resolution collapses the
+// "..".
+func TestTargetExists_ParentTraversalViaRootFS(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "internal", "rules", "x"), 0o755))
+	writeFile(t, filepath.Join(root, "internal", "rules", "x", "README.md"), "# X\n")
+
+	f := &lint.File{
+		Path:   "docs/background/linters.md",
+		FS:     os.DirFS(root),
+		RootFS: os.DirFS(root),
+	}
+	assert.True(t, targetExists(f, "../../internal/rules/x/README.md", ""),
+		"an existing up-and-over target must resolve via RootFS")
+	assert.False(t, targetExists(f, "../../internal/rules/x/MISSING.md", ""),
+		"a missing up-and-over target must still report absent")
+	assert.False(t, targetExists(f, "../../../escape.md", ""),
+		"a link escaping the workspace root must not resolve here")
+}
+
 // =====================================================================
 // Additional coverage: toStringSlice with []string type
 // =====================================================================
