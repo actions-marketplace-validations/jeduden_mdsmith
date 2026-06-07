@@ -2,7 +2,7 @@
 id: 221
 title: >-
   Ship mdsmith as a self-hosted Flatpak bundle
-status: "🔳"
+status: "✅"
 summary: >-
   Build a single-file x86_64 `.flatpak` bundle in CI from
   the freshly built Linux release binary and attach it to
@@ -74,7 +74,7 @@ not after `release`.
 - [x] `build-flatpak` stages a manifest pinning the
       x86_64 Linux binary by local path and copies that
       binary next to it.
-- [ ] `mdsmith check .` passes, including the regenerated
+- [x] `mdsmith check .` passes, including the regenerated
       release-channel catalog.
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no issues
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no issues
