@@ -1,5 +1,5 @@
 ---
-title: Concepts
+title: Background
 weight: 50
 summary: >-
   The mental model behind mdsmith — how flavor, rule,
@@ -7,7 +7,7 @@ summary: >-
   work, the placeholder grammar, and how it compares to
   other Markdown linters.
 ---
-# Concepts
+# Background
 
 <?catalog
 glob:
