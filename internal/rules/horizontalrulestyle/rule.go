@@ -120,7 +120,7 @@ func (r *Rule) checkLength(f *lint.File, line int, count int) []lint.Diagnostic 
 		RuleName: r.Name(),
 		Severity: lint.Warning,
 		Message: "horizontal rule has length " + strconv.Itoa(count) +
-				"; configured length is " + strconv.Itoa(r.Length),
+			"; configured length is " + strconv.Itoa(r.Length),
 	}}
 }
 
