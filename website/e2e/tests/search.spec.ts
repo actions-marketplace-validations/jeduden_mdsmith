@@ -7,10 +7,11 @@ import { test, expect } from "@playwright/test";
  * static render cannot reach: the keyboard shortcut, the dialog
  * lifecycle, querying the JSON index, keyboard navigation, and the
  * no-JS fallback (the trigger is hidden, the sidebar still navigates).
+ *
+ * The shortcut is exercised with Control+K on every platform: search.js
+ * opens on `e.metaKey || e.ctrlKey`, so Ctrl works in the headless
+ * browser regardless of the host OS (no Node `process` platform sniff).
  */
-
-// Ctrl on Linux/Windows, Cmd on macOS — search.js listens for both.
-const MOD = process.platform === "darwin" ? "Meta" : "Control";
 
 test.describe("⌘K search", () => {
   test.beforeEach(async ({ page }) => {
@@ -52,7 +53,7 @@ test.describe("⌘K search", () => {
     const dialog = page.locator("[data-search-dialog]");
     await expect(dialog).toBeHidden();
 
-    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.press(`Control+k`);
     await expect(dialog).toBeVisible();
     await expect(page.locator("[data-search-input]")).toBeFocused();
   });
@@ -61,9 +62,9 @@ test.describe("⌘K search", () => {
     page,
   }) => {
     const dialog = page.locator("[data-search-dialog]");
-    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.press(`Control+k`);
     await expect(dialog).toBeVisible();
-    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.press(`Control+k`);
     await expect(dialog).toBeHidden();
   });
 
@@ -79,7 +80,7 @@ test.describe("⌘K search", () => {
   // ─── querying ───────────────────────────────────────────────────────
 
   test("typing a query renders matching results", async ({ page }) => {
-    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.press(`Control+k`);
     const input = page.locator("[data-search-input]");
     await input.fill("auto-fix");
 
@@ -94,18 +95,22 @@ test.describe("⌘K search", () => {
   });
 
   test("a query with no matches shows the empty status", async ({ page }) => {
-    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.press(`Control+k`);
     await page.locator("[data-search-input]").fill("zzzznomatchquery");
 
+    // Assert the real empty-state text, not merely a visible status: the
+    // "Loading…" status is also visible with zero results while the index
+    // fetches, so toContainText waits for the index to land and re-render.
+    const status = page.locator("[data-search-status]");
+    await expect(status).toContainText("No results");
     const results = page.locator("[data-search-results] .search-result");
     await expect(results).toHaveCount(0);
-    await expect(page.locator("[data-search-status]")).toBeVisible();
   });
 
   test("ArrowDown then Enter navigates to the active result", async ({
     page,
   }) => {
-    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.press(`Control+k`);
     await page.locator("[data-search-input]").fill("install");
 
     // First result is active on render; move to the second, then open.
@@ -122,7 +127,7 @@ test.describe("⌘K search", () => {
   });
 
   test("clicking a result navigates to its page", async ({ page }) => {
-    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.press(`Control+k`);
     await page.locator("[data-search-input]").fill("auto-fix");
 
     const link = page.locator(
@@ -136,7 +141,7 @@ test.describe("⌘K search", () => {
 
   test("Escape closes the dialog", async ({ page }) => {
     const dialog = page.locator("[data-search-dialog]");
-    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.press(`Control+k`);
     await expect(dialog).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();

@@ -26,10 +26,14 @@
     const list = dialog.querySelector("[data-search-results]");
     const statusEl = dialog.querySelector("[data-search-status]");
     const indexURL = dialog.getAttribute("data-search-index");
+    // The dialog can exist without its inner controls if the partial is
+    // edited; bail rather than throw on the first open().
+    if (!input || !list || !statusEl) return;
 
-    let docs = null; // loaded index entries
+    let docs = null; // loaded index entries (lowercased fields cached)
     let loading = null; // in-flight fetch promise
     let results = []; // current result entries
+    let resultEls = []; // rendered <li> nodes, parallel to results
     let active = -1; // active result index, -1 = none
 
     // ── platform-aware key hint ──────────────────────────────────────
@@ -54,6 +58,15 @@
         })
         .then((data) => {
           docs = Array.isArray(data) ? data : [];
+          // Lowercase once at load, not once per keystroke: scoreDoc
+          // reads the cached _title/_summary and the body (which is
+          // only ever matched, never displayed, so it is folded to
+          // lowercase in place).
+          for (const d of docs) {
+            d._title = (d.title || "").toLowerCase();
+            d._summary = (d.summary || "").toLowerCase();
+            d.body = (d.body || "").toLowerCase();
+          }
           return docs;
         })
         .catch((err) => {
@@ -66,20 +79,17 @@
 
     // ── matching ─────────────────────────────────────────────────────
     function scoreDoc(doc, terms) {
-      const title = (doc.title || "").toLowerCase();
-      const summary = (doc.summary || "").toLowerCase();
-      const body = (doc.body || "").toLowerCase();
       let score = 0;
       for (const t of terms) {
         let s = 0;
-        const inTitle = title.indexOf(t);
+        const inTitle = doc._title.indexOf(t);
         if (inTitle !== -1) {
           s += 12;
           if (inTitle === 0) s += 10; // prefix
-          else if (/\s/.test(title.charAt(inTitle - 1))) s += 5; // word start
+          else if (/\s/.test(doc._title.charAt(inTitle - 1))) s += 5; // word start
         }
-        if (summary.indexOf(t) !== -1) s += 4;
-        if (body.indexOf(t) !== -1) s += 1;
+        if (doc._summary.indexOf(t) !== -1) s += 4;
+        if (doc.body.indexOf(t) !== -1) s += 1;
         // AND semantics: every term must appear somewhere.
         if (s === 0) return 0;
         score += s;
@@ -87,8 +97,7 @@
       return score;
     }
 
-    function search(query) {
-      const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    function search(terms) {
       if (!docs || terms.length === 0) return [];
       const scored = [];
       for (const doc of docs) {
@@ -100,43 +109,40 @@
     }
 
     // ── rendering ────────────────────────────────────────────────────
-    // Wrap each matched term in <mark>, building DOM nodes (never
-    // innerHTML) so the query string is escaped, not interpreted.
+    // Wrap each matched term in <mark>, building DOM text nodes (never
+    // innerHTML) so the query is escaped, not interpreted. Terms are
+    // matched longest-first so a shorter term cannot mask part of a
+    // longer overlapping one.
     function highlight(text, terms) {
       const frag = document.createDocumentFragment();
       if (!text) return frag;
-      const lower = text.toLowerCase();
-      let i = 0;
-      while (i < text.length) {
-        let next = -1;
-        let len = 0;
-        for (const t of terms) {
-          const at = lower.indexOf(t, i);
-          if (at !== -1 && (next === -1 || at < next)) {
-            next = at;
-            len = t.length;
-          }
-        }
-        if (next === -1) {
-          frag.appendChild(document.createTextNode(text.slice(i)));
-          break;
-        }
-        if (next > i) {
-          frag.appendChild(document.createTextNode(text.slice(i, next)));
-        }
-        const mark = document.createElement("mark");
-        mark.textContent = text.slice(next, next + len);
-        frag.appendChild(mark);
-        i = next + len;
+      if (terms.length === 0) {
+        frag.appendChild(document.createTextNode(text));
+        return frag;
       }
+      const ordered = terms.slice().sort((a, b) => b.length - a.length);
+      const re = new RegExp("(" + ordered.map(escapeRegExp).join("|") + ")", "gi");
+      // String.split with a capturing group yields [text, match, text,
+      // …]; odd indices are the captured matches.
+      text.split(re).forEach((part, i) => {
+        if (part === "") return;
+        if (i % 2 === 1) {
+          const mark = document.createElement("mark");
+          mark.textContent = part;
+          frag.appendChild(mark);
+        } else {
+          frag.appendChild(document.createTextNode(part));
+        }
+      });
       return frag;
     }
 
     function render(query) {
       const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
       list.textContent = "";
-      active = -1;
       results = [];
+      resultEls = [];
+      active = -1;
       input.removeAttribute("aria-activedescendant");
 
       if (terms.length === 0) {
@@ -153,7 +159,7 @@
         return;
       }
 
-      results = search(query);
+      results = search(terms);
       input.setAttribute("aria-expanded", results.length ? "true" : "false");
 
       if (results.length === 0) {
@@ -198,6 +204,7 @@
         li.addEventListener("mousemove", () => setActive(idx));
         li.appendChild(a);
         list.appendChild(li);
+        resultEls.push(li);
       });
 
       setActive(0);
@@ -209,21 +216,21 @@
     }
 
     function setActive(idx) {
-      const items = list.querySelectorAll(".search-result");
-      if (items.length === 0) {
+      if (resultEls.length === 0) {
         active = -1;
         return;
       }
-      active = (idx + items.length) % items.length;
-      items.forEach((el, i) => {
-        const on = i === active;
-        el.classList.toggle("is-active", on);
-        el.setAttribute("aria-selected", on ? "true" : "false");
-        if (on) {
-          input.setAttribute("aria-activedescendant", el.id);
-          el.scrollIntoView({ block: "nearest" });
-        }
-      });
+      // Only the previously- and newly-active rows change.
+      if (active >= 0 && resultEls[active]) {
+        resultEls[active].classList.remove("is-active");
+        resultEls[active].setAttribute("aria-selected", "false");
+      }
+      active = (idx + resultEls.length) % resultEls.length;
+      const el = resultEls[active];
+      el.classList.add("is-active");
+      el.setAttribute("aria-selected", "true");
+      input.setAttribute("aria-activedescendant", el.id);
+      el.scrollIntoView({ block: "nearest" });
     }
 
     function go() {
@@ -241,9 +248,15 @@
       input.focus();
       loadIndex()
         // Re-render the current query once the index lands — the user
-        // may have typed while the fetch was still in flight.
-        .then(() => render(input.value))
-        .catch(() => setStatus("Search is unavailable right now."));
+        // may have typed while the fetch was in flight. Guard on
+        // dialog.open so a fetch that resolves after the dialog was
+        // closed does not repopulate a hidden listbox.
+        .then(() => {
+          if (dialog.open) render(input.value);
+        })
+        .catch(() => {
+          if (dialog.open) setStatus("Search is unavailable right now.");
+        });
     }
 
     function close() {
@@ -314,6 +327,10 @@
       tag === "SELECT" ||
       el.isContentEditable
     );
+  }
+
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   if (document.readyState === "loading") {

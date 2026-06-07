@@ -18,7 +18,7 @@
 {{- range $p := where site.Pages "Kind" "in" (slice "page" "section") -}}
   {{- $summary := "" -}}
   {{- with $p.Params.summary -}}
-    {{- $summary = $p.RenderString (dict "display" "inline") . | plainify | chomp -}}
+    {{- $summary = $p.RenderString (dict "display" "inline") . | plainify | htmlUnescape | chomp -}}
   {{- end -}}
   {{- $body := substr (replaceRE `\s+` " " ($p.Plain | htmlUnescape)) 0 $searchBodyChars -}}
   {{- $index = $index | append (dict
