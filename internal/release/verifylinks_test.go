@@ -185,6 +185,250 @@ func TestVerifyWebsiteLinks_MissingRecursiveRootWraps(t *testing.T) {
 	assert.Contains(t, err.Error(), "walk")
 }
 
+// --- breadcrumb probes ---
+
+// crumb renders one breadcrumb entry; an empty href marks the
+// trailing current-page crumb (a bare <span>).
+func crumb(label, href string) string {
+	if href == "" {
+		return "<span>" + label + "</span>"
+	}
+	return `<a href="` + href + `">` + label + "</a>"
+}
+
+// crumbNav joins entries with separator spans into a docs-breadcrumb
+// nav, matching the markup partials/breadcrumb.html emits.
+func crumbNav(entries ...string) string {
+	return `<nav class="docs-breadcrumb">` +
+		strings.Join(entries, `<span class="sep">/</span>`) + "</nav>"
+}
+
+// goodCrumbSite materializes a rendered tree whose breadcrumbs
+// satisfy every verifyBreadcrumbs invariant: a home page (no
+// breadcrumb), a section, a section-overview page, and a leaf one
+// tier deeper. prefix is the baseURL path component carried on each
+// href, mirroring Hugo's relURL output.
+func goodCrumbSite(t *testing.T, prefix string) string {
+	t.Helper()
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "index.html"), "<p>home</p>")
+	writeFile(t, filepath.Join(root, "reference", "index.html"),
+		crumbNav(crumb("mdsmith", prefix+"/"), crumb("Reference", "")))
+	writeFile(t, filepath.Join(root, "reference", "cli", "index.html"),
+		crumbNav(crumb("mdsmith", prefix+"/"),
+			crumb("Reference", prefix+"/reference/"),
+			crumb("CLI Reference", "")))
+	writeFile(t, filepath.Join(root, "reference", "cli", "check", "index.html"),
+		crumbNav(crumb("mdsmith", prefix+"/"),
+			crumb("Reference", prefix+"/reference/"),
+			crumb("CLI Reference", prefix+"/reference/cli/"),
+			crumb("mdsmith check", "")))
+	return root
+}
+
+func TestVerifyBreadcrumbs_GoodPasses(t *testing.T) {
+	require.NoError(t, verifyBreadcrumbs(goodCrumbSite(t, ""), ""))
+}
+
+func TestVerifyBreadcrumbs_GoodPassesSubpath(t *testing.T) {
+	require.NoError(t,
+		verifyBreadcrumbs(goodCrumbSite(t, "/mdsmith"), "/mdsmith"))
+}
+
+// TestVerifyBreadcrumbs_FailsOnDuplicate pins the reported bug: a
+// section titled the same as its child directory renders the same
+// label twice in a row ("mdsmith / Concepts / Concepts / …").
+func TestVerifyBreadcrumbs_FailsOnDuplicate(t *testing.T) {
+	root := goodCrumbSite(t, "")
+	writeFile(t, filepath.Join(root, "background", "concepts", "index.html"),
+		crumbNav(crumb("mdsmith", "/"),
+			crumb("Concepts", "/background/"),
+			crumb("Concepts", "")))
+	// Parent so the /background/ crumb href resolves.
+	writeFile(t, filepath.Join(root, "background", "index.html"),
+		crumbNav(crumb("mdsmith", "/"), crumb("Concepts", "")))
+	err := verifyBreadcrumbs(root, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate consecutive crumb")
+	assert.Contains(t, err.Error(), "Concepts")
+}
+
+// TestVerifyBreadcrumbs_FailsOnDepthMismatch pins the reference/cli/
+// regression: a page three URL segments deep whose trail skips a
+// directory tier has fewer crumbs than its depth.
+func TestVerifyBreadcrumbs_FailsOnDepthMismatch(t *testing.T) {
+	root := goodCrumbSite(t, "")
+	// reference/cli/check is depth 3 but this trail omits the CLI tier.
+	writeFile(t, filepath.Join(root, "reference", "cli", "check", "index.html"),
+		crumbNav(crumb("mdsmith", "/"),
+			crumb("Reference", "/reference/"),
+			crumb("mdsmith check", "")))
+	err := verifyBreadcrumbs(root, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "URL depth")
+}
+
+func TestVerifyBreadcrumbs_FailsOnBrokenLink(t *testing.T) {
+	root := goodCrumbSite(t, "")
+	writeFile(t, filepath.Join(root, "guides", "editors", "vscode", "index.html"),
+		crumbNav(crumb("mdsmith", "/"),
+			crumb("Guides", "/guides/"),
+			crumb("Editors", "/guides/editors/"), // no such page rendered
+			crumb("mdsmith for VS Code", "")))
+	writeFile(t, filepath.Join(root, "guides", "index.html"),
+		crumbNav(crumb("mdsmith", "/"), crumb("Guides", "")))
+	err := verifyBreadcrumbs(root, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing page")
+}
+
+// TestVerifyBreadcrumbs_SkipsPagesWithoutBreadcrumb confirms a page
+// with no docs-breadcrumb nav (homepage, 404) is ignored.
+func TestVerifyBreadcrumbs_SkipsPagesWithoutBreadcrumb(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "index.html"), "<p>home, no nav</p>")
+	writeFile(t, filepath.Join(root, "404.html"), "<p>not found</p>")
+	require.NoError(t, verifyBreadcrumbs(root, ""))
+}
+
+// TestVerifyBreadcrumbs_AcceptsMinified pins the unquoted-attribute
+// form `hugo --minify` emits, and confirms a duplicate is still
+// caught in that form.
+func TestVerifyBreadcrumbs_AcceptsMinified(t *testing.T) {
+	good := t.TempDir()
+	writeFile(t, filepath.Join(good, "index.html"), "<p>home</p>")
+	writeFile(t, filepath.Join(good, "reference", "index.html"),
+		`<nav class=docs-breadcrumb><a href=/>mdsmith</a>`+
+			`<span class=sep>/</span><span>Reference</span></nav>`)
+	require.NoError(t, verifyBreadcrumbs(good, ""))
+
+	bad := t.TempDir()
+	writeFile(t, filepath.Join(bad, "index.html"), "<p>home</p>")
+	writeFile(t, filepath.Join(bad, "background", "index.html"),
+		`<nav class=docs-breadcrumb><a href=/>mdsmith</a>`+
+			`<span class=sep>/</span><span>x</span></nav>`)
+	writeFile(t, filepath.Join(bad, "background", "concepts", "index.html"),
+		`<nav class=docs-breadcrumb><a href=/>mdsmith</a>`+
+			`<span class=sep>/</span><a href=/background/>Concepts</a>`+
+			`<span class=sep>/</span><span>Concepts</span></nav>`)
+	err := verifyBreadcrumbs(bad, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate consecutive crumb")
+}
+
+// TestVerifyBreadcrumbs_MissingRootWraps drives the WalkDir-error
+// branch: a non-existent root surfaces a wrapped walk error.
+func TestVerifyBreadcrumbs_MissingRootWraps(t *testing.T) {
+	err := verifyBreadcrumbs(filepath.Join(t.TempDir(), "nope"), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "walk")
+}
+
+// TestVerifyBreadcrumbs_UnreadableMemberWraps drives the
+// readHTMLFile-error branch: a dangling index.html symlink is a
+// non-dir entry the walk descends to but cannot read.
+func TestVerifyBreadcrumbs_UnreadableMemberWraps(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "page")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	link := filepath.Join(dir, "index.html")
+	if err := os.Symlink(filepath.Join(dir, "no-such-target"), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	err := verifyBreadcrumbs(filepath.Dir(dir), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rendered HTML not found")
+}
+
+// TestVerifyWebsiteLinks_RunsBreadcrumbCheck confirms the breadcrumb
+// pass is wired into VerifyWebsiteLinks: a tree that satisfies every
+// link probe but carries a doubled crumb still fails.
+func TestVerifyWebsiteLinks_RunsBreadcrumbCheck(t *testing.T) {
+	root := goodSite(t, "")
+	writeFile(t, filepath.Join(root, "background", "index.html"),
+		crumbNav(crumb("mdsmith", "/"), crumb("Concepts", "")))
+	writeFile(t, filepath.Join(root, "background", "concepts", "index.html"),
+		crumbNav(crumb("mdsmith", "/"),
+			crumb("Concepts", "/background/"),
+			crumb("Concepts", "")))
+	err := VerifyWebsiteLinks(root, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate consecutive crumb")
+}
+
+func TestResolveCrumbHref(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "index.html"), "home")
+	writeFile(t, filepath.Join(root, "reference", "index.html"), "ref")
+
+	cases := []struct {
+		name, prefix, href string
+		wantErr            bool
+	}{
+		{"root", "", "/", false},
+		{"section", "", "/reference/", false},
+		{"missing", "", "/nope/", true},
+		{"external", "", "https://example.com/x/", false},
+		{"protocol relative", "", "//cdn/x/", false},
+		{"fragment trimmed", "", "/reference/#output", false},
+		{"subpath stripped", "/mdsmith", "/mdsmith/reference/", false},
+		{"subpath missing", "/mdsmith", "/mdsmith/nope/", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := resolveCrumbHref(root, tc.prefix, tc.href)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "missing page")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestCheckPageBreadcrumb_EmptyNavFails drives the empty-breadcrumb
+// branch: a nav element with no crumbs at all.
+func TestCheckPageBreadcrumb_EmptyNavFails(t *testing.T) {
+	err := checkPageBreadcrumb(t.TempDir(), "", "x/index.html",
+		[]byte(`<nav class="docs-breadcrumb"></nav>`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty breadcrumb")
+}
+
+// TestCheckPageBreadcrumb_DepthErrorWraps drives the
+// depth-computation error branch: a relative htmlDir against an
+// absolute file path makes filepath.Rel fail.
+func TestCheckPageBreadcrumb_DepthErrorWraps(t *testing.T) {
+	err := checkPageBreadcrumb("relative", "", "/abs/page/index.html",
+		[]byte(crumbNav(crumb("mdsmith", "/"), crumb("X", ""))))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "relpath")
+}
+
+func TestBreadcrumbURLDepth(t *testing.T) {
+	cases := []struct {
+		name, root, file string
+		want             int
+		wantErr          bool
+	}{
+		{"root", "/site", "/site/index.html", 0, false},
+		{"section", "/site", "/site/reference/index.html", 1, false},
+		{"deep", "/site", "/site/reference/cli/check/index.html", 3, false},
+		{"rel error", "relative", "/abs/x/index.html", 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := breadcrumbURLDepth(tc.root, tc.file)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestPathPrefixFromBaseURL(t *testing.T) {
 	cases := []struct {
 		name string
