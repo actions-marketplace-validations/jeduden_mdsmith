@@ -4,17 +4,7 @@
       {{ partial "docs-sidebar.html" . }}
     </aside>
     <article class="docs-main">
-      <nav class="docs-breadcrumb">
-        <a href="{{ "/" | relURL }}">mdsmith</a>
-        {{ range .Ancestors.Reverse }}
-          {{ if not .IsHome }}
-            <span class="sep">/</span>
-            <a href="{{ .RelPermalink }}">{{ .Title }}</a>
-          {{ end }}
-        {{ end }}
-        <span class="sep">/</span>
-        <span>{{ .Title }}</span>
-      </nav>
+      {{ partial "breadcrumb.html" . }}
       <div class="docs-prose">
         <h1>{{ .Title }}</h1>
         {{- /* Inline render so inline markup (code spans, links)

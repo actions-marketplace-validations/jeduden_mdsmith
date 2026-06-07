@@ -1,0 +1,38 @@
+{{- /* Breadcrumb trail reconstructed from the current page's URL
+       path segments, not .Ancestors. Hugo's .Ancestors skips a
+       directory whose landing page is a regular page rather than a
+       section _index — reference/cli.md is the overview served at
+       /reference/cli/, but the command pages under reference/cli/
+       have no `cli` section in their ancestor chain, so an
+       .Ancestors trail jumped straight from "Reference" to the
+       command page. Walking the URL segments and resolving each one
+       with site.GetPage restores every tier and reads each tier's
+       title from its own page instead of Hugo's filename guess.
+
+       site.GetPage takes a logical content path with no baseURL
+       prefix, so the per-segment path is built from .RelPermalink
+       with site.Home.RelPermalink (which carries any project-pages
+       subpath such as /<repo>/) trimmed off the front; every
+       emitted href uses the resolved page's .RelPermalink, which
+       re-adds that prefix. */ -}}
+<nav class="docs-breadcrumb">
+  {{- $home := site.Home.RelPermalink -}}
+  {{- $rel := strings.Trim (strings.TrimPrefix $home .RelPermalink) "/" -}}
+  {{- $segs := slice -}}
+  {{- if $rel }}{{ $segs = split $rel "/" }}{{ end -}}
+  <a href="{{ $home }}">mdsmith</a>
+  {{- $acc := "" -}}
+  {{- range $i, $seg := $segs -}}
+    {{- $acc = printf "%s/%s" $acc $seg -}}
+    {{- $pg := site.GetPage $acc -}}
+    {{- $label := $seg | humanize -}}
+    {{- $href := printf "%s%s/" $home (strings.TrimPrefix "/" $acc) -}}
+    {{- with $pg }}{{ $label = .Title }}{{ $href = .RelPermalink }}{{ end -}}
+    <span class="sep">/</span>
+    {{- if eq (add $i 1) (len $segs) -}}
+      <span>{{ $label }}</span>
+    {{- else -}}
+      <a href="{{ $href }}">{{ $label }}</a>
+    {{- end -}}
+  {{- end -}}
+</nav>
