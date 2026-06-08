@@ -5,14 +5,13 @@ status: "🔲"
 model: opus
 depends-on: [146, 208, 209]
 summary: >-
-  Lift reusable schemas out of
-  `kinds.<name>.schema:` in `.mdsmith.yml` into
-  standalone YAML files under
-  `.mdsmith/schemas/<name>.yaml`. A kind references
-  one by name (`schema: rfc-v1`) so the same schema
-  can drive many kinds without duplication. Also
-  closes the conventions docs gap with
-  `docs/guides/conventions.md`.
+  Add a top-level `schemas:` registry to
+  `.mdsmith.yml`, mirrored at
+  `.mdsmith/schemas/<name>.yaml` — the same
+  pattern plans 208 and 209 set for `kinds:` and
+  `conventions:`. A kind references a schema by
+  name (`schema: rfc-v1`). Also adds the missing
+  `docs/guides/conventions.md` guide.
 ---
 # Schema-per-file config under `.mdsmith/schemas/`
 
