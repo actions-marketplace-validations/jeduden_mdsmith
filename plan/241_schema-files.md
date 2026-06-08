@@ -21,13 +21,14 @@ summary: >-
 
 ## Goal
 
-A user with many kinds outgrows inline schemas.
-This plan adds a top-level `schemas:` registry to
-`.mdsmith.yml`, mirrored at
-`.mdsmith/schemas/<name>.yaml` — the same pattern
-plans 208/209 set for `kinds:` and `conventions:`.
-Kinds reference a schema by name
-(`schema: rfc-v1`).
+Inline schemas bloat `.mdsmith.yml` the way
+`kinds:` and `conventions:` once did. This plan
+splits each schema into its own
+`.mdsmith/schemas/<name>.yaml` — a top-level
+`schemas:` registry mirrored to a folder, the
+208/209 pattern. A kind references one by name
+(`schema: rfc-v1`); one schema can drive several
+kinds.
 
 ## ...
 
