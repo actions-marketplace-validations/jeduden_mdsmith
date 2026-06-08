@@ -1,5 +1,5 @@
 ---
-id: 238
+id: 241
 title: Schema-per-file config under `.mdsmith/schemas/`
 status: "🔲"
 model: opus
