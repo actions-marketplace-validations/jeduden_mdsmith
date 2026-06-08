@@ -3,6 +3,7 @@ package release
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +154,8 @@ func TestSummarizeTestRun(t *testing.T) {
 	stream.WriteString(evLine(t, "pass", ip, "TestIt", ""))
 	// E2E: one function.
 	stream.WriteString(evLine(t, "pass", "example.com/m/cmd/app", "TestE2EThing", ""))
+	// A package-level pass (empty Test) is skipped, not counted.
+	stream.WriteString(evLine(t, "pass", "example.com/m/foo", "", ""))
 	// A mangled JSON event (drop from log, do not count).
 	stream.WriteString(`{"Time":"x","Action":"output","Package":"example.com/m/foo","Test":"TestU` + "\n")
 	// A genuine non-JSON notice (echo to log).
@@ -192,6 +195,37 @@ func TestSummarizeTestRunUnclassifiedFallsToUnit(t *testing.T) {
 
 func TestSummarizeTestRunErrorsWithoutModule(t *testing.T) {
 	_, err := SummarizeTestRun(t.TempDir(), strings.NewReader(""), &bytes.Buffer{})
+	assert.Error(t, err)
+}
+
+// errReader fails on the first read so the scanner surfaces a
+// non-EOF error.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("boom") }
+
+func TestSummarizeTestRunScannerError(t *testing.T) {
+	_, err := SummarizeTestRun(writeTestModule(t), errReader{}, &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading test json")
+}
+
+// TestScanTestLayersScanError drives the propagation of a per-file
+// scan failure: a _test.go line longer than scanTestFuncNames'
+// 1 MiB token cap makes the scanner return bufio.ErrTooLong, which
+// must surface as an error from scanTestLayers.
+func TestScanTestLayersScanError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module example.com/m\n"), 0o644))
+	huge := append([]byte("// "), bytes.Repeat([]byte("a"), 2*1024*1024)...)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "huge_test.go"), huge, 0o644))
+
+	_, err := scanTestLayers(root)
+	require.Error(t, err)
+
+	// The same oversized line trips scanTestFuncNames directly.
+	_, err = scanTestFuncNames(filepath.Join(root, "huge_test.go"))
 	assert.Error(t, err)
 }
 

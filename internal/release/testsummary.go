@@ -233,10 +233,9 @@ func scanTestLayers(root string) (map[testKey]TestLayer, error) {
 		if !strings.HasSuffix(d.Name(), "_test.go") {
 			return nil
 		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return relErr
-		}
+		// path is always rooted at root, so trimming the prefix is
+		// exact and avoids filepath.Rel's unreachable error branch.
+		rel := strings.TrimPrefix(strings.TrimPrefix(path, root), string(os.PathSeparator))
 		layer := layerForTestFile(rel)
 		pkg := importPath(module, filepath.Dir(rel))
 		names, scanErr := scanTestFuncNames(path)
