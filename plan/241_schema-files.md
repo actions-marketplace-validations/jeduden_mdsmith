@@ -38,7 +38,7 @@ schema can drive several kinds.
 ## Background
 
 Today a kind embeds its schema inline under
-`kinds.<name>.schema:` or points at a `proto.md`.
+`kinds.<kind>.schema:` or points at a `proto.md`.
 Inline doesn't share; `proto.md` shares but uses
 a different matcher grammar. The registry
 shares AND uses the plan 156 matcher engine via
