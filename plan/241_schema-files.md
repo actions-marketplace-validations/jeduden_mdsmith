@@ -22,21 +22,19 @@ summary: >-
 
 ## Goal
 
-Lift each reusable schema out of
-`kinds.<name>.schema:` into a standalone YAML file
-under `.mdsmith/schemas/<name>.yaml`. Any kind
-references it by name via `schema: rfc-v1`.
+Help an mdsmith user with a growing `.mdsmith.yml`
+factor schemas into separate files. Plans 208 and
+209 covered kinds and conventions. This plan adds
+`.mdsmith/schemas/<name>.yaml`. Any inline
+`kinds.<name>.schema:` block can lift into a
+standalone YAML file, referenced by name
+(`schema: rfc-v1`).
 
 ## ...
 
 <?allow-empty-section?>
 
 ## Background
-
-Plans 208 and 209 split kinds and conventions
-into `.mdsmith/kinds/` and
-`.mdsmith/conventions/`. Schemas are the next
-named, reusable bundle.
 
 Today a kind embeds its schema inline under
 `kinds.<name>.schema:` or points at a `proto.md`.
