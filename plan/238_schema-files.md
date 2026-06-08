@@ -40,10 +40,10 @@ named, reusable bundle.
 
 Today a kind embeds its schema inline under
 `kinds.<name>.schema:` or points at a `proto.md`.
-Inline does not share; `proto.md` shares but
-uses a different matcher grammar. A YAML file
-under `.mdsmith/schemas/` shares AND uses the
-plan 146 matcher engine. The body parses through
+Inline does not share; `proto.md` shares but uses
+a different matcher grammar. A YAML file under
+`.mdsmith/schemas/` shares AND uses the plan 146
+matcher engine via
 [`schema.ParseInline`](../internal/schema/parse_inline.go).
 
 `docs/guides/conventions.md` does not exist; the
@@ -74,10 +74,9 @@ plan adds it as a side deliverable parallel to
     runbook.yaml
 ```
 
-Both `*.yaml` and `*.yml` are scanned at the
-workspace root. Subdirectories and symlinks are
-rejected. The 1 MB cap on `.mdsmith.yml` applies
-unchanged.
+Both `*.yaml` and `*.yml` are scanned.
+Subdirectories and symlinks are rejected. The
+1 MB `.mdsmith.yml` cap applies unchanged.
 
 ### Schema file shape
 
@@ -147,29 +146,24 @@ Interactions:
 
 ### Mutual exclusion
 
+A named `schema:` resolves to an inline map
+before validation runs.
 [`validateKindSchemaSources`](../internal/config/validate.go)
-rejects a kind that sets more than one of
-`kinds.<name>.schema:`,
-`rules.required-structure.schema:`, or the
-legacy `inline-schema:`. The named form is a new
-shape on the `schema:` slot. The check treats it
-like the inline map for both pairwise checks.
+then rejects any kind with two schema sources,
+the same as today.
 
 ### Sharing and provenance
 
 Multi-kind composition per
 [plan 156](156_kind-schema-composition.md) is
-unchanged. Each kind contributes one
-`schema-sources` entry whose `inline` body is
-the resolved YAML; `schema.Compose` merges them.
+unchanged. Each kind adds one `schema-sources`
+entry (`inline` = resolved YAML). `schema.Compose`
+merges them.
 
-`applyInlineSchemaSource` in
-[`merge.go`](../internal/config/merge.go)
-already accepts a `sourcePath`. For a named
-reference it carries the schema file's path; for
-the inline form, the kind's defining file. The
-entry's `source` key holds it so diagnostics
-navigate to the right file.
+`applyInlineSchemaSource` already takes a
+`sourcePath`. For a named reference it carries
+the schema file's path, so a violation's "go to
+schema" location points there.
 
 ## ...
 
@@ -182,13 +176,20 @@ Per
 no new package. Discovery lives in
 `internal/config`.
 
-1. **`internal/config`**: add a `SchemaRef`
-   type with `UnmarshalYAML` dispatching on
-   `yaml.Node.Kind`. Scalar string → named
-   reference; mapping → inline body. Replace
-   `KindBody.Schema map[string]any` with it.
+1. **`internal/config`** (+ `internal/kindsout`):
+   add a `SchemaRef` type with `UnmarshalYAML`
+   dispatching on `yaml.Node.Kind` (scalar →
+   named ref, mapping → inline body). Replace
+   `KindBody.Schema map[string]any` and route
+   every map reader through a `Map()` accessor:
+   `resolvedInlineSchema`, `extendsChainSchemas`,
+   `validateKindSchemaSources`,
+   `effectiveExplicit`, `resolveLayerInlineSchema`,
+   and `kindsout`'s frontmatter index.
+   `copyKinds` must deep-copy the resolved body
+   so load-time resolution survives the merge.
    Unit test covers scalar, mapping, sequence,
-   null, and malformed scalar.
+   null, malformed scalar.
 2. **`internal/config`**: add
    `discoverSchemas(workspaceDir)` mirroring
    `discoverKinds`'s checks (basename
@@ -200,22 +201,21 @@ no new package. Discovery lives in
    `mergeSchemaFiles(cfg, cfgPath)` populates
    it. `ParseBytes` skips disk discovery.
 4. **`internal/config`**: in `Load`, after the
-   kind and convention merges, call
-   `mergeSchemaFiles` and then
+   kind/convention merges and before
+   `ValidateKinds`, call `mergeSchemaFiles` then
    `resolveNamedSchemas(cfg)`. The resolver
    replaces each kind's named `SchemaRef` with
    the discovered body in place. Undeclared
    names error. Unit tests cover happy path,
    undeclared name, and the inline form
    passing through.
-5. **`internal/config`**: extend
-   `validateKindSchemaSources` so a kind
-   setting a named `schema:` AND
-   `rules.required-structure.schema:` errors,
-   and so a kind setting a named `schema:` AND
-   `rules.required-structure.inline-schema:`
-   errors — both with the "pick one source"
-   wording.
+5. **`internal/config`**: adapt
+   `validateKindSchemaSources` to read
+   `body.Schema.Map()` (filled by resolution).
+   A named `schema:` plus
+   `rules.required-structure.schema:` — or plus
+   `inline-schema:` — then trips the existing
+   pairwise checks with "pick one source".
 6. **`internal/config`**: thread the schema
    file's path through
    `applyInlineSchemaSource` as `sourcePath`
@@ -233,34 +233,32 @@ no new package. Discovery lives in
    named YAML reference, same Markdown input —
    assert byte-equal diagnostic streams.
 9. **CLI**: extend `mdsmith kinds resolve` to
-   print the schema's defining-source path on
-   the kind's resolved entry. JSON shape gains
-   `schema-source-path:`, omitted when the
-   schema is inline (its source is already on
-   `source-path`).
+   print the schema's defining-source path.
+   JSON gains `schema-source-path:`, populated
+   for named-YAML and `proto.md` sources,
+   omitted for inline (already on `source-path`).
 10. **Docs — new reference**: add
     `docs/reference/schema-files.md` with the
     H2s kind-files.md and convention-files.md
-    share: directory layout, file shape,
-    basename rule, composition with
-    `.mdsmith.yml`, audit surface.
+    share (file shape, basename rule,
+    composition, audit); the directory tree
+    goes in the preamble.
 11. **Docs — schemas guide**: in
     [schemas.md](../docs/guides/schemas.md)
-    update the source list to three sources,
-    add a "File-based YAML schemas" H2 between
-    inline and proto.md, and add a row to the
+    grow the source list to three, add a
+    "File-based YAML schemas" H2 between inline
+    and proto.md, and add a column to the
     "Choosing a source" table.
 12. **Docs — kind-files reference**: in
     [kind-files.md](../docs/reference/kind-files.md)'s
     "Schema sources" section, add the named
     reference as a fourth source.
 13. **Docs — conventions guide**: add
-    `docs/guides/conventions.md` with H2s:
-    declaring a convention inline, picking
-    one via top-level `convention:`, layering
-    rules over a preset, and the "split into
-    its own file" recipe. The CLAUDE.md
-    catalog picks it up on next `mdsmith fix`.
+    `docs/guides/conventions.md` with H2s for
+    declaring a convention inline, the
+    top-level `convention:` selector, layering
+    rules over a preset, and the "split into a
+    file" recipe. The catalog auto-includes it.
 14. **Docs — architecture boundaries**: add a
     row in [cross-system.md][cs] for
     `.mdsmith/schemas/`.
@@ -274,15 +272,15 @@ no new package. Discovery lives in
 
 ## Acceptance Criteria
 
-- [ ] A schema at `.mdsmith/schemas/foo.yaml`
-      with the body of inline
-      `kinds.bar.schema:` produces byte-equal
-      diagnostics when the kind sets
-      `schema: foo`.
-- [ ] Two kinds with `schema: foo` produce
-      identical diagnostics; the integration
-      fixture pair (inline vs named) emits
-      byte-equal streams.
+- [ ] A kind with `schema: foo` (file) and a
+      kind with the same body inline produce the
+      same diagnostic messages and anchors on a
+      reference doc (the schema-source related
+      location differs by design).
+- [ ] The integration fixture pair (inline vs
+      named) emits matching message+anchor
+      streams; two kinds sharing `schema: foo`
+      both validate.
 - [ ] A kind referencing an undeclared schema
       name errors, naming both.
 - [ ] Each of these errors with a clear
@@ -297,11 +295,13 @@ no new package. Discovery lives in
       source".
 - [ ] `mdsmith kinds resolve <file>` prints
       the schema's defining-source path. JSON
-      adds `schema-source-path:`, omitted when
-      the schema is inline.
+      `schema-source-path:` is set for file
+      sources, omitted for inline.
 - [ ] `docs/reference/schema-files.md` exists.
       [schemas.md](../docs/guides/schemas.md)
       documents all three sources.
+- [ ] kind-files.md and cross-system.md each
+      reference `.mdsmith/schemas/`.
 - [ ] `docs/guides/conventions.md` covers the
       four H2s named in task 13.
 - [ ] Unit tests cover `SchemaRef.UnmarshalYAML`,
