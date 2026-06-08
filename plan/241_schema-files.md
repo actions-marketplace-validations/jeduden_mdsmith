@@ -189,22 +189,23 @@ no new package; the type change ripples from
    `[a-z][a-z0-9-]*`, no subdirs, no symlinks,
    no `.yaml`/`.yml` duplicates, no unknown
    top-level keys). Unit test per rejection.
-3. **`internal/config`**: add top-level
-   `Schemas map[string]map[string]any` on
-   `Config`, populated by YAML unmarshal of
-   inline `schemas:` AND by `mergeSchemaFiles`.
-   An inline-vs-file name collision errors,
-   matching kinds/conventions. `ParseBytes`
-   skips disk discovery.
+3. **`internal/config`**: store the registry as
+   `map[string]discoveredSchema` (`{body,
+   sourcePath}`) so each entry keeps its origin.
+   Inline `schemas:` entries are tagged
+   `.mdsmith.yml`; `mergeSchemaFiles` tags file
+   entries with the `.yaml` path and errors on an
+   inline-vs-file collision. `ParseBytes` skips
+   disk discovery.
 4. **`internal/config`**: in `Load`, after the
    kind/convention merges and before
    `ValidateKinds`, call `mergeSchemaFiles` then
    `resolveNamedSchemas(cfg)`. The resolver
    replaces each kind's named `KindSchemaRef` with
-   the discovered body in place and sets its
-   `SourcePath`. An undeclared name errors. Unit
-   tests cover happy path, undeclared name, and
-   the inline form passing through.
+   the discovered body and sets the ref's
+   `SourcePath` from the entry's origin. An
+   undeclared name errors. Unit tests cover happy
+   path, undeclared name, inline passing through.
 5. **`internal/config`**: adapt
    `validateKindSchemaSources` to read
    `body.Schema.Map()` (filled by resolution).
@@ -213,10 +214,11 @@ no new package; the type change ripples from
    `inline-schema:` — then trips the existing
    pairwise checks with "pick one source".
 6. **`internal/config`**: thread the ref's
-   `SourcePath` through `applyInlineSchemaSource`.
-   Provenance tests assert the `source` key
-   carries `.mdsmith/schemas/<name>.yaml` for a
-   file entry and `.mdsmith.yml` for an
+   `SourcePath` through `applyInlineSchemaSource`,
+   falling back to the kind's file when empty
+   (inline-on-kind). Provenance tests assert the
+   `source` key is `.mdsmith/schemas/<name>.yaml`
+   for a file entry, `.mdsmith.yml` for an
    inline-registry entry.
 7. **`internal/integration`**: contract test
    covers directory layout, basename rule,
@@ -269,17 +271,15 @@ no new package; the type change ripples from
 
 ## Acceptance Criteria
 
-- [ ] A kind with `schema: foo` (file) and a
-      kind with the same body inline produce the
-      same diagnostic messages and anchors on a
-      reference doc (the schema-source related
-      location differs by design).
-- [ ] The integration fixture pair (inline vs
-      named) emits matching message+anchor
-      streams; two kinds sharing `schema: foo`
-      both validate.
-- [ ] A kind referencing an undeclared schema
-      name errors, naming both.
+- [ ] A `schema: foo` (file) kind and a kind
+      with the same body inline produce the same
+      messages and anchors on a reference doc;
+      only the schema-source location differs.
+- [ ] The inline-vs-named fixture pair emits
+      matching message+anchor streams; two kinds
+      sharing `schema: foo` both validate.
+- [ ] An undeclared `schema:` name errors,
+      naming the kind and the missing schema.
 - [ ] Each of these errors with a clear
       message: basename outside
       `[a-z][a-z0-9-]*`, file in a subdirectory,
@@ -292,17 +292,17 @@ no new package; the type change ripples from
       same for named `schema:` and
       `inline-schema:`. Both quote "pick one
       source".
-- [ ] `mdsmith kinds resolve <file>` prints
-      the schema's defining-source path. JSON
-      `schema-source-path:` is set for file
-      sources, omitted for inline.
+- [ ] `mdsmith kinds resolve <file>` prints the
+      schema's source path; `schema-source-path:`
+      is set for file and inline-registry sources,
+      omitted for inline-on-kind.
 - [ ] `docs/reference/schema-files.md` exists.
       [schemas.md](../docs/guides/schemas.md)
       documents all three sources.
 - [ ] kind-files.md and cross-system.md each
       reference `.mdsmith/schemas/`.
 - [ ] `docs/guides/conventions.md` covers the
-      four H2s named in task 13.
+      H2s named in task 13.
 - [ ] Unit tests cover `KindSchemaRef.UnmarshalYAML`,
       `discoverSchemas`, `mergeSchemaFiles`,
       and `resolveNamedSchemas`.
