@@ -176,8 +176,8 @@ func TestSummarizeTestRun(t *testing.T) {
 
 	logStr := log.String()
 	assert.Contains(t, logStr, "ok  \texample.com/m/foo")
-	assert.Contains(t, logStr, "hello from log")
 	assert.Contains(t, logStr, "go: downloading example.com/x")
+	assert.NotContains(t, logStr, "hello from log", "a passing test's output is hidden")
 	assert.NotContains(t, logStr, "=== RUN")
 	assert.NotContains(t, logStr, "--- PASS:")
 	assert.NotContains(t, logStr, `"Action":"output"`, "mangled event must not leak")
@@ -196,6 +196,50 @@ func TestSummarizeTestRunUnclassifiedFallsToUnit(t *testing.T) {
 func TestSummarizeTestRunErrorsWithoutModule(t *testing.T) {
 	_, err := SummarizeTestRun(t.TempDir(), strings.NewReader(""), &bytes.Buffer{})
 	assert.Error(t, err)
+}
+
+// TestSummarizeTestRunLogHidesPassShowsFail pins the terse-log
+// contract: a passing test's output (including a noisy multi-line
+// dump like a CLI usage block) is hidden, while a failing test's
+// output — and a failing subtest's, via the parent — is shown.
+func TestSummarizeTestRunLogHidesPassShowsFail(t *testing.T) {
+	root := writeTestModule(t)
+	var s strings.Builder
+	// Passing test prints a usage-like block — must be hidden.
+	s.WriteString(evLine(t, "output", "example.com/m/foo", "TestU", "    Usage: do the thing\n"))
+	s.WriteString(evLine(t, "output", "example.com/m/foo", "TestU", "    build-website [--no-fix]\n"))
+	s.WriteString(evLine(t, "pass", "example.com/m/foo", "TestU", ""))
+	// Failing test with a detail line and a failing subtest — shown.
+	s.WriteString(evLine(t, "output", "example.com/m/foo", "TestBoom", "    foo_test.go:9: boom detail\n"))
+	s.WriteString(evLine(t, "output", "example.com/m/foo", "TestBoom/case", "    sub detail\n"))
+	s.WriteString(evLine(t, "fail", "example.com/m/foo", "TestBoom/case", ""))
+	s.WriteString(evLine(t, "output", "example.com/m/foo", "TestBoom", "--- FAIL: TestBoom (0.00s)\n"))
+	s.WriteString(evLine(t, "fail", "example.com/m/foo", "TestBoom", ""))
+	// Package result line — always shown.
+	s.WriteString(evLine(t, "output", "example.com/m/foo", "", "FAIL\texample.com/m/foo\t0.01s\n"))
+
+	var log bytes.Buffer
+	_, err := SummarizeTestRun(root, strings.NewReader(s.String()), &log)
+	require.NoError(t, err)
+	out := log.String()
+	assert.NotContains(t, out, "Usage: do the thing", "passing test output hidden")
+	assert.NotContains(t, out, "build-website", "passing test output hidden")
+	assert.Contains(t, out, "boom detail", "failing test output shown")
+	assert.Contains(t, out, "sub detail", "failing subtest output shown via parent")
+	assert.Contains(t, out, "--- FAIL: TestBoom")
+	assert.Contains(t, out, "FAIL\texample.com/m/foo")
+}
+
+// TestSummarizeTestRunLogFlushesUnresolved covers the flush of output
+// for a test that never reaches a terminal event — a panic aborts the
+// package, and that crash must not be swallowed.
+func TestSummarizeTestRunLogFlushesUnresolved(t *testing.T) {
+	root := writeTestModule(t)
+	s := evLine(t, "output", "example.com/m/foo", "TestPanic", "panic: boom\n")
+	var log bytes.Buffer
+	_, err := SummarizeTestRun(root, strings.NewReader(s), &log)
+	require.NoError(t, err)
+	assert.Contains(t, log.String(), "panic: boom")
 }
 
 // errReader fails on the first read so the scanner surfaces a

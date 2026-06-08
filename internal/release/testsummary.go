@@ -81,12 +81,10 @@ func SummarizeTestRun(srcRoot string, r io.Reader, logOut io.Writer) (TestCounts
 	// so leaf (case) counting can exclude container nodes.
 	results := make(map[testKey]TestLayer)
 	hasChild := make(map[testKey]bool)
+	log := newTerseLog(logOut)
 
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	out := bufio.NewWriter(logOut)
-	defer out.Flush() //nolint:errcheck // best-effort log echo
-
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
@@ -94,45 +92,126 @@ func SummarizeTestRun(srcRoot string, r io.Reader, logOut io.Writer) (TestCounts
 		}
 		var ev testEvent
 		if err := json.Unmarshal(line, &ev); err != nil {
-			// A line that opens with `{` but does not parse is a
-			// mangled event from `go test -json`'s rare cross-package
-			// write interleaving; drop it so the terse log stays clean
-			// (the package result line still reports the outcome). Any
-			// other unparseable line — a `go: downloading …` notice or
-			// stray stdout text — is echoed so nothing is swallowed.
-			if !startsWithBrace(line) {
-				_, _ = out.Write(line)
-				_ = out.WriteByte('\n')
-			}
+			log.passthrough(line)
 			continue
 		}
 		switch ev.Action {
 		case "output":
-			if keepTerseOutput(ev.Output) {
-				_, _ = out.WriteString(ev.Output)
-			}
+			log.output(ev)
 		case "pass", "fail", "skip":
-			if ev.Test == "" {
-				continue
+			log.terminal(ev)
+			if ev.Test != "" {
+				recordResult(results, hasChild, layers, ev)
 			}
-			parent := ev.Test
-			if i := strings.IndexByte(parent, '/'); i >= 0 {
-				parent = parent[:i]
-			}
-			layer, ok := layers[testKey{ev.Package, parent}]
-			if !ok {
-				// A test the source scan did not classify (e.g. a
-				// generated suite) falls to the pyramid base.
-				layer = LayerUnit
-			}
-			results[testKey{ev.Package, ev.Test}] = layer
-			markAncestors(hasChild, ev.Package, ev.Test)
 		}
 	}
+	log.flush()
 	if err := sc.Err(); err != nil {
 		return TestCounts{}, fmt.Errorf("reading test json: %w", err)
 	}
 	return tallyCounts(results, hasChild), nil
+}
+
+// terseLog reconstructs a non-verbose `go test` console log from a
+// -json stream. `go test -json` forces the test binary into verbose
+// mode, so the stream carries every test's output even on success.
+// Plain `go test` instead hides a passing test's output and shows it
+// only on failure; terseLog reproduces that by buffering each test's
+// output under its top-level test and emitting it only if that test
+// fails. Package-level lines (the `ok pkg` / `FAIL pkg` results and
+// build errors) pass through immediately.
+type terseLog struct {
+	out *bufio.Writer
+	buf map[testKey][]string
+}
+
+func newTerseLog(w io.Writer) *terseLog {
+	return &terseLog{out: bufio.NewWriter(w), buf: make(map[testKey][]string)}
+}
+
+// passthrough echoes a non-JSON line (e.g. a `go: downloading …`
+// notice) verbatim, but drops a `{`-led line — a mangled event from
+// `go test -json`'s rare cross-package write interleaving — so the
+// log never shows half a JSON record.
+func (l *terseLog) passthrough(line []byte) {
+	if startsWithBrace(line) {
+		return
+	}
+	_, _ = l.out.Write(line)
+	_ = l.out.WriteByte('\n')
+}
+
+// output routes one "output" event: verbose scaffolding is dropped,
+// a package-level line is shown now, and a test-attributed line is
+// buffered under its top-level test until that test resolves.
+func (l *terseLog) output(ev testEvent) {
+	if !keepTerseOutput(ev.Output) {
+		return
+	}
+	if ev.Test == "" {
+		_, _ = l.out.WriteString(ev.Output)
+		return
+	}
+	key := testKey{ev.Package, topLevelTest(ev.Test)}
+	l.buf[key] = append(l.buf[key], ev.Output)
+}
+
+// terminal handles a pass/fail/skip event: when a top-level test
+// resolves it flushes that test's buffered output on failure and
+// drops it otherwise. Subtest events wait for their parent, whose
+// buffer already holds their output.
+func (l *terseLog) terminal(ev testEvent) {
+	if ev.Test == "" || strings.Contains(ev.Test, "/") {
+		return
+	}
+	key := testKey{ev.Package, ev.Test}
+	if ev.Action == "fail" {
+		for _, line := range l.buf[key] {
+			_, _ = l.out.WriteString(line)
+		}
+	}
+	delete(l.buf, key)
+}
+
+// flush emits any output still buffered for tests that never
+// reached a terminal event — a panic that aborts the package leaves
+// its output unresolved, and hiding it would lose the crash — then
+// flushes the underlying writer.
+func (l *terseLog) flush() {
+	for _, lines := range l.buf {
+		for _, line := range lines {
+			_, _ = l.out.WriteString(line)
+		}
+	}
+	l.buf = nil
+	_ = l.out.Flush()
+}
+
+// topLevelTest returns the parent test name — everything before the
+// first '/' — under which a test and all its subtests share one
+// output buffer and one layer classification.
+func topLevelTest(test string) string {
+	if i := strings.IndexByte(test, '/'); i >= 0 {
+		return test[:i]
+	}
+	return test
+}
+
+// recordResult files one terminal test result under its pyramid
+// layer (defaulting to unit when the source scan did not classify
+// it) and marks its ancestors as non-leaf.
+func recordResult(
+	results map[testKey]TestLayer,
+	hasChild map[testKey]bool,
+	layers map[testKey]TestLayer,
+	ev testEvent,
+) {
+	layer, ok := layers[testKey{ev.Package, topLevelTest(ev.Test)}]
+	if !ok {
+		layer = LayerUnit
+	}
+	results[testKey{ev.Package, ev.Test}] = layer
+	markAncestors(hasChild, ev.Package, ev.Test)
 }
 
 // tallyCounts reduces the recorded terminal results into per-layer
