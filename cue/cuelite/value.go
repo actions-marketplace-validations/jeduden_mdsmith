@@ -77,6 +77,8 @@ import (
 	stderrors "errors"
 	"fmt"
 	"io"
+	"strings"
+	"unicode/utf8"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
@@ -153,13 +155,28 @@ func Compile(src string) (Value, error) {
 // over the JSON-data lift mdsmith uses to validate marshalled front
 // matter against a schema. The input must be strict JSON: arbitrary
 // CUE source (an unquoted key, an expression) is rejected, unlike a
-// raw CompileBytes. Duplicate object keys are rejected outright, naming
-// the offending key — CUE's JSON lift instead UNIFIES same-named keys
-// (mergeable or equal duplicates compile to a phantom merged object,
-// only conflicting ones error), whereas real JSON consumers are
-// last-wins, so cuelite enforces the strict no-duplicate-keys contract
-// before the CUE lift rather than validating a value no JSON reader
-// would produce. The returned Value owns a fresh *cue.Context.
+// raw CompileBytes.
+//
+// Duplicate object keys are rejected outright, naming the offending
+// key. This is the strict-JSON no-duplicate-keys contract, and it is
+// the rationale the scanner and buildJSON cross-reference: CUE's JSON
+// lift instead UNIFIES same-named keys (mergeable or equal duplicates
+// compile to a phantom merged object, only conflicting ones error),
+// whereas real JSON consumers are last-wins, so cuelite enforces the
+// contract before the CUE lift rather than validating a value no JSON
+// reader would produce.
+//
+// Duplicate detection is best-effort on two edge inputs that defer to
+// the CUE lift's own UTF-8 handling: a document that is not valid
+// UTF-8, and a decoded key that contains U+FFFD (a lone-surrogate
+// escape such as "\ud800", or a literal "�"). Such keys forgo
+// scanner-level dup detection; a lone-surrogate key still errors at the
+// build (Extract or BuildExpr reports "invalid string: unmatched
+// surrogate pair"), and a literal-"�" duplicate is the only key shape
+// that escapes both checks — accepted as a phantom merge, which no
+// front-matter marshaller produces.
+//
+// The returned Value owns a fresh *cue.Context.
 func CompileJSON(data []byte) (Value, error) {
 	ctx := cuecontext.New()
 	val, err := buildJSON(ctx, data)
@@ -182,7 +199,7 @@ func CompileJSON(data []byte) (Value, error) {
 // document, and a build-time bottom — are the only errors CompileJSON
 // surfaces.
 func buildJSON(ctx *cue.Context, data []byte) (cue.Value, error) {
-	if err := checkDuplicateJSONKeys(data); err != nil {
+	if err := scanDuplicateJSONKeys(data); err != nil {
 		return cue.Value{}, err
 	}
 	expr, err := cuejson.Extract("", data)
@@ -202,41 +219,49 @@ func buildJSON(ctx *cue.Context, data []byte) (cue.Value, error) {
 	return val, nil
 }
 
-// checkDuplicateJSONKeys walks the JSON document with the streaming
-// token decoder and reports the first object key that appears twice
-// within the same object — at any nesting depth, including objects that
-// are array elements. CUE's JSON lift unifies same-named keys (mergeable
-// and equal duplicates compile silently, only conflicting ones error),
-// which validates a phantom merged object no last-wins JSON consumer
-// would build; cuelite enforces strict JSON's no-duplicate-keys rule
-// here, before the CUE lift. A malformed document yields no duplicate
-// error: cuejson.Extract is left to report the syntax error, so the two
-// arms keep one place that decides what "not JSON" means.
-func checkDuplicateJSONKeys(data []byte) error {
-	return scanDuplicateJSONKeys(json.NewDecoder(bytes.NewReader(data)))
-}
-
-// scanDuplicateJSONKeys streams the decoder's tokens and rejects the
-// first duplicate object key. It keys off json.Decoder's structural
-// guarantee: between a '{' and its matching '}', tokens alternate
-// key, value, key, value, …, where each value is a single scalar token
-// or a whole nested container (which the decoder emits as one '{'/'['
-// delimiter that we recurse on). So inside an object level, the next
-// string token after an even number of values is a key; we track that
-// parity per open object with seenKey, flipping it once per value.
-// Array levels carry no key rule, so their elements are scanned only to
-// recurse into nested objects. A malformed document yields no duplicate
-// error: cuejson.Extract is left to report the syntax error.
-// dec.UseNumber() keeps a number outside float64 range (1e999, valid
-// JSON) from erroring mid-scan and being misread as malformed, which
-// would let a duplicate beside it slip past.
+// scanDuplicateJSONKeys walks the JSON document with the streaming token
+// decoder and reports the first object key that appears twice within the
+// same object — at any nesting depth, including objects that are array
+// elements. See CompileJSON for why strict JSON forbids duplicates.
 //
-// The scan stops once the first top-level value closes (the stack
-// empties, or the first top-level scalar is consumed). Any trailing data
-// is "invalid JSON after top-level value", which cuejson.Extract
-// reports; fabricating a duplicate from a second top-level value would
-// mask that error.
-func scanDuplicateJSONKeys(dec *json.Decoder) error {
+// It keys off json.Decoder's structural guarantee: between a '{' and its
+// matching '}', tokens alternate key, value, key, value, …, where each
+// value is a single scalar token or a whole nested container (which the
+// decoder emits as one '{'/'[' delimiter that we recurse on). So inside
+// an object level, the next string token after an even number of values
+// is a key; we track that parity per open object with seenKey, flipping
+// it once per value. Array levels carry no key rule, so their elements
+// are scanned only to recurse into nested objects.
+//
+// Four inputs make the scan defer rather than fabricate a duplicate:
+//
+//   - A malformed document yields no duplicate error: cuejson.Extract is
+//     left to report the syntax error, so the two arms keep one place that
+//     decides what "not JSON" means. dec.UseNumber() keeps a number
+//     outside float64 range (1e999, valid JSON) from erroring mid-scan and
+//     being misread as malformed, which would let a duplicate beside it
+//     slip past.
+//   - A second top-level value: the scan stops once the first top-level
+//     value closes (the stack empties, or the first top-level scalar is
+//     consumed). Any trailing data is "invalid JSON after top-level
+//     value", which cuejson.Extract reports.
+//   - Invalid UTF-8 input defers to Extract (a utf8.Valid pre-check):
+//     json.Decoder replaces invalid bytes in a raw key with U+FFFD, so two
+//     distinct invalid-byte keys would collapse to one fabricated
+//     duplicate.
+//   - A decoded key containing U+FFFD (a lone-surrogate escape such as
+//     "\ud800", or a literal "�") is skipped for dup tracking: two
+//     lone-surrogate keys decode to the same U+FFFD and are not duplicates
+//     of each other. A lone-surrogate key still errors at the build (see
+//     buildJSON); a literal-"�" key is the documented gap CompileJSON
+//     describes.
+func scanDuplicateJSONKeys(data []byte) error {
+	// Invalid UTF-8 would make the decoder fold distinct raw keys onto one
+	// U+FFFD; leave such input to cuejson.Extract.
+	if !utf8.Valid(data) {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	// level is one open container. keys is non-nil for an object level and
 	// holds the keys already seen at it; nil marks an array level. seenKey
@@ -264,6 +289,13 @@ func scanDuplicateJSONKeys(dec *json.Decoder) error {
 		// half of a key/value pair (seenKey). Check keys for duplication.
 		if cur != nil && cur.keys != nil && !cur.seenKey {
 			if s, ok := tok.(string); ok {
+				// A key whose decode produced U+FFFD (a lone-surrogate escape
+				// or a literal "�") cannot be reliably distinguished from
+				// another such key, so skip dup tracking for it.
+				if strings.ContainsRune(s, utf8.RuneError) {
+					cur.seenKey = true
+					continue
+				}
 				if _, dup := cur.keys[s]; dup {
 					return fmt.Errorf("duplicate JSON key %q", s)
 				}

@@ -140,8 +140,30 @@ func TestCollectPathErrors(t *testing.T) {
 	})
 }
 
-func TestScanDuplicateJSONKeys_malformed(t *testing.T) {
-	// A token error mid-stream (truncated document) leaves detection to
-	// cuejson.Extract: the scan returns nil rather than a duplicate error.
-	assert.NoError(t, checkDuplicateJSONKeys([]byte(`{"a":1,`)))
+func TestScanDuplicateJSONKeys(t *testing.T) {
+	t.Run("malformed defers to Extract", func(t *testing.T) {
+		// A token error mid-stream (truncated document) leaves detection to
+		// cuejson.Extract: the scan returns nil rather than a duplicate error.
+		assert.NoError(t, scanDuplicateJSONKeys([]byte(`{"a":1,`)))
+	})
+	t.Run("duplicate key reported", func(t *testing.T) {
+		err := scanDuplicateJSONKeys([]byte(`{"a":1,"a":2}`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"a"`)
+	})
+	t.Run("invalid UTF-8 defers", func(t *testing.T) {
+		// Two distinct invalid-byte keys would fold onto one U+FFFD; the
+		// utf8.Valid pre-check returns nil so Extract handles the input.
+		assert.NoError(t, scanDuplicateJSONKeys([]byte("{\"a\xff\":1,\"a\xfe\":2}")))
+	})
+	t.Run("replacement-char keys are not duplicates", func(t *testing.T) {
+		// Two lone-surrogate escapes decode to the same U+FFFD; the scanner
+		// skips dup tracking for them rather than fabricating a duplicate.
+		assert.NoError(t, scanDuplicateJSONKeys([]byte(`{"\ud800":1,"\udc00":2}`)))
+	})
+	t.Run("trailing top-level value defers", func(t *testing.T) {
+		// The scan stops after the first value closes; the second top-level
+		// object is left to Extract rather than fabricating a duplicate.
+		assert.NoError(t, scanDuplicateJSONKeys([]byte(`{"x":1} {"a":1,"a":2}`)))
+	})
 }

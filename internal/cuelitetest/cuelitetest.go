@@ -31,7 +31,9 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
@@ -270,8 +272,16 @@ func oracleData(ctx *cue.Context, data []byte) (cue.Value, error) {
 // malformed document yields no duplicate error — any token error is
 // reported as errMalformed and swallowed at the top, leaving
 // cuejson.Extract to report the syntax error and keep one definition of
-// "not JSON".
+// "not JSON". It also independently mirrors cuelite's lossy-decode
+// guards: invalid-UTF-8 input defers to Extract (a utf8.Valid pre-check)
+// and a decoded key containing U+FFFD is skipped for dup tracking, so
+// neither arm fabricates a duplicate from a key the decoder folded.
 func rawDuplicateKeys(data []byte) error {
+	// Invalid UTF-8 would make the decoder fold distinct raw keys onto one
+	// U+FFFD; leave such input to cuejson.Extract, matching cuelite.
+	if !utf8.Valid(data) {
+		return nil
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	// UseNumber keeps a number outside float64 range (1e999, valid JSON)
 	// from erroring mid-walk and being misread as malformed, which would
@@ -326,6 +336,15 @@ func walkJSONObject(dec *json.Decoder) error {
 			return errMalformed
 		}
 		key := keyTok.(string)
+		// A key whose decode produced U+FFFD (a lone-surrogate escape or a
+		// literal "�") cannot be reliably distinguished from another such
+		// key, so skip dup tracking for it — matching cuelite's scanner.
+		if strings.ContainsRune(key, utf8.RuneError) {
+			if err := walkJSONValue(dec); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, dup := seen[key]; dup {
 			return fmt.Errorf("duplicate JSON key %q", key)
 		}

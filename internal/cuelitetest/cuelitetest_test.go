@@ -193,6 +193,12 @@ func TestRawDuplicateKeys(t *testing.T) {
 		{"truncated object defers", `{"a":1`, false},
 		{"truncated array defers", `["x"`, false},
 		{"truncated after key defers", `{"a"`, false},
+		// Invalid UTF-8 raw keys fold onto one U+FFFD; the walker must defer
+		// to Extract (a utf8.Valid pre-check) rather than fabricate a dup.
+		{"invalid UTF-8 keys defer", "{\"a\xff\":1,\"a\xfe\":2}", false},
+		// Two lone-surrogate escaped keys decode to the same U+FFFD; the
+		// walker must skip dup tracking for U+FFFD keys, not fabricate a dup.
+		{"lone-surrogate keys not duplicates", `{"\ud800":1,"\udc00":2}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -298,5 +304,15 @@ func corpus() []Case {
 		// so both arms defer to Extract's "after top-level value" error and
 		// resolve at StageCompileData rather than fabricating a duplicate "a".
 		{Name: "trailing top-level value reject", Schema: `{x: int}`, Data: `{"x":1} {"a":1,"a":2}`},
+		// Two distinct invalid-byte raw keys both decode to U+FFFD; without a
+		// utf8.Valid pre-check in both walkers, one arm fabricates a duplicate
+		// while the other defers to Extract — a divergence. Both arms must
+		// defer such input to Extract.
+		{Name: "invalid-UTF-8 keys defer", Schema: `{a: _}`, Data: "{\"a\xff\":1,\"a\xfe\":2}"},
+		// Two distinct lone-surrogate escaped keys decode to the same U+FFFD;
+		// both walkers must skip dup tracking for U+FFFD keys, so neither
+		// fabricates a duplicate. (The build then rejects the surrogate via
+		// the val.Err() guard, so both arms resolve at StageCompileData.)
+		{Name: "lone-surrogate keys not duplicates", Schema: `{a: _}`, Data: `{"\ud800":1,"\udc00":2}`},
 	}
 }

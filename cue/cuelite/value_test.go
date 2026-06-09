@@ -101,6 +101,29 @@ func TestCompileJSON(t *testing.T) {
 		require.NoError(t, err)
 		assert.NoError(t, v.Validate())
 	})
+	t.Run("invalid-UTF-8 raw keys are not fabricated duplicates", func(t *testing.T) {
+		// json.Decoder replaces each invalid byte in a raw key with U+FFFD, so
+		// two distinct invalid-byte keys would collapse to one fabricated
+		// "duplicate JSON key". A utf8.Valid pre-check defers such input to
+		// Extract, so the error (if any) is Extract's, not a fabricated dup.
+		_, err := CompileJSON([]byte("{\"a\xff\":1,\"a\xfe\":2}"))
+		if err != nil {
+			assert.NotContains(t, err.Error(), "duplicate",
+				"invalid UTF-8 must defer to Extract, not fabricate a duplicate")
+		}
+	})
+	t.Run("lone-surrogate escaped keys are not duplicates of each other", func(t *testing.T) {
+		// "\ud800" and "\udc00" are distinct lone-surrogate escapes whose
+		// decoded keys both become U+FFFD. They must NOT be reported as
+		// duplicates of each other; the scanner skips dup tracking for any
+		// decoded key containing U+FFFD. (Each still errors at the build via
+		// the restored val.Err() guard, so CompileJSON still rejects — but for
+		// the surrogate reason, not a fabricated duplicate.)
+		_, err := CompileJSON([]byte(`{"\ud800":1,"\udc00":2}`))
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "duplicate",
+			"lone-surrogate keys must not be fabricated duplicates")
+	})
 	t.Run("trailing second top-level value defers to Extract", func(t *testing.T) {
 		// {"x":1} {"a":1,"a":2}: the scanner must stop once the first
 		// top-level value closes, leaving the trailing data to Extract — which
