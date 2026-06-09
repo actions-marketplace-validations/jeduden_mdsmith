@@ -221,6 +221,42 @@ func TestRenderFileNames(t *testing.T) {
 	assert.Equal(t, "findings.sarif", RenderFileNames()[0])
 }
 
+func TestRenderStemFileNames(t *testing.T) {
+	// A non-empty stem prefixes every artifact so successive dated
+	// reviews can coexist in docs/security/ without overwriting.
+	dir := t.TempDir()
+	require.NoError(t, RenderStem(multiSevReport(), dir, "2026-06-09-full-repo-audit"))
+	for _, name := range []string{
+		"2026-06-09-full-repo-audit.sarif",
+		"2026-06-09-full-repo-audit.md",
+		"2026-06-09-full-repo-audit.inline-annotations.json",
+	} {
+		_, err := os.Stat(filepath.Join(dir, name))
+		assert.NoErrorf(t, err, "expected %s to exist", name)
+	}
+}
+
+func TestRenderStemEmptyKeepsLegacyNames(t *testing.T) {
+	// An empty stem falls back to the legacy fixed names so existing
+	// callers (and the eval fixtures) keep working unchanged.
+	dir := t.TempDir()
+	require.NoError(t, RenderStem(multiSevReport(), dir, ""))
+	for _, name := range []string{"findings.sarif", "security-review.md", "inline-annotations.json"} {
+		_, err := os.Stat(filepath.Join(dir, name))
+		assert.NoErrorf(t, err, "expected %s to exist", name)
+	}
+}
+
+func TestRenderFileNamesWithStem(t *testing.T) {
+	got := RenderFileNamesStem("2026-06-09-full-repo-audit")
+	assert.Equal(t, []string{
+		"2026-06-09-full-repo-audit.sarif",
+		"2026-06-09-full-repo-audit.md",
+		"2026-06-09-full-repo-audit.inline-annotations.json",
+	}, got)
+	assert.Equal(t, RenderFileNames(), RenderFileNamesStem(""))
+}
+
 func TestRenderErrorOnUnwritableDir(t *testing.T) {
 	// Point out-dir at a path whose parent is a regular file, so MkdirAll
 	// fails and Render surfaces a wrapped error rather than panicking.

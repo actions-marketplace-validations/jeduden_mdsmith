@@ -18,6 +18,14 @@ var renderFiles = []string{"findings.sarif", "security-review.md", "inline-annot
 // security-review.md, inline-annotations.json) into outDir, creating the
 // directory if needed. It mirrors render_findings.py.
 func Render(r *Report, outDir string) error {
+	return RenderStem(r, outDir, "")
+}
+
+// RenderStem is Render with a filename stem. A non-empty stem names the
+// artifacts <stem>.sarif, <stem>.md, and <stem>.inline-annotations.json
+// so successive dated reviews can coexist in one directory (the
+// docs/security/ convention). An empty stem keeps the legacy fixed names.
+func RenderStem(r *Report, outDir, stem string) error {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return fmt.Errorf("create out dir: %w", err)
 	}
@@ -29,12 +37,13 @@ func Render(r *Report, outDir string) error {
 	if err != nil {
 		return fmt.Errorf("marshal annotations: %w", err)
 	}
+	names := RenderFileNamesStem(stem)
 	contents := map[string][]byte{
-		"findings.sarif":          sarif,
-		"security-review.md":      []byte(buildReport(r, time.Now())),
-		"inline-annotations.json": annotations,
+		names[0]: sarif,
+		names[1]: []byte(buildReport(r, time.Now())),
+		names[2]: annotations,
 	}
-	for _, name := range renderFiles {
+	for _, name := range names {
 		if err := os.WriteFile(filepath.Join(outDir, name), contents[name], 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", name, err)
 		}
@@ -45,9 +54,23 @@ func Render(r *Report, outDir string) error {
 // RenderFileNames returns the basenames Render writes, in print order, so
 // callers can report them without hardcoding the list.
 func RenderFileNames() []string {
-	out := make([]string, len(renderFiles))
-	copy(out, renderFiles)
-	return out
+	return RenderFileNamesStem("")
+}
+
+// RenderFileNamesStem returns the basenames RenderStem writes for the
+// given stem, in print order: SARIF, report, annotations. An empty stem
+// returns the legacy fixed names.
+func RenderFileNamesStem(stem string) []string {
+	if stem == "" {
+		out := make([]string, len(renderFiles))
+		copy(out, renderFiles)
+		return out
+	}
+	return []string{
+		stem + ".sarif",
+		stem + ".md",
+		stem + ".inline-annotations.json",
+	}
 }
 
 // marshalJSON renders v as 2-space-indented JSON with HTML escaping
