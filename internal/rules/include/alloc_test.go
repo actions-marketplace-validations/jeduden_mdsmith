@@ -6,40 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestContainsDotDotElement_Correctness verifies all cases the function
-// must handle before the allocation-free rewrite.
-func TestContainsDotDotElement_Correctness(t *testing.T) {
-	assert.True(t, containsDotDotElement(".."), "bare ..")
-	assert.True(t, containsDotDotElement("../foo"), "leading ../")
-	assert.True(t, containsDotDotElement("foo/.."), "trailing /..")
-	assert.True(t, containsDotDotElement("foo/../bar"), "middle /../")
-	assert.True(t, containsDotDotElement("../"), "just ../ with trailing slash")
-
-	assert.False(t, containsDotDotElement("foo"), "plain name")
-	assert.False(t, containsDotDotElement("foo/bar"), "two-part path")
-	assert.False(t, containsDotDotElement("foo..bar"), "dots inside name")
-	assert.False(t, containsDotDotElement("..."), "triple dots")
-	assert.False(t, containsDotDotElement("..foo"), "dotdot prefix without slash")
-	assert.False(t, containsDotDotElement("foo.."), "dotdot suffix without slash")
-}
-
-// TestContainsDotDotElement_ZeroAllocs confirms the rewrite allocates nothing.
-func TestContainsDotDotElement_ZeroAllocs(t *testing.T) {
-	paths := []string{
-		"..",
-		"../foo",
-		"foo/..",
-		"foo/../bar",
-		"foo/bar/baz",
-	}
-	for _, p := range paths {
-		allocs := testing.AllocsPerRun(100, func() {
-			containsDotDotElement(p)
-		})
-		assert.Equal(t, 0.0, allocs, "containsDotDotElement(%q) allocs: want 0, got %v", p, allocs)
-	}
-}
-
 // TestMinFenceLen_Correctness verifies the function returns the right length
 // before and after the allocation-free rewrite.
 func TestMinFenceLen_Correctness(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jeduden/mdsmith/internal/archetype/gensection"
 	"github.com/jeduden/mdsmith/internal/bytelimit"
+	"github.com/jeduden/mdsmith/internal/globpath"
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/piparser"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -255,7 +256,7 @@ func resolveIncludePath(
 		}
 		readFS = f.RootFS
 		readPath = resolvedFile
-	} else if containsDotDotElement(file) {
+	} else if globpath.ContainsDotDotSegment(file) {
 		return nil, "", "", []lint.Diagnostic{makeDiag(filePath, line,
 			`include file path contains ".." but project root is not configured`)}
 	}
@@ -456,16 +457,6 @@ func minFenceLen(text string) int {
 		}
 	}
 	return n
-}
-
-// containsDotDotElement reports whether the slash-separated path contains
-// a ".." path element. It does not match filenames like "foo..bar.md".
-// Uses zero-allocation string checks instead of strings.Split.
-func containsDotDotElement(p string) bool {
-	return p == ".." ||
-		strings.HasPrefix(p, "../") ||
-		strings.HasSuffix(p, "/..") ||
-		strings.Contains(p, "/../")
 }
 
 // expandNestedIncludes parses the included file for nested include
