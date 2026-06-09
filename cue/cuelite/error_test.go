@@ -9,14 +9,14 @@ import (
 )
 
 func TestNewPathError(t *testing.T) {
-	err := NewPathError([]string{"meta", "status"}, "value out of range")
+	err := newPathError([]string{"meta", "status"}, "value out of range")
 	require.NotNil(t, err)
 	assert.Equal(t, []string{"meta", "status"}, err.Path())
 	assert.Equal(t, "meta.status: value out of range", err.Error())
 }
 
 func TestNewPathError_emptyPath(t *testing.T) {
-	err := NewPathError(nil, "front matter does not satisfy schema")
+	err := newPathError(nil, "front matter does not satisfy schema")
 	require.NotNil(t, err)
 	assert.Nil(t, err.Path())
 	assert.Equal(t, "front matter does not satisfy schema", err.Error())
@@ -39,7 +39,7 @@ func TestPathError_Path(t *testing.T) {
 }
 
 func TestPathError_errorsAs(t *testing.T) {
-	var wrapped error = NewPathError([]string{"x"}, "boom")
+	var wrapped error = newPathError([]string{"x"}, "boom")
 	var pe *PathError
 	require.True(t, errors.As(wrapped, &pe))
 	assert.Equal(t, []string{"x"}, pe.Path())

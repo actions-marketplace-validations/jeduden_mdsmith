@@ -12,10 +12,12 @@ type PathError struct {
 	msg  string
 }
 
-// NewPathError builds a PathError at the given field path with the
+// newPathError builds a PathError at the given field path with the
 // given message. A nil or empty path produces an error whose Error()
-// is the bare message, with no path prefix.
-func NewPathError(path []string, msg string) *PathError {
+// is the bare message, with no path prefix. The message must be
+// path-free: Error() is responsible for the single path prefix, so a
+// message that already carries the path would double it.
+func newPathError(path []string, msg string) *PathError {
 	return &PathError{path: path, msg: msg}
 }
 
