@@ -3,6 +3,7 @@ package index
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,7 +48,7 @@ func TestLineOfOffsetEdgeBranches(t *testing.T) {
 
 func TestUniqueAnchorEmptySlug(t *testing.T) {
 	t.Parallel()
-	used := map[string]bool{}
+	used := map[string]struct{}{}
 	counts := map[string]int{}
 	assert.Empty(t, uniqueAnchor("", used, counts))
 }
@@ -71,10 +72,30 @@ func TestFrontMatterSymbolsHandlesErrors(t *testing.T) {
 
 func TestFrontMatterScalarFormats(t *testing.T) {
 	t.Parallel()
-	// Number value triggers the fmt.Sprintf default branch.
+	// int: small positive integer (yaml.v3 → int on 64-bit).
 	v, ok := frontMatterScalar([]byte("---\nnum: 42\n---\n"), "num")
 	assert.True(t, ok)
 	assert.Equal(t, "42", v)
+	// float64: decimal value.
+	v, ok = frontMatterScalar([]byte("---\nratio: 3.14\n---\n"), "ratio")
+	assert.True(t, ok)
+	assert.Equal(t, "3.14", v)
+	// uint64: integer > math.MaxInt64 (yaml.v3 → uint64).
+	v, ok = frontMatterScalar([]byte("---\nbig: 18446744073709551615\n---\n"), "big")
+	assert.True(t, ok)
+	assert.Equal(t, "18446744073709551615", v)
+	// bool.
+	v, ok = frontMatterScalar([]byte("---\nflag: true\n---\n"), "flag")
+	assert.True(t, ok)
+	assert.Equal(t, "true", v)
+	// time.Time: unquoted ISO-8601 date (yaml.v3 → time.Time).
+	v, ok = frontMatterScalar([]byte("---\ndate: 2024-01-15\n---\n"), "date")
+	assert.True(t, ok)
+	expected := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	assert.Equal(t, expected, v)
+	// default: null/~ value → absent-like return.
+	_, ok = frontMatterScalar([]byte("---\nfield: null\n---\n"), "field")
+	assert.False(t, ok)
 	// Missing key.
 	_, ok = frontMatterScalar([]byte("---\nfoo: bar\n---\n"), "missing")
 	assert.False(t, ok)
@@ -84,15 +105,11 @@ func TestFrontMatterScalarFormats(t *testing.T) {
 	// Invalid YAML.
 	_, ok = frontMatterScalar([]byte("---\n!!invalid\n---\n"), "x")
 	assert.False(t, ok)
-	// Front matter without trailing newline — stripDelimiters
-	// hits the second TrimSuffix branch.
+	// Front matter without trailing newline — stripDelimiters hits the
+	// second TrimSuffix branch.
 	v, ok = frontMatterScalar([]byte("---\nx: hi\n---"), "x")
 	assert.True(t, ok)
 	assert.Equal(t, "hi", v)
-	// Bool value uses the default fmt.Sprintf branch.
-	v, ok = frontMatterScalar([]byte("---\nflag: true\n---\n"), "flag")
-	assert.True(t, ok)
-	assert.Equal(t, "true", v)
 }
 
 func TestFrontMatterStringListBranches(t *testing.T) {
@@ -139,6 +156,25 @@ func TestCollectLinkRefDefsDuplicateLabel(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, refs, "expected exactly one SymbolLinkRef for 'lab'")
+}
+
+func TestCollectLinkRefDefsMixedCaseLabel(t *testing.T) {
+	t.Parallel()
+	// A mixed-case label like [Foo Bar]: url must produce a SymbolLinkRef
+	// with anchor "foo bar" (goldmark normalizes labels to lowercase). The
+	// wanted-map key must be normalized so the regex match is found.
+	src := "# T\n\n[link][Foo Bar]\n\n[Foo Bar]: https://example.com\n"
+	idx := New("/r")
+	idx.Update("a.md", []byte(src))
+	fe, ok := idx.File("a.md")
+	require.True(t, ok)
+	var refs int
+	for _, s := range fe.Symbols {
+		if s.Kind == SymbolLinkRef && s.Anchor == "foo bar" {
+			refs++
+		}
+	}
+	assert.Equal(t, 1, refs, "expected one SymbolLinkRef for mixed-case label 'Foo Bar'")
 }
 
 func TestCollectLinkEdgesAnchorOnlyTakesAnchorBranch(t *testing.T) {
@@ -235,7 +271,7 @@ func TestUniqueAnchorRetriesPastFirstSuffix(t *testing.T) {
 	// it: c=0→1 picks "same-1" (already used) → c=2 picks "same-2".
 	// The inner loop's used[anchor] check fires false on the
 	// second iteration.
-	used := map[string]bool{"same": true, "same-1": true}
+	used := map[string]struct{}{"same": {}, "same-1": {}}
 	counts := map[string]int{}
 	got := uniqueAnchor("same", used, counts)
 	assert.Equal(t, "same-2", got)

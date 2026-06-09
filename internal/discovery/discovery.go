@@ -65,7 +65,7 @@ func Discover(opts Options) ([]string, error) {
 		patterns:       validPatterns,
 		git:            gitMatcher,
 		followSymlinks: opts.FollowSymlinks,
-		seen:           make(map[string]bool),
+		seen:           make(map[string]struct{}),
 	}
 
 	if err := filepath.Walk(absBase, w.visit); err != nil {
@@ -93,7 +93,7 @@ type walker struct {
 	patterns       []string
 	git            *gitignore.Matcher
 	followSymlinks bool
-	seen           map[string]bool
+	seen           map[string]struct{}
 	result         []string
 }
 
@@ -179,8 +179,8 @@ func (w *walker) matchesAny(rel string) bool {
 // that config override patterns match consistently regardless of discovery
 // method. The absPath is used only for deduplication.
 func (w *walker) addFile(rel, absPath string) {
-	if !w.seen[absPath] {
-		w.seen[absPath] = true
+	if _, ok := w.seen[absPath]; !ok {
+		w.seen[absPath] = struct{}{}
 		w.result = append(w.result, rel)
 	}
 }

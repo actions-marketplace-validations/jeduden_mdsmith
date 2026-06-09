@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/mdtext"
@@ -13,6 +14,11 @@ import (
 	"github.com/jeduden/mdsmith/internal/rules/astutil"
 	"github.com/yuin/goldmark/ast"
 )
+
+// compiledPatterns caches compiled regexes by pattern string. ConfigureRule
+// clones and re-applies settings for every file; caching avoids rebuilding
+// the NFA on each call.
+var compiledPatterns sync.Map // map[string]*regexp.Regexp
 
 func init() {
 	rule.Register(&Rule{})
@@ -455,11 +461,15 @@ type patternSetting struct {
 func compilePatterns(in []patternSetting) ([]HeadingPattern, error) {
 	out := make([]HeadingPattern, 0, len(in))
 	for _, p := range in {
-		re, err := regexp.Compile(p.Pattern)
+		compiled, err := regexp.Compile(p.Pattern)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"max-section-length: invalid pattern %q: %w", p.Pattern, err,
 			)
+		}
+		re := compiled
+		if actual, loaded := compiledPatterns.LoadOrStore(p.Pattern, compiled); loaded {
+			re = actual.(*regexp.Regexp)
 		}
 		out = append(out, HeadingPattern{
 			Pattern: p.Pattern,
