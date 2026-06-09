@@ -101,6 +101,23 @@ func TestCompileJSON(t *testing.T) {
 		require.NoError(t, err)
 		assert.NoError(t, v.Validate())
 	})
+	t.Run("a string value equal to its own key accepted", func(t *testing.T) {
+		// {"a":"a"}: the value "a" matches the key "a", but a value is not a
+		// key, so the seenKey parity must not treat it as a duplicate. Deleting
+		// the !cur.seenKey parity guard would misread the value as a key and
+		// fabricate a duplicate.
+		v, err := CompileJSON([]byte(`{"a":"a"}`))
+		require.NoError(t, err)
+		assert.NoError(t, v.Validate())
+	})
+	t.Run("a string value equal to an earlier key accepted", func(t *testing.T) {
+		// {"x":"y","y":1}: the value "y" of the first pair equals the second
+		// key "y". Without the parity guard the value would be tracked as a
+		// key and collide with the real "y" key.
+		v, err := CompileJSON([]byte(`{"x":"y","y":1}`))
+		require.NoError(t, err)
+		assert.NoError(t, v.Validate())
+	})
 	t.Run("invalid-UTF-8 raw keys are not fabricated duplicates", func(t *testing.T) {
 		// json.Decoder replaces each invalid byte in a raw key with U+FFFD, so
 		// two distinct invalid-byte keys would collapse to one fabricated

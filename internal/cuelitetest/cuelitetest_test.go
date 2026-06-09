@@ -314,5 +314,11 @@ func corpus() []Case {
 		// fabricates a duplicate. (The build then rejects the surrogate via
 		// the val.Err() guard, so both arms resolve at StageCompileData.)
 		{Name: "lone-surrogate keys not duplicates", Schema: `{a: _}`, Data: `{"\ud800":1,"\udc00":2}`},
+		// A string VALUE that equals its own key. The seenKey parity guard
+		// must not misread the value as a key; deleting it fabricates a
+		// duplicate in the cuelite arm and the two arms diverge.
+		{Name: "value equal to own key ok", Schema: `{a: string}`, Data: `{"a":"a"}`},
+		// A string value that equals a LATER sibling key.
+		{Name: "value equal to sibling key ok", Schema: `{x: string, y: int}`, Data: `{"x":"y","y":1}`},
 	}
 }
