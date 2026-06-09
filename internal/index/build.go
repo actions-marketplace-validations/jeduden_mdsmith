@@ -2,11 +2,11 @@ package index
 
 import (
 	"bytes"
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jeduden/mdsmith/internal/linkgraph"
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -408,8 +408,13 @@ func stripDelimiters(fm []byte) []byte {
 // as a string. Empty string + false when absent or non-scalar.
 // yamlutil.UnmarshalSafe rejects anchors/aliases so a malicious file
 // can't trigger expansion during the symbol-index build. Non-string
-// scalars (numbers, bools) are formatted via fmt.Sprintf so callers
-// always get a stable string form.
+// scalars (numbers, bools, timestamps) are formatted without reflection
+// so callers always get a stable string form.
+//
+// gopkg.in/yaml.v3 maps scalars to Go types as follows when decoding
+// into map[string]any: unquoted integers → int (64-bit) or uint64
+// (> math.MaxInt64); floats → float64; booleans → bool; ISO-8601
+// timestamps → time.Time; null/~ → nil.
 func frontMatterScalar(fm []byte, key string) (string, bool) {
 	if len(fm) == 0 {
 		return "", false
@@ -422,10 +427,27 @@ func frontMatterScalar(fm []byte, key string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if s, ok := v.(string); ok {
-		return s, true
+	switch n := v.(type) {
+	case string:
+		return n, true
+	case int:
+		return strconv.Itoa(n), true
+	case uint64:
+		// yaml.v3 produces uint64 for integers that exceed math.MaxInt64.
+		return strconv.FormatUint(n, 10), true
+	case float64:
+		return strconv.FormatFloat(n, 'f', -1, 64), true
+	case bool:
+		return strconv.FormatBool(n), true
+	case time.Time:
+		// yaml.v3 parses unquoted ISO-8601 scalars (e.g. "date: 2024-01-15")
+		// as time.Time; format as RFC3339 for a stable, catalog-safe string.
+		return n.Format(time.RFC3339), true
+	default:
+		// nil (YAML null/~) and any other node type are not usable as
+		// catalog fields.
+		return "", false
 	}
-	return fmt.Sprintf("%v", v), true
 }
 
 // frontMatterStringList returns a top-level YAML list of strings.
