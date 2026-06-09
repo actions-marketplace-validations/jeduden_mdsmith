@@ -33,8 +33,8 @@ func TestOutcome_Accepted(t *testing.T) {
 
 func TestOutcome_Equal(t *testing.T) {
 	t.Run("same non-validate stage with matching paths is equal", func(t *testing.T) {
-		// Paths are compared at every stage now (finding 6), so two
-		// StageAccepted outcomes agree only when their paths agree too.
+		// Paths are compared at every stage, so two StageAccepted outcomes
+		// agree only when their paths agree too.
 		a := Outcome{Stage: StageAccepted, Paths: [][]string{{"x"}}}
 		b := Outcome{Stage: StageAccepted, Paths: [][]string{{"x"}}}
 		assert.True(t, a.Equal(b))
@@ -160,7 +160,7 @@ func TestValidateOutcome(t *testing.T) {
 // TestRawDuplicateKeys exercises the oracle's independent duplicate-key
 // walk directly, so its recursive descent is pinned apart from the
 // corpus run. It is the oracle counterpart to cuelite's
-// checkDuplicateJSONKeys tests: both implementations of the same
+// scanDuplicateJSONKeys tests: both implementations of the same
 // strict-JSON contract are unit-tested on the same shapes.
 func TestRawDuplicateKeys(t *testing.T) {
 	cases := []struct {

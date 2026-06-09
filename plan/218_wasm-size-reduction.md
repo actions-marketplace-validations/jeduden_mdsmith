@@ -130,7 +130,7 @@ calls above:
 package cuelite
 
 func Compile(src string) (Value, error)      // CompileString
-func CompileJSON(data []byte) (Value, error) // CompileBytes
+func CompileJSON(data []byte) (Value, error) // strict JSON; stricter than CompileBytes
 func ParsePath(expr string) (Path, error)
 
 func (v Value) Unify(o Value) Value

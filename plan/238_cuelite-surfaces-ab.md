@@ -45,11 +45,16 @@ unification rules.
    result in (and mutating) the non-rebuilt side's context.
    Second, the schema path still marshals front matter to JSON
    and `CompileJSON` parses it back, so validating one file pays
-   two JSON traversals. Both blow the ≤ 10 allocs/op budget on
-   the hot path, so the budget is met only by the flip in task 3
-   — the in-house engine validates a `map[string]any` directly
-   (plan 218), with no JSON round-trip and no per-`Value`
-   context — not by the façade adoption in this task.
+   three JSON traversals — the marshal, `CompileJSON`'s
+   duplicate-key scan, and `cuejson.Extract`'s own parse. The
+   duplicate scan is interim-only: the post-flip hot path
+   validates the `map[string]any` directly and bypasses
+   `CompileJSON` entirely, so the scan disappears with the round
+   trip. All three blow the ≤ 10 allocs/op budget on the hot
+   path, so the budget is met only by the flip in task 3 — the
+   in-house engine validates a `map[string]any` directly (plan
+   218), with no JSON round-trip and no per-`Value` context — not
+   by the façade adoption in this task.
 2. Move [internal/schema](../internal/schema),
    [requiredstructure](../internal/rules/requiredstructure/rule.go),
    and [internal/query](../internal/query/query.go) onto the

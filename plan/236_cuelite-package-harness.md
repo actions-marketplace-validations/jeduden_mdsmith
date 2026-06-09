@@ -57,7 +57,7 @@ CUE, so adopting it later stays green.
 
 ## Implementation notes
 
-Two choices differ from the sketch in plan 218:
+Three choices differ from the sketch in plan 218:
 
 - **Per-`Value` context, not a shared package context.** An
   earlier draft compiled every `Value` against one package-wide
@@ -95,6 +95,16 @@ Two choices differ from the sketch in plan 218:
   validate / accepted / error) so a schema the in-house engine
   cannot parse can never look like agreement with an oracle that
   merely rejected the data.
+- **`CompileJSON` enforces a strict-JSON, no-duplicate-keys
+  contract**, stricter than the plan-218 sketch's `// CompileBytes`
+  annotation implied. CUE's JSON lift unifies same-named object
+  keys into a phantom merged object that no last-wins JSON reader
+  would build, so both arms reject any duplicate key before the
+  lift — `cuelite` with a parity-stack scanner, the oracle with an
+  independent recursive walk. Both also defer lossy-decode keys
+  (invalid UTF-8, lone-surrogate escapes) to the CUE lift rather
+  than fabricating a duplicate, and surface a post-build bottom (a
+  lone-surrogate value) as a data-stage compile error.
 
 The phase-0 surface is small. It has `Compile`, `CompileJSON`,
 `Value.Unify`, and `Value.Validate`, all on a value-type `Value`
