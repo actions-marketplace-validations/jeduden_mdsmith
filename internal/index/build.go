@@ -501,7 +501,7 @@ func collectLinkRefDefs(filePath string, ctx parser.Context, body []byte, lines 
 	refs := ctx.References()
 	wanted := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
-		wanted[string(ref.Label())] = struct{}{}
+		wanted[string(util.ToLinkReference(ref.Label()))] = struct{}{}
 	}
 	if len(wanted) == 0 {
 		return nil
