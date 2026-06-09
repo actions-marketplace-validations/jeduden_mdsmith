@@ -1,7 +1,7 @@
 ---
 id: 237
 title: "cuelite phase 1 — surface D (placeholder paths)"
-status: "🔲"
+status: "✅"
 model: sonnet
 summary: >-
   Move internal/fieldinterp onto cue/cuelite's ParsePath (still
@@ -39,14 +39,38 @@ flips.
 
 ## Acceptance Criteria
 
-- [ ] `internal/fieldinterp` imports `cue/cuelite`, not
+- [x] `internal/fieldinterp` imports `cue/cuelite`, not
       `cuelang.org/go`.
-- [ ] `cuelite.ParsePath` is in-house and the harness shows it
+- [x] `cuelite.ParsePath` is in-house and the harness shows it
       matches CUE on the path corpus.
-- [ ] `cue/cuelite` path code keeps 100 % statement and branch
+- [x] `cue/cuelite` path code keeps 100 % statement and branch
       coverage.
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no issues.
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no issues.
+
+## Deviations
+
+- **`Path` type and API already existed from phase-0 branch.** The
+  `path.go` file with `Path`, `Segments()`, `MakePath()`, and the
+  CUE-delegating `ParsePath()` was pre-populated, along with
+  `path_test.go`. The plan tasks 1–3 were collapsed: the CUE-backed
+  delegation was found already in place, so the migration (task 2)
+  and the in-house flip (task 3) were applied as one pass.
+- **The `len(sels) == 0` dead branch was removed during the flip.**
+  In the CUE-backed version, `cue.ParsePath("")` is the only input
+  producing zero selectors without an error; the explicit empty-string
+  guard catches it first, leaving the branch unreachable. The in-house
+  parser builds segments directly and never needs this check, so it
+  was dropped to keep 100 % statement coverage.
+- **Harness adds `PathCase`, `PathOutcome`, `PathPath`, and helpers as
+  a separate file** (`internal/cuelitetest/path.go`), not by extending
+  the existing `Case`/`Outcome` types. The plan note says to extend
+  the types, but after reading the harness code, adding a separate
+  `PathCase`/`PathOutcome` is cleaner and avoids making the schema/data
+  `Case` carry an optional path field that is irrelevant to most tests.
+- **`safeUnquoted` defers panic recovery to the oracle arm** rather
+  than being called directly from a unit test, because the non-panic
+  path is fully covered by the accepted cases in the path corpus run.
 
 ## Implementation notes
 
