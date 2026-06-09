@@ -327,8 +327,8 @@ the same JSON projection
 produces and splices a single leaf. The value is a
 dotted path: `frontmatter.title` reaches the title
 field; `tagline.text` reaches the paragraph under
-the `## Tagline` heading; `headline.code` reaches a
-fenced code block.
+the `## Tagline` heading; a section whose body is a
+fenced code block is reached through its `.code` key.
 
 A paragraph section. The target's
 `## Tagline` heading projects to `{"tagline":
@@ -344,16 +344,19 @@ Markdown, fast.
 <?/include?>
 ```
 
-A fenced code block. The `## Headline` section
-projects to `{"headline": {"code": "..."}}`. Use
-`headline.code` to splice the code body verbatim:
+A fenced code block. A section whose body is a
+single fenced code block projects its contents under
+a `code` key — a `## Setup` section holding an
+install command projects to
+`{"setup": {"code": "..."}}`. Use `setup.code` to
+splice the code body verbatim:
 
 ```markdown
 <?include
-file: docs/brand/messaging.md
-extract: headline.code
+file: docs/examples/setup.md
+extract: setup.code
 ?>
-Mark*down*, smithed.
+go install github.com/jeduden/mdsmith/cmd/mdsmith@latest
 <?/include?>
 ```
 
