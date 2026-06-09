@@ -54,27 +54,48 @@ CUE, so adopting it later stays green.
 
 ## Implementation notes
 
-Two choices differ from the sketch in plan 218, both
-behaviour-preserving:
+Two choices differ from the sketch in plan 218:
 
-- **Shared context, no per-`Value` rebinding.** Every `Value`
-  compiles against one package-wide `*cue.Context`, so `Unify`
-  needs no cross-context re-binding. This replaces the per-`Value`
-  context pairing the sketch implied, and matches the
-  `internal/schema` rule that two values must share a context to
-  unify. The flip to the in-house engine drops the shared context
-  entirely, as planned.
-- **Harness lives in `cue/cuelite/difftest`.** The differential
-  harness is a sibling sub-package, not an in-package file. It
-  exposes `CueLitePath` (the in-house path), `OraclePath` (the CUE
-  oracle), and `Run` over a `Case` corpus, with a CI-visible
-  `TestRun_corpus`. The later phases plug the real engine into
-  `CueLitePath` unchanged.
+- **Per-`Value` context, not a shared package context.** An
+  earlier draft compiled every `Value` against one package-wide
+  `*cue.Context`. Code review rejected it: CUE v0.16.1 documents
+  that values from one `Context` are not safe for concurrent use
+  and that long-lived contexts grow unbounded, so a single
+  process-wide context is both a data race and a memory leak.
+  Instead each `Compile`/`CompileJSON` owns a fresh `*cue.Context`
+  and keeps its source bytes; `Unify` rebuilds the operand's
+  source inside the receiver's context so unification stays
+  single-context and two `Value`s never share mutable CUE state.
+  This is the honest interim cost — one context per compiled
+  `Value`, one re-derive of the operand per `Unify`. The flip to
+  the in-house engine drops contexts entirely, with no API change:
+  `Value` is a value type whose `Unify` takes and returns a
+  `Value`, and a bottom (⊥) absorbs in either implementation.
+- **Harness lives in `internal/cuelitetest`, not under
+  `cue/cuelite/`.** An earlier draft put it in a public
+  `cue/cuelite/difftest` sub-package. Code review rejected that
+  too: the harness imports `cuelang.org/go` from non-test files,
+  so as a public package it would let external users depend on a
+  package plan 218 phase 4 deletes, and it would pin `cuelang.org`
+  into `go.mod` even after the flip. Moving it under `internal/`
+  keeps it importable by every module test, invisible outside the
+  module, and freely deletable. It exposes `CueLitePath` (the
+  in-house path), `OraclePath` (the CUE oracle), `Run` over a
+  `Case` corpus, and a CI-visible `TestRun_corpus`. Each `Outcome`
+  carries a `Stage` discriminator (compile-schema / compile-data /
+  validate / accepted / error) so a schema the in-house engine
+  cannot parse can never look like agreement with an oracle that
+  merely rejected the data.
 
 The phase-0 surface is small. It has `Compile`, `CompileJSON`,
-`Value.Unify`, and `Value.Validate`. It also has the `PathError`
-type with `NewPathError`, `Path`, and `Error`. The rest of the
-façade arrives in the per-surface phases.
+`Value.Unify`, and `Value.Validate`, all on a value-type `Value`
+that carries a bottom (⊥) for compile failures so a nil receiver
+never panics. `Validate` returns one `*PathError` per failing leaf
+(joined with `errors.Join` when several fail), each tagged with
+its field path printed exactly once. The `PathError` type exports
+`Path` and `Error`; its constructor is unexported, since no caller
+outside the package builds one. The rest of the façade arrives in
+the per-surface phases.
 
 ## See also
 

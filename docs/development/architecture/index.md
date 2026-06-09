@@ -179,8 +179,12 @@ mirroring `cue/types`.
 wrapper over `cuelang.org/go`. It is
 later flipped to a pure-Go engine behind
 the same API. The CUE-backed path stays
-as the differential oracle in
-`cue/cuelite/difftest`. Its eventual
+as the differential oracle in the
+module-internal `internal/cuelitetest`
+harness — kept under `internal/` so the
+`cuelang.org/go` import that plan 218
+phase 4 deletes never becomes part of the
+public surface. Its eventual
 consumers are `internal/schema`,
 `requiredstructure`, `query`,
 `fieldinterp`, and `cuetemplate`. It

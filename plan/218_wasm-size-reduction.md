@@ -129,23 +129,45 @@ calls above:
 ```go
 package cuelite
 
-func Compile(src string) (*Value, error)      // CompileString
-func CompileJSON(data []byte) (*Value, error) // CompileBytes
+func Compile(src string) (Value, error)      // CompileString
+func CompileJSON(data []byte) (Value, error) // CompileBytes
 func ParsePath(expr string) (Path, error)
 
-func (v *Value) Unify(o *Value) *Value
-func (v *Value) Validate() error              // Concrete(true)
-func (v *Value) LookupPath(p Path) (*Value, bool)
-func (v *Value) String() (string, error)
+func (v Value) Unify(o Value) Value
+func (v Value) Validate() error              // Concrete(true)
+func (v Value) LookupPath(p Path) (Value, bool)
+func (v Value) String() (string, error)
 // plus Decode, Exists, Fields; errors carry a field Path.
 ```
 
+`Value` is a **value type**, not a pointer. Methods take and
+return `Value` by copy. A zero/bottom `Value` composes without a
+nil receiver to panic on, and the future hot path pays no heap
+allocation per call (the ≤ 10 allocs/op budget). A bottom (⊥)
+absorbs cleanly whether it is a phase-0 error-carrying struct or
+a flipped in-house `Value`. So the API shape is identical before
+and after the flip.
+
 One simplification falls out. A CUE value is tied to a
-`*cue.Context` and cannot cross contexts, forcing the
+`*cue.Context` and cannot cross contexts. That forces the
 context-pairing plumbing in
 [compile_cache.go](../internal/schema/compile_cache.go).
-A `cuelite.Value` is a context-free immutable struct, so a
-compiled schema is shareable across goroutines.
+The phase-0 façade pays an honest interim cost for this. Each
+compiled `Value` owns a fresh `*cue.Context`, since CUE v0.16.1
+documents that values from one context are neither
+concurrency-safe nor memory-bounded. `Unify` rebuilds the
+operand's source inside the receiver's context, so unification
+stays single-context.
+
+The flipped in-house `Value` is a
+context-free immutable struct. A compiled schema is then
+shareable across goroutines, and the per-`Value` context
+disappears with no API change.
+
+The differential oracle harness lives under
+`internal/cuelitetest`. It is module-internal, so the
+`cuelang.org/go` import it carries never reaches the public
+surface and is deleted with the package in phase 4.
 
 ### Value model
 
