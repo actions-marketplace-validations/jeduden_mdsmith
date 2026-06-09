@@ -1,6 +1,7 @@
 package cuelite
 
 import (
+	"slices"
 	"strings"
 )
 
@@ -9,26 +10,58 @@ import (
 // Error.Path() — the dotted route into the data tree where the value
 // failed its constraint (for example []string{"meta", "status"}). A
 // nil path marks an error not associated with a specific leaf.
+//
+// A PathError may wrap the underlying error it was built from — the CUE
+// validation error for a per-leaf failure, or a bottom Value's cause —
+// reachable through Unwrap so errors.Is/As keep working against the
+// original error or a sentinel. Its own message, not the wrapped cause,
+// is the rejection; Errors treats a PathError as a leaf and does not
+// descend into the wrapped error.
 type PathError struct {
-	path []string
-	msg  string
+	path    []string
+	msg     string
+	wrapped error
 }
 
 // newPathError builds a PathError at the given field path with the
 // given message. A nil or empty path produces an error whose Error()
 // is the bare message, with no path prefix. The message must be
 // path-free: Error() is responsible for the single path prefix, so a
-// message that already carries the path would double it.
+// message that already carries the path would double it. The error
+// carries no wrapped cause; use newPathErrorWrapping to keep one
+// reachable through errors.Is/As.
 func newPathError(path []string, msg string) *PathError {
 	return &PathError{path: path, msg: msg}
+}
+
+// newPathErrorWrapping is newPathError that also retains cause as the
+// PathError's wrapped error, so errors.Is/As against the original CUE
+// error or a sentinel still resolve through the returned leaf. The
+// message is still path-free and still owns the single path prefix.
+func newPathErrorWrapping(path []string, msg string, cause error) *PathError {
+	return &PathError{path: path, msg: msg, wrapped: cause}
+}
+
+// Unwrap returns the underlying error the PathError was built from, or
+// nil when it carries none, so errors.Is/As reach the wrapped CUE error
+// or sentinel. Errors does not follow this link — a PathError is a leaf
+// in the per-field walk — so unwrapping is for errors.Is/As only.
+func (e *PathError) Unwrap() error {
+	return e.wrapped
 }
 
 // Path returns the field path the error is tagged with, or nil when
 // the error is not associated with a specific leaf. It mirrors
 // cue/errors Error.Path() so the differential harness can compare
 // in-house and CUE-backed error locations field by field.
+//
+// The returned slice is a fresh copy, never the error's internal slice
+// (matching cue/errors, which clones in Error.Path): a caller that
+// mutates it — the harness collects leaf paths into its own structures —
+// cannot corrupt a later Error() render. slices.Clone(nil) is nil, so an
+// unpathed error still returns nil rather than an empty slice.
 func (e *PathError) Path() []string {
-	return e.path
+	return slices.Clone(e.path)
 }
 
 // Error renders the message prefixed by the dotted field path, or the
@@ -67,29 +100,41 @@ func Errors(err error) []*PathError {
 		return nil
 	}
 	var out []*PathError
-	return collectPathErrors(err, out)
+	return collectPathErrors(err, out, map[error]struct{}{})
 }
 
 // collectPathErrors appends every *PathError leaf reachable from err to
 // out in encounter order. A node that is itself a *PathError is a leaf
-// and is appended directly (its own message, not its wrapped causes,
-// being the rejection). Otherwise the walk recurses through a join
-// wrapper (Unwrap() []error) or a single wrapper (Unwrap() error). A
-// node that is neither a *PathError nor any wrapper contributes nothing.
-func collectPathErrors(err error, out []*PathError) []*PathError {
+// and is appended directly (its own message, not its wrapped cause,
+// being the rejection — the walk does NOT descend into a PathError's
+// Unwrap). Otherwise the walk recurses through a join wrapper (Unwrap()
+// []error) or a single wrapper (Unwrap() error). A node that is neither
+// a *PathError nor any wrapper contributes nothing.
+//
+// visited records the nodes already walked, so a node reachable by more
+// than one path — errors.Join sharing a leaf with a %w-wrapper of it —
+// is counted once, and a cyclic Unwrap chain terminates instead of
+// recursing forever. A *PathError leaf is appended before the visited
+// check can dedup it only through its parents, so each distinct leaf
+// pointer still yields one entry.
+func collectPathErrors(err error, out []*PathError, visited map[error]struct{}) []*PathError {
 	if err == nil {
 		return out
 	}
+	if _, seen := visited[err]; seen {
+		return out
+	}
+	visited[err] = struct{}{}
 	if pe, ok := err.(*PathError); ok {
 		return append(out, pe)
 	}
 	switch w := err.(type) {
 	case interface{ Unwrap() []error }:
 		for _, leaf := range w.Unwrap() {
-			out = collectPathErrors(leaf, out)
+			out = collectPathErrors(leaf, out, visited)
 		}
 	case interface{ Unwrap() error }:
-		out = collectPathErrors(w.Unwrap(), out)
+		out = collectPathErrors(w.Unwrap(), out, visited)
 	}
 	return out
 }

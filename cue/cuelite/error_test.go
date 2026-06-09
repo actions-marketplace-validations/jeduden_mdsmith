@@ -39,6 +39,20 @@ func TestPathError_Path(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, err.Path())
 }
 
+func TestPathError_Path_returnsCopy(t *testing.T) {
+	// Path() must not alias the error's internal slice: a caller that
+	// mutates the returned slice (the harness collects leaf.Path() into its
+	// own structures) must not corrupt a later Error() render.
+	err := newPathError([]string{"meta", "status"}, "boom")
+	got := err.Path()
+	require.Len(t, got, 2)
+	got[0] = "MUTATED"
+	assert.Equal(t, "meta.status: boom", err.Error(),
+		"mutating the returned path must not change Error() output")
+	assert.Equal(t, []string{"meta", "status"}, err.Path(),
+		"a second Path() call must still see the original field path")
+}
+
 func TestPathError_errorsAs(t *testing.T) {
 	var wrapped error = newPathError([]string{"x"}, "boom")
 	var pe *PathError
@@ -99,6 +113,44 @@ func TestErrors(t *testing.T) {
 		assert.Equal(t, []string{"b"}, got[1].Path())
 		assert.Equal(t, []string{"c"}, got[2].Path())
 	})
+}
+
+// cyclicError is a single-cause wrapper whose Unwrap() error points back
+// at itself — a degenerate Unwrap chain. It exists to prove the tree walk
+// terminates on a cycle rather than recursing forever.
+type cyclicError struct{ self *cyclicError }
+
+func (c *cyclicError) Error() string { return "cyclic" }
+func (c *cyclicError) Unwrap() error { return c.self }
+
+func TestErrors_sharedLeafCountedOnce(t *testing.T) {
+	// errors.Join(verr, fmt.Errorf("wrap: %w", verr)) reaches the same
+	// leaf twice; a naive walk double-counts it. The walk must visit each
+	// node at most once, so one underlying leaf yields exactly one entry.
+	pe := newPathError([]string{"a"}, "boom")
+	joined := errors.Join(pe, fmt.Errorf("wrap: %w", pe))
+	got := Errors(joined)
+	require.Len(t, got, 1, "a shared leaf must be reported once, not twice")
+	assert.Equal(t, []string{"a"}, got[0].Path())
+}
+
+func TestErrors_cyclicChainTerminates(t *testing.T) {
+	// A self-referential Unwrap chain must not loop forever. The walk
+	// records visited nodes and stops; it finds no PathError, so yields nil.
+	c := &cyclicError{}
+	c.self = c
+	assert.Nil(t, Errors(c))
+}
+
+func TestErrors_pathErrorIsALeaf(t *testing.T) {
+	// A *PathError that itself wraps an error (finding 4) is a leaf: the
+	// walk reports the PathError once and does NOT descend into its wrapped
+	// cause, so a wrapped *PathError is not re-walked into extra entries.
+	inner := newPathError([]string{"inner"}, "inner boom")
+	outer := newPathErrorWrapping([]string{"outer"}, "outer boom", inner)
+	got := Errors(outer)
+	require.Len(t, got, 1, "a wrapping PathError is one leaf, not two")
+	assert.Equal(t, []string{"outer"}, got[0].Path())
 }
 
 // TestErrors_wrappers covers the single-wrapper (Unwrap() error) leg of the

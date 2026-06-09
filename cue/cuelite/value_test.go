@@ -4,6 +4,7 @@ import (
 	stderrors "errors"
 	"testing"
 
+	cueerrors "cuelang.org/go/cue/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -331,6 +332,33 @@ func TestJoinValidationErrors_emptyDecomposition(t *testing.T) {
 	require.Len(t, leaves, 1)
 	assert.Empty(t, leaves[0].Path())
 	assert.Equal(t, "data does not satisfy schema", leaves[0].Error())
+}
+
+// TestValidate_unwrapsBottom asserts the bottom path keeps the original
+// error reachable through errors.Is: a PathError built for a bottom Value
+// wraps the bottom's cause, so a caller can test for a sentinel (here
+// errZeroValue) through the returned validation error.
+func TestValidate_unwrapsBottom(t *testing.T) {
+	verr := Value{}.Validate()
+	require.Error(t, verr)
+	assert.True(t, stderrors.Is(verr, errZeroValue),
+		"a bottom PathError must unwrap to its underlying cause")
+}
+
+// TestValidate_unwrapsToCueError asserts a per-leaf PathError from a real
+// validation conflict keeps the original cue/errors error reachable
+// through errors.As, so a caller is not cut off from the CUE error it
+// wraps. The leaf is produced by pathErrorOf on the bottom-free path.
+func TestValidate_unwrapsToCueError(t *testing.T) {
+	schema, err := Compile(`{status: "✅"}`)
+	require.NoError(t, err)
+	data, err := CompileJSON([]byte(`{"status": "🔲"}`))
+	require.NoError(t, err)
+	verr := schema.Unify(data).Validate()
+	require.Error(t, verr)
+	var cueErr cueerrors.Error
+	assert.True(t, stderrors.As(verr, &cueErr),
+		"a pathErrorOf leaf must unwrap to the cue/errors error it wraps")
 }
 
 // TestValidate_invariant pins the contract every consumer loop relies on:

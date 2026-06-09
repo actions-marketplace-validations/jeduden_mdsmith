@@ -358,8 +358,10 @@ func (v Value) Unify(o Value) Value {
 func (v Value) Validate() error {
 	if err, ok := v.isBottom(); ok {
 		// A bottom's message is path-free: tag it with an empty path so a
-		// consumer loop over Errors still sees one diagnostic for the failure.
-		return newPathError(nil, err.Error())
+		// consumer loop over Errors still sees one diagnostic for the
+		// failure. Wrap the bottom's cause so errors.Is/As still reach the
+		// original CUE error or sentinel (errZeroValue, errCrossContext).
+		return newPathErrorWrapping(nil, err.Error(), err)
 	}
 	verr := v.val.Validate(cue.Concrete(true))
 	if verr == nil {
@@ -380,7 +382,7 @@ func (v Value) Validate() error {
 // that hands this helper an empty leaf slice.
 func joinValidationErrors(leaves []errors.Error, verr error) error {
 	if len(leaves) == 0 {
-		return newPathError(nil, verr.Error())
+		return newPathErrorWrapping(nil, verr.Error(), verr)
 	}
 	joined := make([]error, len(leaves))
 	for i, leaf := range leaves {
@@ -394,8 +396,10 @@ func joinValidationErrors(leaves []errors.Error, verr error) error {
 
 // pathErrorOf converts a single CUE error into a *PathError. It uses
 // the CUE error's path-free message (Msg, not Error, which prepends the
-// dotted path) so PathError.Error() prints the path exactly once.
+// dotted path) so PathError.Error() prints the path exactly once. It
+// wraps the CUE error so errors.Is/As still reach it (the original
+// cue/errors.Error) through the returned leaf.
 func pathErrorOf(e errors.Error) *PathError {
 	format, args := e.Msg()
-	return newPathError(e.Path(), fmt.Sprintf(format, args...))
+	return newPathErrorWrapping(e.Path(), fmt.Sprintf(format, args...), e)
 }
