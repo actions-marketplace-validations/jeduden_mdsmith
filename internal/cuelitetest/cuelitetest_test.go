@@ -32,9 +32,11 @@ func TestOutcome_Accepted(t *testing.T) {
 }
 
 func TestOutcome_Equal(t *testing.T) {
-	t.Run("same non-validate stage ignores paths", func(t *testing.T) {
+	t.Run("same non-validate stage with matching paths is equal", func(t *testing.T) {
+		// Paths are compared at every stage now (finding 6), so two
+		// StageAccepted outcomes agree only when their paths agree too.
 		a := Outcome{Stage: StageAccepted, Paths: [][]string{{"x"}}}
-		b := Outcome{Stage: StageAccepted}
+		b := Outcome{Stage: StageAccepted, Paths: [][]string{{"x"}}}
 		assert.True(t, a.Equal(b))
 	})
 	t.Run("different stage differs", func(t *testing.T) {
@@ -61,6 +63,14 @@ func TestOutcome_Equal(t *testing.T) {
 		// first leaf right but drops the second must not look equal.
 		a := Outcome{Stage: StageValidate, Paths: [][]string{{"a"}, {"b"}}}
 		b := Outcome{Stage: StageValidate, Paths: [][]string{{"a"}}}
+		assert.False(t, a.Equal(b))
+	})
+	t.Run("different paths at a non-validate stage differ", func(t *testing.T) {
+		// A future payload at another stage (surface D's parsed segments at
+		// StageAccepted) must be compared, not silently always-equal. Same
+		// stage, different Paths → not equal.
+		a := Outcome{Stage: StageAccepted, Paths: [][]string{{"a", "b"}}}
+		b := Outcome{Stage: StageAccepted, Paths: [][]string{{"a", "c"}}}
 		assert.False(t, a.Equal(b))
 	})
 	t.Run("nil paths equals empty paths", func(t *testing.T) {
@@ -188,6 +198,21 @@ func TestRawDuplicateKeys(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOracleValidatePaths_emptyDecomposition mirrors cuelite's
+// TestJoinValidationErrors_emptyDecomposition through the oracle's own
+// seam: an empty errors.Errors decomposition (which a future CUE version
+// or a malformed validation error could produce) must NOT yield a
+// StageValidate Outcome with zero paths. cuelite's bottom path always
+// surfaces ONE nil-path *PathError, so the oracle must surface ONE nil
+// path too — otherwise the fail-safe path diverges by phantom (zero vs
+// one path) even though both reject.
+func TestOracleValidatePaths_emptyDecomposition(t *testing.T) {
+	o := oracleValidate(nil)
+	require.Equal(t, StageValidate, o.Stage)
+	require.Len(t, o.Paths, 1, "an empty decomposition must yield one nil path, not zero")
+	assert.Empty(t, o.Paths[0])
 }
 
 func TestCompare(t *testing.T) {

@@ -107,10 +107,12 @@ type Outcome struct {
 // Accepted reports whether the data satisfied the schema.
 func (o Outcome) Accepted() bool { return o.Stage == StageAccepted }
 
-// Equal reports whether two Outcomes agree on the resolution stage and,
-// when both rejected at validation, on every rejecting field path. Two
-// outcomes that resolved at the same non-validate stage are equal
-// regardless of Paths, since only a validation rejection locates leaves.
+// Equal reports whether two Outcomes agree on the resolution stage and
+// on every field path they carry. Paths are compared at EVERY stage, not
+// only StageValidate: a later phase may attach a payload at another stage
+// (surface D's parsed path segments at StageAccepted), and an Equal that
+// ignored Paths off the validate stage would silently always-pass those
+// — masking a real disagreement. A nil Paths equals an empty Paths.
 //
 // Equal compares sorted COPIES of the two path sets and never mutates
 // its operands, so an Outcome built directly by a later phase — not
@@ -120,9 +122,6 @@ func (o Outcome) Accepted() bool { return o.Stage == StageAccepted }
 func (o Outcome) Equal(other Outcome) bool {
 	if o.Stage != other.Stage {
 		return false
-	}
-	if o.Stage != StageValidate {
-		return true
 	}
 	return slices.EqualFunc(sortedPaths(o.Paths), sortedPaths(other.Paths), slices.Equal[[]string])
 }
@@ -204,7 +203,20 @@ func OraclePath(c Case) Outcome {
 	if verr == nil {
 		return Outcome{Stage: StageAccepted}
 	}
-	leaves := errors.Errors(verr)
+	return oracleValidate(errors.Errors(verr))
+}
+
+// oracleValidate maps a CUE validation error's per-leaf decomposition
+// into a StageValidate Outcome, mirroring cuelite's joinValidationErrors
+// fail-safe: an EMPTY decomposition falls back to a single nil path
+// rather than zero paths. cuelite's bottom path always surfaces one
+// nil-path *PathError, so without this fallback an empty leaf slice would
+// yield a StageValidate Outcome with zero paths against cuelite's one — a
+// phantom divergence in the fail-safe path even though both reject.
+func oracleValidate(leaves []errors.Error) Outcome {
+	if len(leaves) == 0 {
+		return validatePaths([][]string{nil})
+	}
 	paths := make([][]string, len(leaves))
 	for i, leaf := range leaves {
 		paths[i] = leaf.Path()
