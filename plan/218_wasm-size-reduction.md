@@ -241,9 +241,10 @@ patch at the project baseline. The four-layer
 - **contract** — the façade surface and the `errors`/`Path`
   shape MDS020 reads;
 - **integration** — the differential harness: the in-house path
-  runs against the CUE-backed façade (the **oracle**) on each
-  expression, asserting identical accept/reject and error
-  field-paths over every `frontmatter:` constraint, the
+  runs against an **independent direct-CUE oracle** (not the
+  façade, which becomes the in-house path once flipped, so it
+  cannot also be the oracle), asserting identical accept/reject
+  and error field-paths over every `frontmatter:` constraint, the
   [file-kinds conflict table](../docs/guides/file-kinds.md), the
   query/`where:` examples, and a `go test` fuzzer;
 - **e2e** — `mdsmith check .`, unchanged.
