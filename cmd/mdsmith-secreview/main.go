@@ -6,7 +6,7 @@
 //
 // Usage:
 //
-//	mdsmith-secreview render <findings.json> [--out-dir DIR]
+//	mdsmith-secreview render <findings.json> [--out-dir DIR] [--stem S]
 //	mdsmith-secreview grade --findings F --cases C --case ID
 //	mdsmith-secreview grade --findings F --forbid-severity S... \
 //	    --require-min-severity S --require-location-file F
@@ -32,9 +32,12 @@ import (
 const usageText = `Usage: mdsmith-secreview <command> [args]
 
 Commands:
-  render <findings.json> [--out-dir DIR]
-                          Render findings.sarif, security-review.md, and
-                          inline-annotations.json into DIR (default ".").
+  render <findings.json> [--out-dir DIR] [--stem S]
+                          Render the SARIF, report, and inline-annotations
+                          outputs into DIR (default "."). With --stem the
+                          files are <S>.sarif, <S>.md, and
+                          <S>.inline-annotations.json; without it the
+                          legacy fixed names are used.
   grade --findings F (--cases C --case ID | --forbid-severity S...
                       --require-min-severity S --require-location-file F)
                           Grade a findings.json against a case rubric (via
@@ -67,13 +70,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// runRender implements `render <findings.json> [--out-dir DIR]`.
+// runRender implements `render <findings.json> [--out-dir DIR] [--stem S]`.
 func runRender(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	outDir := fs.String("out-dir", ".", "directory to write the three outputs into")
+	stem := fs.String("stem", "",
+		"filename stem for the outputs (<stem>.sarif, <stem>.md, "+
+			"<stem>.inline-annotations.json); empty keeps the legacy fixed names")
 	fs.Usage = func() {
-		_, _ = fmt.Fprint(stderr, "Usage: mdsmith-secreview render <findings.json> [--out-dir DIR]\n")
+		_, _ = fmt.Fprint(stderr,
+			"Usage: mdsmith-secreview render <findings.json> [--out-dir DIR] [--stem S]\n")
 	}
 	if code := parseFlags(fs, args, stderr, "render"); code >= 0 {
 		return code
@@ -87,11 +94,11 @@ func runRender(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "mdsmith-secreview: %v\n", err)
 		return 1
 	}
-	if err := secreview.Render(report, *outDir); err != nil {
+	if err := secreview.RenderStem(report, *outDir, *stem); err != nil {
 		_, _ = fmt.Fprintf(stderr, "mdsmith-secreview: %v\n", err)
 		return 1
 	}
-	names := secreview.RenderFileNames()
+	names := secreview.RenderFileNamesStem(*stem)
 	_, _ = fmt.Fprintf(stdout, "rendered %d finding(s) -> %s\n",
 		len(report.Findings), strings.Join(names, ", "))
 	return 0

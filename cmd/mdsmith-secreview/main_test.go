@@ -72,6 +72,23 @@ func TestRenderHappy(t *testing.T) {
 	}
 }
 
+func TestRenderStemFlag(t *testing.T) {
+	path := writeJSON(t, criticalFinding)
+	outDir := t.TempDir()
+	code, out, errOut := runCLI("render", path,
+		"--out-dir", outDir, "--stem", "2026-06-09-full-repo-audit")
+	require.Equalf(t, 0, code, "stderr: %s", errOut)
+	assert.Contains(t, out, "2026-06-09-full-repo-audit.sarif")
+	for _, name := range []string{
+		"2026-06-09-full-repo-audit.sarif",
+		"2026-06-09-full-repo-audit.md",
+		"2026-06-09-full-repo-audit.inline-annotations.json",
+	} {
+		_, err := os.Stat(filepath.Join(outDir, name))
+		require.NoErrorf(t, err, "expected %s", name)
+	}
+}
+
 func TestRenderMissingArg(t *testing.T) {
 	code, _, errOut := runCLI("render")
 	assert.Equal(t, 2, code)
