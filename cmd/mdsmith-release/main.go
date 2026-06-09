@@ -9,6 +9,7 @@
 //
 //	mdsmith-release stamp <version>
 //	mdsmith-release check
+//	mdsmith-release check-release-gates
 //	mdsmith-release build-npm <artifacts-dir> <out-dir>
 //	mdsmith-release build-wheels <artifacts-dir> <out-dir>
 //	mdsmith-release build-flatpak <artifacts-dir> <out-dir>
@@ -50,6 +51,7 @@ const usageText = `Usage: mdsmith-release <command> [args]
 Commands:
   stamp <version>                 Rewrite tracked manifests to <version>.
   check                           Verify tracked manifests are at the dev sentinel.
+  check-release-gates             Verify release-environment gating across .github/workflows.
   build-npm <artifacts> <out>     Build npm platform sub-packages.
   build-wheels <artifacts> <out>  Build platform-tagged Python wheels.
   build-flatpak <art> <out>       Stage the .flatpak bundle's manifest + Linux binaries.
@@ -111,6 +113,8 @@ func dispatch(cmd, root string, rest []string) int {
 		return runStamp(root, rest)
 	case "check":
 		return runCheck(root, rest)
+	case "check-release-gates":
+		return runCheckReleaseGates(root, rest)
 	case "build-npm":
 		return runBuildNpm(root, rest)
 	case "build-wheels":
@@ -131,6 +135,17 @@ func dispatch(cmd, root string, rest []string) int {
 		return runPublishRelease(root, rest)
 	case "sbom":
 		return runSBOM(root, rest)
+	default:
+		return dispatchMaintenance(cmd, root, rest)
+	}
+}
+
+// dispatchMaintenance routes the repo-maintenance subcommands
+// (secret rotation, coverage, CI summaries, site assets), split from
+// dispatch so each routing function stays within the funlen budget as
+// the command table grows.
+func dispatchMaintenance(cmd, root string, rest []string) int {
+	switch cmd {
 	case "check-secret-rotations":
 		return runCheckSecretRotations(root, rest)
 	case "record-rotation":
@@ -212,6 +227,48 @@ func runCheck(root string, args []string) int {
 		return 1
 	}
 	fmt.Println("all manifests pinned at " + release.DevSentinel)
+	return 0
+}
+
+func runCheckReleaseGates(root string, args []string) int {
+	fs := flag.NewFlagSet("check-release-gates", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: mdsmith-release check-release-gates\n\n"+
+			"Verify the release pipeline's secret-gating invariant across\n"+
+			"every workflow under .github/workflows/: in release.yml each\n"+
+			"job that declares `environment: release` must list the `gate`\n"+
+			"job in `needs:` and must not carry an approval-bypassing `if:`\n"+
+			"(always() / failure() / cancelled()); `gate` must be the lone job on the\n"+
+			"`release-approval` environment; and no other workflow may\n"+
+			"target either environment. Used by the release-gate-guard CI\n"+
+			"job. Exits non-zero on any violation.\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		if code := reportFlagParseErr(err, os.Stderr, "mdsmith-release: check-release-gates"); code >= 0 {
+			return code
+		}
+	}
+	if fs.NArg() != 0 {
+		fs.Usage()
+		return 2
+	}
+	violations, err := release.CheckReleaseGatesRoot(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith-release: %v\n", err)
+		return 1
+	}
+	if len(violations) > 0 {
+		fmt.Fprintln(os.Stderr, "release-gate invariant violated:")
+		for _, v := range violations {
+			fmt.Fprintf(os.Stderr, "  %s\n", v)
+		}
+		fmt.Fprintln(os.Stderr,
+			"\nevery `environment: release` job must list `gate` in needs: so no\n"+
+				"secret is reachable before the single approval, and only release.yml\n"+
+				"may target the release environments. See docs/development/release.md.")
+		return 1
+	}
+	fmt.Println("release-gate invariant holds across .github/workflows")
 	return 0
 }
 
