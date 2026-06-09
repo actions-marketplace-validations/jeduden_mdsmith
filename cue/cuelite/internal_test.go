@@ -224,4 +224,14 @@ func TestScanDuplicateJSONKeys(t *testing.T) {
 		// data (a fabricated second value) to Extract.
 		assert.NoError(t, scanDuplicateJSONKeys([]byte(`42 {"a":1,"a":2}`)))
 	})
+	t.Run("duplicate nested under a U+FFFD key reported", func(t *testing.T) {
+		// A U+FFFD key is skipped for dup tracking, but its VALUE subtree must
+		// still be walked: a real duplicate inside the object the lossy key
+		// maps to is caught. Skipping the whole subtree after a lossy key —
+		// rather than only the key's own dup tracking — would miss this, so
+		// this pins that recordKey consumes only the key, not the value.
+		err := scanDuplicateJSONKeys([]byte(`{"\ud800":{"a":1,"a":2}}`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"a"`)
+	})
 }

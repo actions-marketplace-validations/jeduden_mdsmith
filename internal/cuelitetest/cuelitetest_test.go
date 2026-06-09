@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"cuelang.org/go/cue/cuecontext"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -231,6 +232,54 @@ func TestOracleValidatePaths_emptyDecomposition(t *testing.T) {
 	assert.Empty(t, o.Paths[0])
 }
 
+// TestOracleData pins oracleData's three error branches and its accept
+// branch directly, apart from the corpus run: the duplicate-key scan, the
+// Extract syntax check, and the BuildExpr bottom (a lone-surrogate value)
+// must each surface a data-compile error, while strict JSON builds.
+func TestOracleData(t *testing.T) {
+	ctx := cuecontext.New()
+	t.Run("duplicate key errors before the lift", func(t *testing.T) {
+		_, err := oracleData(ctx, []byte(`{"a":1,"a":2}`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"a"`)
+	})
+	t.Run("malformed JSON errors via Extract", func(t *testing.T) {
+		_, err := oracleData(ctx, []byte(`{not json`))
+		require.Error(t, err)
+	})
+	t.Run("lone-surrogate value errors at BuildExpr", func(t *testing.T) {
+		// Grammar-valid, duplicate-free strict JSON that passes the scan and
+		// Extract but builds to a bottom; oracleData must surface it.
+		_, err := oracleData(ctx, []byte(`{"a": "\ud800"}`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "surrogate")
+	})
+	t.Run("valid strict JSON builds", func(t *testing.T) {
+		val, err := oracleData(ctx, []byte(`{"a": 1}`))
+		require.NoError(t, err)
+		assert.True(t, val.Exists())
+	})
+}
+
+// TestValidatePaths pins validatePaths directly: it builds a StageValidate
+// Outcome and sorts the paths deterministically in place.
+func TestValidatePaths(t *testing.T) {
+	o := validatePaths([][]string{{"b"}, {"a"}})
+	assert.Equal(t, StageValidate, o.Stage)
+	assert.Equal(t, [][]string{{"a"}, {"b"}}, o.Paths,
+		"validatePaths sorts the rejecting leaves deterministically")
+}
+
+// TestSortedPaths pins sortedPaths directly: it returns a sorted copy and
+// leaves its input untouched so Equal can normalize without mutating an
+// operand.
+func TestSortedPaths(t *testing.T) {
+	in := [][]string{{"b"}, {"a"}}
+	got := sortedPaths(in)
+	assert.Equal(t, [][]string{{"a"}, {"b"}}, got, "the copy is sorted")
+	assert.Equal(t, [][]string{{"b"}, {"a"}}, in, "the input is left untouched")
+}
+
 func TestCompare(t *testing.T) {
 	t.Run("agreement records no failure", func(t *testing.T) {
 		r := &recorder{}
@@ -327,5 +376,10 @@ func corpus() []Case {
 		{Name: "value equal to own key ok", Schema: `{a: string}`, Data: `{"a":"a"}`},
 		// A string value that equals a LATER sibling key.
 		{Name: "value equal to sibling key ok", Schema: `{x: string, y: int}`, Data: `{"x":"y","y":1}`},
+		// A U+FFFD key is skipped for dup tracking, but its VALUE subtree must
+		// still be walked in BOTH arms: a real duplicate nested under a
+		// lone-surrogate key is caught at the data stage. An arm that skipped
+		// the whole subtree after a lossy key would accept this and diverge.
+		{Name: "duplicate nested under a lossy key reject", Schema: `{a: _}`, Data: `{"\ud800":{"a":1,"a":2}}`},
 	}
 }
