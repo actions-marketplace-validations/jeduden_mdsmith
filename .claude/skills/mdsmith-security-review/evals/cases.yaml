@@ -1,0 +1,72 @@
+# Calibration baseline. Every case is evaluated against this exact
+# commit of jeduden/mdsmith so a run is reproducible: the code paths,
+# the §0 defenses, and the regression patch below are all pinned to
+# it. references/threat-model.md is calibrated to the same commit.
+# When the skill is recalibrated, bump this and refresh fixtures +
+# regressions/*.patch together (the skill-eval Go tests fail if the
+# patch no longer applies).
+baseline_ref: b72285df2f6b422dd2eb31058884757f13acc78c
+
+cases:
+  - id: whole-repo-audit
+    mode: audit
+    prompt: "Do a whole-repo security audit of mdsmith and emit a findings report."
+    setup: "Clean clone of jeduden/mdsmith at baseline_ref."
+    expect:
+      must:
+        - "Reads references/threat-model.md before concluding."
+        - "Confirms the §0 baseline defenses against the actual code (recipes not executed,
+           symlink default-deny, VS Code untrustedWorkspaces, no npm postinstall)."
+        - "Produces all three outputs via the script (findings.sarif, security-review.md,
+           inline-annotations.json)."
+        - "Names residual un-traced areas in the coverage note rather than omitting them."
+      must_not:
+        - "Reports a Critical/High recipe-execution RCE without a traced exec call path."
+        - "States that `mdsmith fix` or the LSP executes <?build?> recipes."
+    # Machine-checkable subset of the rubric (enforced by the Go grader
+    # on the findings.json). The prose must/must_not above stay human-judged.
+    grade:
+      forbid_severities: [critical, high]
+
+  - id: build-rce-probe
+    mode: audit
+    prompt: "Is mdsmith's <?build?> recipe execution safe? Can opening or fixing an untrusted
+             repo run shell commands?"
+    setup: "Clean clone of jeduden/mdsmith at baseline_ref."
+    expect:
+      must:
+        - "Traces the build directive path (internal/rules/build, recipesafety, internal/config/build.go)."
+        - "Concludes current code does not execute recipes; explains MDS040 is a lint-time advisory."
+        - "Notes the recipe command is config-sourced, not document-sourced."
+      must_not:
+        - "Invents an execution path or rates a Critical without code evidence."
+    grade:
+      forbid_severities: [critical, high]
+
+  - id: pr-regression-introduces-exec
+    mode: pr
+    prompt: "Review this PR for security issues."
+    setup: |
+      Clone jeduden/mdsmith at baseline_ref, then apply the committed regression
+      regressions/build-exec.patch. It makes internal/rules/build/rule.go generateBody
+      execute a document-controlled command (sh -c) built from the directive's recipe
+      and output params — the exact regression the skill must catch. Present the patch
+      as the PR under review. The patch compiles and applies cleanly at baseline_ref;
+      the skill-eval Go tests (internal/secreview) assert both.
+    expect:
+      must:
+        - "Flags a Critical (or High) finding: recipe/command execution now reachable from Fix."
+        - "Cites the introduced exec.Command line as the traced sink."
+        - "Maps severity using interaction required (fix-on-save/merge => zero-interaction => Critical)."
+      must_not:
+        - "Passes the PR as clean."
+        - "Downgrades to info/low despite a real exec sink on attacker-influenced input."
+    grade:
+      require_finding:
+        min_severity: high
+        location_file: internal/rules/build/rule.go
+
+grading_note: >
+  The skill is correctly calibrated only if whole-repo-audit and build-rce-probe come back clean
+  (defenses confirmed, no phantom RCE) AND pr-regression-introduces-exec is caught as Critical/High.
+  Passing the first two but missing the third means the rewrite over-corrected into complacency.
