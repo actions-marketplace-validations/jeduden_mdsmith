@@ -7,12 +7,18 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"sync"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/jeduden/mdsmith/internal/rules/astutil"
 	"github.com/jeduden/mdsmith/internal/rules/settings"
 )
+
+// compiledPatterns caches compiled regexes by source string. ConfigureRule
+// clones and re-applies settings for every file; caching avoids rebuilding
+// the NFA on each call.
+var compiledPatterns sync.Map // map[string]*regexp.Regexp
 
 func init() {
 	rule.Register(&Rule{})
@@ -148,11 +154,15 @@ func parsePatterns(v any) ([]Pattern, error) {
 				i,
 			)
 		}
-		re, err := regexp.Compile(patternStr)
+		compiled, err := regexp.Compile(patternStr)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"required-text-patterns: patterns[%d].pattern invalid: %w", i, err,
 			)
+		}
+		re := compiled
+		if actual, loaded := compiledPatterns.LoadOrStore(patternStr, compiled); loaded {
+			re = actual.(*regexp.Regexp)
 		}
 		msg, _ := m["message"].(string)
 		skip, err := parseSkipIndices(m["skip-indices"])
