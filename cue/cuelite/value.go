@@ -173,8 +173,11 @@ func Compile(src string) (Value, error) {
 // scanner-level dup detection; a lone-surrogate key still errors at the
 // build (Extract or BuildExpr reports "invalid string: unmatched
 // surrogate pair"), and a literal-"�" duplicate is the only key shape
-// that escapes both checks — accepted as a phantom merge, which no
-// front-matter marshaller produces.
+// that escapes scanner detection: the CUE lift then unifies the two
+// same-named keys, so a CONFLICTING literal-"�" duplicate is still
+// rejected (the unify bottoms) while only a mergeable or equal one slips
+// through as a phantom merge — a key shape no front-matter marshaller
+// produces.
 //
 // The returned Value owns a fresh *cue.Context.
 func CompileJSON(data []byte) (Value, error) {
@@ -219,43 +222,6 @@ func buildJSON(ctx *cue.Context, data []byte) (cue.Value, error) {
 	return val, nil
 }
 
-// scanDuplicateJSONKeys walks the JSON document with the streaming token
-// decoder and reports the first object key that appears twice within the
-// same object — at any nesting depth, including objects that are array
-// elements. See CompileJSON for why strict JSON forbids duplicates.
-//
-// It keys off json.Decoder's structural guarantee: between a '{' and its
-// matching '}', tokens alternate key, value, key, value, …, where each
-// value is a single scalar token or a whole nested container (which the
-// decoder emits as one '{'/'[' delimiter that we recurse on). So inside
-// an object level, the next string token after an even number of values
-// is a key; we track that parity per open object with seenKey, flipping
-// it once per value. Array levels carry no key rule, so their elements
-// are scanned only to recurse into nested objects.
-//
-// Four inputs make the scan defer rather than fabricate a duplicate:
-//
-//   - A malformed document yields no duplicate error: cuejson.Extract is
-//     left to report the syntax error, so the two arms keep one place that
-//     decides what "not JSON" means. dec.UseNumber() keeps a number
-//     outside float64 range (1e999, valid JSON) from erroring mid-scan and
-//     being misread as malformed, which would let a duplicate beside it
-//     slip past.
-//   - A second top-level value: the scan stops once the first top-level
-//     value closes (the stack empties, or the first top-level scalar is
-//     consumed). Any trailing data is "invalid JSON after top-level
-//     value", which cuejson.Extract reports.
-//   - Invalid UTF-8 input defers to Extract (a utf8.Valid pre-check):
-//     json.Decoder replaces invalid bytes in a raw key with U+FFFD, so two
-//     distinct invalid-byte keys would collapse to one fabricated
-//     duplicate.
-//   - A decoded key containing U+FFFD (a lone-surrogate escape such as
-//     "\ud800", or a literal "�") is skipped for dup tracking: two
-//     lone-surrogate keys decode to the same U+FFFD and are not duplicates
-//     of each other. A lone-surrogate key still errors at the build (see
-//     buildJSON); a literal-"�" key is the documented gap CompileJSON
-//     describes.
-//
 // jsonLevel is one open container in scanDuplicateJSONKeys' stack. keys
 // is non-nil for an object level and holds the keys already seen at it;
 // nil marks an array level. seenKey is true when the next string token
@@ -293,6 +259,42 @@ func (l *jsonLevel) recordKey(tok any) (bool, error) {
 	return true, nil
 }
 
+// scanDuplicateJSONKeys walks the JSON document with the streaming token
+// decoder and reports the first object key that appears twice within the
+// same object — at any nesting depth, including objects that are array
+// elements. See CompileJSON for why strict JSON forbids duplicates.
+//
+// It keys off json.Decoder's structural guarantee: between a '{' and its
+// matching '}', tokens alternate key, value, key, value, …, where each
+// value is a single scalar token or a whole nested container (which the
+// decoder emits as one '{'/'[' delimiter that we recurse on). So inside
+// an object level, the next string token after an even number of values
+// is a key; we track that parity per open object with seenKey, flipping
+// it once per value. Array levels carry no key rule, so their elements
+// are scanned only to recurse into nested objects.
+//
+// Four inputs make the scan defer rather than fabricate a duplicate:
+//
+//   - A malformed document yields no duplicate error: cuejson.Extract is
+//     left to report the syntax error, so the two arms keep one place that
+//     decides what "not JSON" means. dec.UseNumber() keeps a number
+//     outside float64 range (1e999, valid JSON) from erroring mid-scan and
+//     being misread as malformed, which would let a duplicate beside it
+//     slip past.
+//   - A second top-level value: the scan stops once the first top-level
+//     value closes (the stack empties, or the first top-level scalar is
+//     consumed). Any trailing data is "invalid JSON after top-level
+//     value", which cuejson.Extract reports.
+//   - Invalid UTF-8 input defers to Extract (a utf8.Valid pre-check):
+//     json.Decoder replaces invalid bytes in a raw key with U+FFFD, so two
+//     distinct invalid-byte keys would collapse to one fabricated
+//     duplicate.
+//   - A decoded key containing U+FFFD (a lone-surrogate escape such as
+//     "\ud800", or a literal "�") is skipped for dup tracking: two
+//     lone-surrogate keys decode to the same U+FFFD and are not duplicates
+//     of each other. A lone-surrogate key still errors at the build (see
+//     buildJSON); a literal-"�" key is the documented gap CompileJSON
+//     describes.
 func scanDuplicateJSONKeys(data []byte) error {
 	// Invalid UTF-8 would make the decoder fold distinct raw keys onto one
 	// U+FFFD; leave such input to cuejson.Extract.
@@ -422,7 +424,7 @@ func (v Value) Unify(o Value) Value {
 		// side instead (the receiver-rebuild branch below handles that), and
 		// only two such sourceless results in different contexts absorb as a
 		// bottom. Re-Unify of a derived result IS exercised — by
-		// TestValue_Unify_crossContext and the chained corpus cases — so this
+		// TestValue_Unify_chained and TestValue_Unify_crossContext — so this
 		// is a real branch, not an unreachable convenience.
 		return Value{val: v.val.Unify(rebuilt)}
 	}

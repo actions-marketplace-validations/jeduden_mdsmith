@@ -67,13 +67,15 @@ func (e *PathError) Error() string {
 }
 
 // Errors enumerates the per-field failures carried by an error returned
-// from Validate. It is THE way a consumer reads every rejecting leaf:
-// Validate returns one *PathError when a single field fails and an
-// errors.Join of *PathErrors when several do, and Errors flattens both
-// into one slice so callers (the internal/schema validator emitting one
-// MDS020 diagnostic per field, the differential harness comparing every
-// rejected path) iterate uniformly without type-switching on the join
-// shape. It mirrors cuelang.org/go/cue/errors.Errors.
+// from Validate. It is THE way a consumer reads every rejecting leaf,
+// and it does not depend on the concrete shape Validate returns — which
+// Validate's own doc leaves unspecified. Whatever that shape is (today a
+// bare *PathError for a single failing field, an errors.Join of
+// *PathErrors for several, a path-free *PathError for a bottom), Errors
+// flattens it into one slice so callers (the internal/schema validator
+// emitting one MDS020 diagnostic per field, the differential harness
+// comparing every rejected path) iterate uniformly without type-switching
+// on the result. It mirrors cuelang.org/go/cue/errors.Errors.
 //
 // Errors is a full error-tree walk: it descends through both join
 // wrappers (Unwrap() []error) and single wrappers (Unwrap() error),

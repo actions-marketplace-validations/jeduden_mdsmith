@@ -222,8 +222,10 @@ func TestValue_Unify(t *testing.T) {
 		// reject when unified with a zero (uninitialized) operand, rather
 		// than treating the zero Value as top and accepting. Pinning the
 		// exact errZeroValue reason makes the operand isBottom guard load-
-		// bearing: removing it leaves a (different) rebuild bottom that this
-		// assertion rejects, turning the test red.
+		// bearing: removing it lets Unify reach o.rebuild on a zero operand,
+		// whose o.val.Context() is nil, so the (*cue.Context)(nil).
+		// CompileString call panics with a nil-pointer dereference — this
+		// assertion's errZeroValue reason can only come from the guard.
 		assert.NoError(t, ok.Validate(), "concrete receiver alone must pass")
 		assertBottomError(t, ok.Unify(Value{}).Validate(), errZeroValue.Error())
 	})
