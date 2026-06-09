@@ -16,7 +16,7 @@ func TestVisit_WalkError(t *testing.T) {
 	w := &walker{
 		absBase:  "/tmp/base",
 		patterns: []string{"**/*.md"},
-		seen:     make(map[string]bool),
+		seen:     make(map[string]struct{}),
 	}
 	err := w.visit("/tmp/base/foo.md", nil, os.ErrPermission)
 	assert.ErrorIs(t, err, os.ErrPermission)
@@ -44,7 +44,7 @@ func TestVisit_SkipsSymlinkDirByDefault(t *testing.T) {
 	w := &walker{
 		absBase:  dir,
 		patterns: []string{"**/*.md"},
-		seen:     make(map[string]bool),
+		seen:     make(map[string]struct{}),
 	}
 	visitErr := w.visit(linked, info, nil)
 	assert.NoError(t, visitErr)
@@ -71,7 +71,7 @@ func TestVisit_FollowsSymlinkFileWhenOptedIn(t *testing.T) {
 		absBase:        dir,
 		patterns:       []string{"**/*.md"},
 		followSymlinks: true,
-		seen:           make(map[string]bool),
+		seen:           make(map[string]struct{}),
 	}
 	visitErr := w.visit(linked, info, nil)
 	assert.NoError(t, visitErr)
@@ -101,7 +101,7 @@ func TestVisit_RootDirSkipped(t *testing.T) {
 	w := &walker{
 		absBase:  dir,
 		patterns: []string{"**/*.md"},
-		seen:     make(map[string]bool),
+		seen:     make(map[string]struct{}),
 	}
 
 	// visit the root itself (rel == ".")

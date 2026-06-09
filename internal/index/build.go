@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -140,7 +141,7 @@ func countLines(source []byte) int {
 func collectHeadings(filePath string, root ast.Node, source []byte, lines [][]byte, fmOffset, totalLines int) []Symbol {
 	heads, headStart := walkHeadings(root, source)
 	syms := make([]Symbol, 0, len(heads))
-	usedAnchors := make(map[string]bool)
+	usedAnchors := make(map[string]struct{})
 	slugCounts := make(map[string]int)
 	for i, h := range heads {
 		txt := mdtext.ExtractPlainText(h, source)
@@ -187,23 +188,23 @@ func walkHeadings(root ast.Node, source []byte) ([]*ast.Heading, []int) {
 
 // uniqueAnchor returns a slug suffixed with -1, -2, … when the bare
 // slug is already used, mirroring CommonMark / GitHub disambiguation.
-func uniqueAnchor(slug string, used map[string]bool, counts map[string]int) string {
+func uniqueAnchor(slug string, used map[string]struct{}, counts map[string]int) string {
 	if slug == "" {
 		return ""
 	}
 	anchor := slug
-	if used[anchor] {
+	if _, ok := used[anchor]; ok {
 		c := counts[slug]
 		for {
 			c++
-			anchor = fmt.Sprintf("%s-%d", slug, c)
-			if !used[anchor] {
+			anchor = slug + "-" + strconv.Itoa(c)
+			if _, ok := used[anchor]; !ok {
 				break
 			}
 		}
 		counts[slug] = c
 	}
-	used[anchor] = true
+	used[anchor] = struct{}{}
 	return anchor
 }
 
@@ -475,9 +476,10 @@ func RefDefRegexpMatches(body []byte) [][]int {
 // — we use it to confirm a regex match really is a definition (not a
 // link inside a paragraph), then read the line/col from the source.
 func collectLinkRefDefs(filePath string, ctx parser.Context, body []byte, lines [][]byte, fmOffset int) []Symbol {
-	wanted := map[string]bool{}
-	for _, ref := range ctx.References() {
-		wanted[string(ref.Label())] = true
+	refs := ctx.References()
+	wanted := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		wanted[string(ref.Label())] = struct{}{}
 	}
 	if len(wanted) == 0 {
 		return nil
@@ -486,16 +488,18 @@ func collectLinkRefDefs(filePath string, ctx parser.Context, body []byte, lines 
 	// resolves only the first definition for any label, so duplicate
 	// regex matches must not produce extra outline entries that
 	// would confuse the symbol picker.
-	seen := map[string]bool{}
-	var out []Symbol
+	seen := make(map[string]struct{}, len(wanted))
+	out := make([]Symbol, 0, len(wanted))
 	for _, m := range refDefRE.FindAllSubmatchIndex(body, -1) {
 		raw := body[m[2]:m[3]]
 		label := string(raw)
 		anchor := string(util.ToLinkReference(raw))
-		if !wanted[anchor] || seen[anchor] {
+		_, inWanted := wanted[anchor]
+		_, inSeen := seen[anchor]
+		if !inWanted || inSeen {
 			continue
 		}
-		seen[anchor] = true
+		seen[anchor] = struct{}{}
 		// m[2]-1 is the offset of `[`; m[2] is the offset of the
 		// label's first byte. Use the label position so "go to
 		// definition" highlights the label, not the bracket.

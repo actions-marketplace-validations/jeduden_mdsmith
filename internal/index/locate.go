@@ -2,9 +2,9 @@ package index
 
 import (
 	"bytes"
-	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/jeduden/mdsmith/internal/linkgraph"
@@ -166,7 +166,7 @@ func (l Locator) Locate(source []byte, line, col int) LocateResult {
 // node, walking the root once to account for duplicate-slug
 // disambiguation.
 func headingInfo(target *ast.Heading, source []byte, root ast.Node) (string, int, string) {
-	usedAnchors := map[string]bool{}
+	usedAnchors := make(map[string]struct{})
 	slugCounts := map[string]int{}
 	var anchor string
 	_ = ast.Walk(root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -180,19 +180,19 @@ func headingInfo(target *ast.Heading, source []byte, root ast.Node) (string, int
 		txt := mdtext.ExtractPlainText(h, source)
 		slug := mdtext.Slugify(txt)
 		a := slug
-		if a != "" && usedAnchors[a] {
-			c := slugCounts[slug]
-			for {
-				c++
-				a = fmt.Sprintf("%s-%d", slug, c)
-				if !usedAnchors[a] {
-					break
-				}
-			}
-			slugCounts[slug] = c
-		}
 		if a != "" {
-			usedAnchors[a] = true
+			if _, exists := usedAnchors[a]; exists {
+				c := slugCounts[slug]
+				for {
+					c++
+					a = slug + "-" + strconv.Itoa(c)
+					if _, ok := usedAnchors[a]; !ok {
+						break
+					}
+				}
+				slugCounts[slug] = c
+			}
+			usedAnchors[a] = struct{}{}
 		}
 		if h == target {
 			anchor = a

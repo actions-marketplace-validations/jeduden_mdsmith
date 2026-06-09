@@ -40,8 +40,8 @@ const maxIncludeDepth = 10
 type Rule struct {
 	mu      sync.Mutex
 	engine  *gensection.Engine
-	visited map[string]bool // files in current include chain
-	chain   []string        // ordered chain for cycle diagnostics
+	visited map[string]struct{} // files in current include chain
+	chain   []string            // ordered chain for cycle diagnostics
 }
 
 // ID implements rule.Rule.
@@ -74,7 +74,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p := filepath.ToSlash(f.Path)
-	r.visited = map[string]bool{p: true}
+	r.visited = map[string]struct{}{p: {}}
 	r.chain = []string{p}
 	defer func() { r.visited = nil; r.chain = nil }()
 	return r.getEngine().Check(f)
@@ -88,7 +88,7 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p := filepath.ToSlash(f.Path)
-	r.visited = map[string]bool{p: true}
+	r.visited = map[string]struct{}{p: {}}
 	r.chain = []string{p}
 	defer func() { r.visited = nil; r.chain = nil }()
 	return r.getEngine().Fix(f)
@@ -274,7 +274,7 @@ func (r *Rule) checkCycleOrDepth(
 		return []lint.Diagnostic{makeDiag(filePath, line,
 			fmt.Sprintf("include depth exceeds maximum (%d)", maxIncludeDepth))}
 	}
-	if r.visited[resolvedFile] {
+	if _, inVisited := r.visited[resolvedFile]; inVisited {
 		chain := make([]string, len(r.chain), len(r.chain)+1)
 		copy(chain, r.chain)
 		chain = append(chain, resolvedFile)
@@ -322,7 +322,7 @@ func (r *Rule) generateIncludeContent(
 
 	// Track this file and recursively expand nested includes.
 	if r.visited != nil {
-		r.visited[resolvedFile] = true
+		r.visited[resolvedFile] = struct{}{}
 		r.chain = append(r.chain, resolvedFile)
 		defer func() {
 			delete(r.visited, resolvedFile)

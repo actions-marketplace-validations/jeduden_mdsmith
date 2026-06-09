@@ -47,7 +47,7 @@ func TestLineOfOffsetEdgeBranches(t *testing.T) {
 
 func TestUniqueAnchorEmptySlug(t *testing.T) {
 	t.Parallel()
-	used := map[string]bool{}
+	used := map[string]struct{}{}
 	counts := map[string]int{}
 	assert.Empty(t, uniqueAnchor("", used, counts))
 }
@@ -235,7 +235,7 @@ func TestUniqueAnchorRetriesPastFirstSuffix(t *testing.T) {
 	// it: c=0→1 picks "same-1" (already used) → c=2 picks "same-2".
 	// The inner loop's used[anchor] check fires false on the
 	// second iteration.
-	used := map[string]bool{"same": true, "same-1": true}
+	used := map[string]struct{}{"same": {}, "same-1": {}}
 	counts := map[string]int{}
 	got := uniqueAnchor("same", used, counts)
 	assert.Equal(t, "same-2", got)
