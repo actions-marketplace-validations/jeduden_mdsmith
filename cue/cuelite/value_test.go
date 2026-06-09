@@ -101,6 +101,18 @@ func TestCompileJSON(t *testing.T) {
 		require.NoError(t, err)
 		assert.NoError(t, v.Validate())
 	})
+	t.Run("lone-surrogate value rejected at the data stage", func(t *testing.T) {
+		// A lone-surrogate escape such as "\ud800" is grammar-valid
+		// duplicate-free strict JSON, so it passes the scanner and
+		// cuejson.Extract, but ctx.BuildExpr yields a bottom ("invalid
+		// string: unmatched surrogate pair"). buildJSON must surface that
+		// bottom as a compile error rather than returning an accepting Value,
+		// so the data arm classifies it at the data stage.
+		v, err := CompileJSON([]byte(`{"a": "\ud800"}`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "surrogate")
+		assertBottomError(t, v.Validate(), err.Error())
+	})
 }
 
 func TestValue_Unify(t *testing.T) {

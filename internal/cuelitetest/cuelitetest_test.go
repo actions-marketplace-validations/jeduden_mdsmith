@@ -272,5 +272,11 @@ func corpus() []Case {
 		// the cuelite arm rejects it at StageCompileData — a phantom
 		// divergence. Both arms must reject it at the data stage.
 		{Name: "mergeable duplicate key reject", Schema: `{a: {b: int, c: int}}`, Data: `{"a":{"b":1},"a":{"c":2}}`},
+		// A lone-surrogate escape is grammar-valid, duplicate-free strict
+		// JSON that passes the scanner and cuejson.Extract but builds to a
+		// bottom ("invalid string: unmatched surrogate pair"). Both arms must
+		// surface that bottom as a data-stage compile error (StageCompileData)
+		// rather than one arm accepting a phantom value.
+		{Name: "lone-surrogate value reject", Schema: `{a: string, b: int}`, Data: `{"a": "\ud800", "b": "x"}`},
 	}
 }

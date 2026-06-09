@@ -250,11 +250,16 @@ func oracleData(ctx *cue.Context, data []byte) (cue.Value, error) {
 	if err != nil {
 		return cue.Value{}, err
 	}
-	// BuildExpr of an extracted strict-JSON expression does not bottom
-	// (the only documented bottom source, a duplicate key, is rejected
-	// above), so the oracle, like cuelite's buildJSON, carries no
-	// unreachable val.Err() guard here.
-	return ctx.BuildExpr(expr), nil
+	// BuildExpr can still bottom on a grammar-valid string that is not a
+	// valid Unicode value — a lone-surrogate escape such as "\ud800"
+	// passes the duplicate scan and Extract but builds to ⊥. Surface it as
+	// the data-compile error so the oracle, like cuelite's buildJSON,
+	// classifies it at StageCompileData rather than accepting a phantom.
+	val := ctx.BuildExpr(expr)
+	if err := val.Err(); err != nil {
+		return cue.Value{}, err
+	}
+	return val, nil
 }
 
 // rawDuplicateKeys rejects the first object key repeated within one

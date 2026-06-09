@@ -177,11 +177,10 @@ func CompileJSON(data []byte) (Value, error) {
 // any input that is not valid JSON (so CUE source cannot slip through):
 // Extract reports a malformed document before any value is built. It
 // first rejects any duplicate object key (at any nesting depth,
-// including inside array elements), since CUE's lift would silently
-// unify same-named keys rather than reject them. The two rejection
-// sources — a duplicate key and a malformed document — are the only
-// errors CompileJSON surfaces; an extracted strict-JSON expression
-// builds without bottoming (see BuildExpr below).
+// including inside array elements) — see CompileJSON for why strict JSON
+// forbids them. The rejection sources — a duplicate key, a malformed
+// document, and a build-time bottom — are the only errors CompileJSON
+// surfaces.
 func buildJSON(ctx *cue.Context, data []byte) (cue.Value, error) {
 	if err := checkDuplicateJSONKeys(data); err != nil {
 		return cue.Value{}, err
@@ -190,14 +189,17 @@ func buildJSON(ctx *cue.Context, data []byte) (cue.Value, error) {
 	if err != nil {
 		return cue.Value{}, err
 	}
-	// BuildExpr of an extracted strict-JSON expression cannot bottom:
-	// JSON values are concrete and self-consistent, and the one documented
-	// bottom source — a duplicate object key — is already rejected above.
-	// So there is no val.Err() guard here; adding one would be an
-	// unreachable defensive branch (and a coverage hole) per the project's
-	// drive-it-red-or-don't rule. Should a future CUE build ever bottom, it
-	// still surfaces: Validate runs cue.Value.Validate on the result.
-	return ctx.BuildExpr(expr), nil
+	// BuildExpr can still bottom on a grammar-valid string that is not a
+	// valid Unicode value — a lone-surrogate escape such as "\ud800"
+	// passes the scanner and Extract but builds to ⊥ ("invalid string:
+	// unmatched surrogate pair"). Surface it as a compile error so the
+	// data arm classifies it at the data stage, not as a phantom
+	// validation pass.
+	val := ctx.BuildExpr(expr)
+	if err := val.Err(); err != nil {
+		return cue.Value{}, err
+	}
+	return val, nil
 }
 
 // checkDuplicateJSONKeys walks the JSON document with the streaming
