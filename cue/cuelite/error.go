@@ -1,6 +1,9 @@
 package cuelite
 
-import "strings"
+import (
+	stderrors "errors"
+	"strings"
+)
 
 // PathError reports a validation failure tagged with the field path
 // at which it occurred. The path mirrors cuelang.org/go/cue/errors
@@ -36,4 +39,34 @@ func (e *PathError) Error() string {
 		return e.msg
 	}
 	return strings.Join(e.path, ".") + ": " + e.msg
+}
+
+// Errors enumerates the per-field failures carried by an error returned
+// from Validate. It is THE way a consumer reads every rejecting leaf:
+// Validate returns one *PathError when a single field fails and an
+// errors.Join of *PathErrors when several do, and Errors flattens both
+// into one slice so callers (the internal/schema validator emitting one
+// MDS020 diagnostic per field, the differential harness comparing every
+// rejected path) iterate uniformly without type-switching on the join
+// shape. It mirrors cuelang.org/go/cue/errors.Errors. A nil error, or
+// an error carrying no *PathError, yields nil — never a non-nil empty
+// slice — so a caller can range over the result unconditionally.
+func Errors(err error) []*PathError {
+	if err == nil {
+		return nil
+	}
+	var pe *PathError
+	if stderrors.As(err, &pe) {
+		// As stops at the first match; recurse over the join's branches so
+		// every leaf is collected, not just the first.
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			var out []*PathError
+			for _, leaf := range joined.Unwrap() {
+				out = append(out, Errors(leaf)...)
+			}
+			return out
+		}
+		return []*PathError{pe}
+	}
+	return nil
 }

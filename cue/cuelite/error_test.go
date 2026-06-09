@@ -44,3 +44,36 @@ func TestPathError_errorsAs(t *testing.T) {
 	require.True(t, errors.As(wrapped, &pe))
 	assert.Equal(t, []string{"x"}, pe.Path())
 }
+
+func TestErrors(t *testing.T) {
+	t.Run("nil error yields nil", func(t *testing.T) {
+		assert.Nil(t, Errors(nil))
+	})
+	t.Run("foreign error yields nil", func(t *testing.T) {
+		assert.Nil(t, Errors(errors.New("not a path error")))
+	})
+	t.Run("single bare PathError yields one", func(t *testing.T) {
+		got := Errors(newPathError([]string{"a"}, "boom"))
+		require.Len(t, got, 1)
+		assert.Equal(t, []string{"a"}, got[0].Path())
+	})
+	t.Run("joined PathErrors are all collected in order", func(t *testing.T) {
+		joined := errors.Join(
+			newPathError([]string{"a"}, "x"),
+			newPathError([]string{"b"}, "y"),
+		)
+		got := Errors(joined)
+		require.Len(t, got, 2)
+		assert.Equal(t, []string{"a"}, got[0].Path())
+		assert.Equal(t, []string{"b"}, got[1].Path())
+	})
+	t.Run("a join mixing a foreign error keeps only the PathErrors", func(t *testing.T) {
+		joined := errors.Join(
+			newPathError([]string{"a"}, "x"),
+			errors.New("foreign"),
+		)
+		got := Errors(joined)
+		require.Len(t, got, 1)
+		assert.Equal(t, []string{"a"}, got[0].Path())
+	})
+}

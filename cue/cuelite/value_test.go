@@ -45,6 +45,14 @@ func TestCompileJSON(t *testing.T) {
 		_, err := CompileJSON([]byte(`{"n": >=0}`))
 		require.Error(t, err)
 	})
+	t.Run("duplicate key builds to a bottom and reports an error", func(t *testing.T) {
+		// {"a":1,"a":2} extracts as JSON but unifies to a conflicting bottom;
+		// CompileJSON must surface that as a Go error, matching Compile, not
+		// return (Value, nil).
+		v, err := CompileJSON([]byte(`{"a":1,"a":2}`))
+		require.Error(t, err)
+		assert.Equal(t, err, v.Validate())
+	})
 }
 
 func TestValue_Unify(t *testing.T) {
@@ -55,6 +63,49 @@ func TestValue_Unify(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.NoError(t, schema.Unify(data).Validate())
+	})
+	t.Run("chained unify against a derived result keeps constraints", func(t *testing.T) {
+		// a.Unify(b) is a derived Value in a's context; unifying c against it
+		// must preserve b's constraint so a conflicting c is rejected, not
+		// silently accepted by rebuilding the derived result into an empty
+		// struct that drops every merged constraint.
+		a, err := Compile(`{status: string}`)
+		require.NoError(t, err)
+		b, err := CompileJSON([]byte(`{"status": "✅"}`))
+		require.NoError(t, err)
+		c, err := CompileJSON([]byte(`{"status": "🔲"}`))
+		require.NoError(t, err)
+
+		ab := a.Unify(b)
+		require.NoError(t, ab.Validate())
+		// c conflicts with b's "✅"; the chained unify must reject.
+		assert.Error(t, c.Unify(ab).Validate())
+	})
+	t.Run("derived result re-unified against its own root", func(t *testing.T) {
+		// When the operand's compiled value already lives in the receiver's
+		// context (a Unify result re-unified against its own root), rebuild
+		// returns it directly with no recompile.
+		a, err := Compile(`{status: string, weight: int}`)
+		require.NoError(t, err)
+		b, err := CompileJSON([]byte(`{"status": "✅"}`))
+		require.NoError(t, err)
+		ab := a.Unify(b)
+		// ab shares a's context, so a.Unify(ab) reuses ab.val directly.
+		merged := a.Unify(ab)
+		assert.Error(t, merged.Validate(), "weight still non-concrete")
+	})
+	t.Run("derived operand carried into a foreign context absorbs", func(t *testing.T) {
+		// A derived Unify result has no retained source; unifying it as the
+		// operand of an unrelated root cannot rebuild it, so it absorbs as a
+		// bottom rather than vanishing into an empty struct.
+		a, err := Compile(`{status: string}`)
+		require.NoError(t, err)
+		b, err := CompileJSON([]byte(`{"status": "✅"}`))
+		require.NoError(t, err)
+		derived := a.Unify(b)
+		other, err := Compile(`{weight: int}`)
+		require.NoError(t, err)
+		assert.Error(t, other.Unify(derived).Validate())
 	})
 	t.Run("bottom receiver absorbs", func(t *testing.T) {
 		bad, compileErr := Compile(`{status: =}`)
@@ -71,12 +122,21 @@ func TestValue_Unify(t *testing.T) {
 		require.Error(t, compileErr)
 		assert.Equal(t, compileErr, ok.Unify(bad).Validate())
 	})
-	t.Run("zero Value operand is a bottom", func(t *testing.T) {
-		ok, err := Compile(`{status: string}`)
+	t.Run("zero operand against concrete receiver absorbs", func(t *testing.T) {
+		ok, err := Compile(`{status: "✅"}`)
 		require.NoError(t, err)
-		// A zero Value (the caller forgot to compile) absorbs rather than
-		// dereferencing a nil context.
+		// A concrete receiver that would validate on its own must still
+		// reject when unified with a zero (uninitialized) operand, rather
+		// than treating the zero Value as top and accepting.
+		assert.NoError(t, ok.Validate(), "concrete receiver alone must pass")
 		assert.Error(t, ok.Unify(Value{}).Validate())
+	})
+	t.Run("zero receiver against concrete operand absorbs", func(t *testing.T) {
+		ok, err := Compile(`{status: "✅"}`)
+		require.NoError(t, err)
+		// A zero receiver must absorb the operand as bottom, not panic on a
+		// nil context and not accept.
+		assert.Error(t, Value{}.Unify(ok).Validate())
 	})
 }
 
@@ -93,6 +153,11 @@ func TestValue_Validate(t *testing.T) {
 		require.NoError(t, err)
 		assert.Error(t, schema.Validate())
 	})
+	t.Run("zero Value reports a bottom rather than panicking", func(t *testing.T) {
+		// A zero receiver has no context; Validate must surface a bottom
+		// error instead of dereferencing a nil context.
+		assert.Error(t, Value{}.Validate())
+	})
 	t.Run("constraint conflict reports field path once", func(t *testing.T) {
 		schema, err := Compile(`{meta: {status: "✅"}}`)
 		require.NoError(t, err)
@@ -101,8 +166,8 @@ func TestValue_Validate(t *testing.T) {
 
 		verr := schema.Unify(data).Validate()
 		require.Error(t, verr)
-		pe, ok := verr.(*PathError)
-		require.True(t, ok, "Validate must return a *PathError, got %T", verr)
+		var pe *PathError
+		require.True(t, stderrors.As(verr, &pe), "Validate must return a *PathError, got %T", verr)
 		assert.Equal(t, []string{"meta", "status"}, pe.Path())
 		// The path must appear exactly once, not "meta.status: meta.status: …".
 		assert.Equal(
