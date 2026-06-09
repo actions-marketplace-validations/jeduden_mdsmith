@@ -66,24 +66,7 @@ func TestRenderHappy(t *testing.T) {
 	require.Equalf(t, 0, code, "stderr: %s", errOut)
 	assert.Contains(t, out, "rendered 1 finding(s) ->")
 	assert.Contains(t, out, "findings.sarif")
-	for _, name := range []string{"findings.sarif", "security-review.md", "inline-annotations.json"} {
-		_, err := os.Stat(filepath.Join(outDir, name))
-		require.NoErrorf(t, err, "expected %s", name)
-	}
-}
-
-func TestRenderStemFlag(t *testing.T) {
-	path := writeJSON(t, criticalFinding)
-	outDir := t.TempDir()
-	code, out, errOut := runCLI("render", path,
-		"--out-dir", outDir, "--stem", "2026-06-09-full-repo-audit")
-	require.Equalf(t, 0, code, "stderr: %s", errOut)
-	assert.Contains(t, out, "2026-06-09-full-repo-audit.sarif")
-	for _, name := range []string{
-		"2026-06-09-full-repo-audit.sarif",
-		"2026-06-09-full-repo-audit.md",
-		"2026-06-09-full-repo-audit.inline-annotations.json",
-	} {
+	for _, name := range []string{"findings.sarif", "report.md", "inline-annotations.json"} {
 		_, err := os.Stat(filepath.Join(outDir, name))
 		require.NoErrorf(t, err, "expected %s", name)
 	}

@@ -7,30 +7,20 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
-	"unicode"
 )
 
-// renderFiles names the three artifacts Render writes, in the order
-// render_findings.py prints them.
-var renderFiles = []string{"findings.sarif", "security-review.md", "inline-annotations.json"}
+// renderFiles names the three artifacts Render writes, in print order.
+// They land beside the authored findings.json inside one per-audit
+// directory (docs/security/<YYYY-MM-DD-slug>/), so the basenames are
+// fixed — the directory, not a filename stem, namespaces each review.
+var renderFiles = []string{"findings.sarif", "report.md", "inline-annotations.json"}
 
-// Render writes the three review outputs (findings.sarif,
-// security-review.md, inline-annotations.json) into outDir, creating the
-// directory if needed. It mirrors render_findings.py.
+// Render writes the three review outputs (findings.sarif, report.md,
+// inline-annotations.json) into outDir, creating the directory if
+// needed. outDir is the per-audit directory; the caller points it at
+// docs/security/<stem>/.
 func Render(r *Report, outDir string) error {
-	return RenderStem(r, outDir, "")
-}
-
-// RenderStem is Render with a filename stem. A non-empty stem names the
-// artifacts <stem>.sarif, <stem>.md, and <stem>.inline-annotations.json
-// so successive dated reviews can coexist in one directory (the
-// docs/security/ convention). An empty stem keeps the legacy fixed names.
-func RenderStem(r *Report, outDir, stem string) error {
-	if err := validateStem(stem); err != nil {
-		return err
-	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return fmt.Errorf("create out dir: %w", err)
 	}
@@ -42,11 +32,9 @@ func RenderStem(r *Report, outDir, stem string) error {
 	if err != nil {
 		return fmt.Errorf("marshal annotations: %w", err)
 	}
-	// names and data are parallel: RenderFileNamesStem returns the
-	// SARIF, report, and annotation basenames in that fixed order.
-	names := RenderFileNamesStem(stem)
+	// renderFiles and data are parallel: SARIF, report, annotations.
 	data := [][]byte{sarif, []byte(buildReport(r, time.Now())), annotations}
-	for i, name := range names {
+	for i, name := range renderFiles {
 		if err := os.WriteFile(filepath.Join(outDir, name), data[i], 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", name, err)
 		}
@@ -54,53 +42,12 @@ func RenderStem(r *Report, outDir, stem string) error {
 	return nil
 }
 
-// validateStem rejects a stem that is anything other than a single safe
-// filename component. Path separators or a parent ref ("..") would let
-// the stem escape outDir; whitespace and a leading dot break the
-// docs/security/*.md catalog glob the rendered report is indexed by. An
-// empty stem is allowed — it selects the legacy fixed names.
-func validateStem(stem string) error {
-	if stem == "" {
-		return nil
-	}
-	if stem != filepath.Base(stem) || stem == "." || stem == ".." {
-		return fmt.Errorf("invalid --stem %q: must be a bare filename, not a path", stem)
-	}
-	// filepath.Base only splits on the host separator, so reject both
-	// slashes explicitly: a stem authored on Unix with a backslash must
-	// not become a path component on Windows.
-	if strings.ContainsAny(stem, `/\`) {
-		return fmt.Errorf("invalid --stem %q: must not contain a path separator", stem)
-	}
-	if strings.ContainsFunc(stem, unicode.IsSpace) {
-		return fmt.Errorf("invalid --stem %q: must not contain whitespace", stem)
-	}
-	if strings.HasPrefix(stem, ".") {
-		return fmt.Errorf("invalid --stem %q: must not start with a dot", stem)
-	}
-	return nil
-}
-
 // RenderFileNames returns the basenames Render writes, in print order, so
 // callers can report them without hardcoding the list.
 func RenderFileNames() []string {
-	return RenderFileNamesStem("")
-}
-
-// RenderFileNamesStem returns the basenames RenderStem writes for the
-// given stem, in print order: SARIF, report, annotations. An empty stem
-// returns the legacy fixed names.
-func RenderFileNamesStem(stem string) []string {
-	if stem == "" {
-		out := make([]string, len(renderFiles))
-		copy(out, renderFiles)
-		return out
-	}
-	return []string{
-		stem + ".sarif",
-		stem + ".md",
-		stem + ".inline-annotations.json",
-	}
+	out := make([]string, len(renderFiles))
+	copy(out, renderFiles)
+	return out
 }
 
 // marshalJSON renders v as 2-space-indented JSON with HTML escaping

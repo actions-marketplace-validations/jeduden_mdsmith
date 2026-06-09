@@ -6,24 +6,22 @@ hand-write SARIF.
 
 ## File layout
 
-Each review owns a date stem `YYYY-MM-DD-<slug>` and four files in
-`docs/security/`:
+Each review owns a directory `docs/security/<YYYY-MM-DD-slug>/`
+holding four fixed-name files:
 
 ```text
-docs/security/<stem>.findings.json            # authored input
-docs/security/<stem>.md                       # rendered report
-docs/security/<stem>.sarif                    # rendered SARIF
-docs/security/<stem>.inline-annotations.json  # rendered annotations
+docs/security/<stem>/findings.json             # authored input
+docs/security/<stem>/report.md                 # rendered report
+docs/security/<stem>/findings.sarif            # rendered SARIF
+docs/security/<stem>/inline-annotations.json   # rendered annotations
 ```
 
-Render with `--out-dir docs/security/ --stem <stem>`. The stem keeps
-every review's files apart, so a later review never overwrites an
-earlier one. `SECURITY.md`'s `<?catalog?>` over `docs/security/*.md`
-indexes the report; run `mdsmith fix SECURITY.md` after rendering.
-Without `--stem` the renderer falls back to the legacy fixed names
-(`security-review.md`, `findings.sarif`,
-`inline-annotations.json`). Use that only for throwaway runs
-outside the repo.
+Render with `--out-dir docs/security/<stem>/`. The directory — not a
+filename stem — namespaces each review, so the basenames are fixed
+and a later review never overwrites an earlier one. `SECURITY.md`'s
+`<?catalog?>` over `docs/security/*/report.md` indexes the report;
+run `mdsmith fix SECURITY.md` after rendering. The `security-note`
+kind validates `report.md` against `docs/security/proto.md`.
 
 ## The finding object
 
@@ -74,7 +72,7 @@ Rules:
 - Keep `repro` a sketch — enough to prove the bug, never a drop-in
   attack.
 
-## Output 1 (canonical, machine-readable): `<stem>.sarif`
+## Output 1 (canonical, machine-readable): `findings.sarif`
 
 SARIF 2.1.0, compatible with GitHub code scanning. The renderer
 maps:
@@ -94,7 +92,7 @@ title, the CWE (as a `properties.tags` entry), and the
 `security-severity`. `confidence` and `severity` are recorded in
 result `properties`.
 
-## Output 2 (human report): `<stem>.md`
+## Output 2 (human report): `report.md`
 
 Layout the renderer produces:
 
@@ -110,7 +108,7 @@ Layout the renderer produces:
 5. **Coverage note** — what was and wasn't reviewed, plus any
    in-scope area left inconclusive.
 
-## Output 3 (PR review): `<stem>.inline-annotations.json`
+## Output 3 (PR review): `inline-annotations.json`
 
 A flat list for posting as PR review comments, keyed to file +
 line:

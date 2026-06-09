@@ -65,14 +65,14 @@ Run these from the repo root.
 3. Start a fresh session with the skill available and give it the
    case `prompt`.
 4. Follow the skill: read `SKILL.md`, then
-   `references/threat-model.md`. Trace the code. Pick a stem
-   `YYYY-MM-DD-<slug>`. Record the findings at
-   `docs/security/<stem>.findings.json` and render them:
+   `references/threat-model.md`. Trace the code. Pick a review
+   directory under `docs/security/`. Record the findings in its
+   `findings.json` and render them:
 
    ```bash
    go run ./cmd/mdsmith-secreview render \
-     docs/security/<stem>.findings.json \
-     --out-dir docs/security/ --stem <stem>
+     docs/security/<stem>/findings.json \
+     --out-dir docs/security/<stem>/
    ```
 
 5. Score the mechanical bar with the grader, then judge the prose
@@ -80,7 +80,7 @@ Run these from the repo root.
 
    ```bash
    go run ./cmd/mdsmith-secreview grade \
-     --findings docs/security/<stem>.findings.json \
+     --findings docs/security/<stem>/findings.json \
      --cases .claude/skills/mdsmith-security-review/evals/cases.yaml \
      --case <case-id>
    ```

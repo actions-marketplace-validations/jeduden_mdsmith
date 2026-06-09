@@ -45,7 +45,7 @@ func decodeSARIF(t *testing.T, r *Report) map[string]any {
 	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, Render(r, dir))
-	for _, name := range []string{"findings.sarif", "security-review.md", "inline-annotations.json"} {
+	for _, name := range []string{"findings.sarif", "report.md", "inline-annotations.json"} {
 		_, err := os.Stat(filepath.Join(dir, name))
 		require.NoErrorf(t, err, "expected %s to exist", name)
 	}
@@ -215,63 +215,22 @@ func TestRenderAnnotationsSkipNoLocation(t *testing.T) {
 
 func TestRenderFileNames(t *testing.T) {
 	got := RenderFileNames()
-	assert.Equal(t, []string{"findings.sarif", "security-review.md", "inline-annotations.json"}, got)
+	assert.Equal(t, []string{"findings.sarif", "report.md", "inline-annotations.json"}, got)
 	// Returned slice is a copy: mutating it must not affect the package var.
 	got[0] = "mutated"
 	assert.Equal(t, "findings.sarif", RenderFileNames()[0])
 }
 
-func TestRenderStemFileNames(t *testing.T) {
-	// A non-empty stem prefixes every artifact so successive dated
-	// reviews can coexist in docs/security/ without overwriting.
-	dir := t.TempDir()
-	require.NoError(t, RenderStem(multiSevReport(), dir, "2026-06-09-full-repo-audit"))
-	for _, name := range []string{
-		"2026-06-09-full-repo-audit.sarif",
-		"2026-06-09-full-repo-audit.md",
-		"2026-06-09-full-repo-audit.inline-annotations.json",
-	} {
+func TestRenderWritesFixedNamesIntoAuditDir(t *testing.T) {
+	// Render writes the three fixed-name artifacts into the per-audit
+	// directory the caller supplies; the directory namespaces the
+	// review, so the basenames never vary.
+	dir := filepath.Join(t.TempDir(), "2026-06-09-full-repo-audit")
+	require.NoError(t, Render(multiSevReport(), dir))
+	for _, name := range []string{"findings.sarif", "report.md", "inline-annotations.json"} {
 		_, err := os.Stat(filepath.Join(dir, name))
 		assert.NoErrorf(t, err, "expected %s to exist", name)
 	}
-}
-
-func TestRenderStemEmptyKeepsLegacyNames(t *testing.T) {
-	// An empty stem falls back to the legacy fixed names so existing
-	// callers (and the eval fixtures) keep working unchanged.
-	dir := t.TempDir()
-	require.NoError(t, RenderStem(multiSevReport(), dir, ""))
-	for _, name := range []string{"findings.sarif", "security-review.md", "inline-annotations.json"} {
-		_, err := os.Stat(filepath.Join(dir, name))
-		assert.NoErrorf(t, err, "expected %s to exist", name)
-	}
-}
-
-func TestRenderFileNamesWithStem(t *testing.T) {
-	got := RenderFileNamesStem("2026-06-09-full-repo-audit")
-	assert.Equal(t, []string{
-		"2026-06-09-full-repo-audit.sarif",
-		"2026-06-09-full-repo-audit.md",
-		"2026-06-09-full-repo-audit.inline-annotations.json",
-	}, got)
-	assert.Equal(t, RenderFileNames(), RenderFileNamesStem(""))
-}
-
-func TestRenderStemRejectsUnsafeStem(t *testing.T) {
-	// A stem is a bare filename component, not a path. Separators,
-	// parent refs, and whitespace would escape outDir or break the
-	// docs/security/*.md catalog glob, so RenderStem rejects them
-	// before writing anything.
-	dir := t.TempDir()
-	for _, bad := range []string{
-		"../escape", "a/b", `a\b`, "with space", "with\ttab",
-		".", "..", "/abs", ".hidden",
-	} {
-		err := RenderStem(multiSevReport(), dir, bad)
-		assert.Errorf(t, err, "stem %q should be rejected", bad)
-	}
-	// A clean dated stem is accepted.
-	require.NoError(t, RenderStem(multiSevReport(), dir, "2026-06-09-full-repo-audit"))
 }
 
 func TestRenderErrorOnUnwritableDir(t *testing.T) {
