@@ -441,19 +441,18 @@ func makeDiag(file string, line int, msg string) lint.Diagnostic {
 
 // minFenceLen returns the minimum backtick fence length needed to safely
 // wrap text without conflicting with backtick runs inside the content.
+// Scans bytes directly to avoid the strings.Split allocation.
 func minFenceLen(text string) int {
 	n := 3
-	for _, line := range strings.Split(text, "\n") {
-		run := 0
-		for _, c := range line {
-			if c == '`' {
-				run++
-				if run >= n {
-					n = run + 1
-				}
-			} else {
-				run = 0
+	run := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] == '`' {
+			run++
+			if run >= n {
+				n = run + 1
 			}
+		} else {
+			run = 0
 		}
 	}
 	return n
@@ -461,13 +460,12 @@ func minFenceLen(text string) int {
 
 // containsDotDotElement reports whether the slash-separated path contains
 // a ".." path element. It does not match filenames like "foo..bar.md".
+// Uses zero-allocation string checks instead of strings.Split.
 func containsDotDotElement(p string) bool {
-	for _, elem := range strings.Split(p, "/") {
-		if elem == ".." {
-			return true
-		}
-	}
-	return false
+	return p == ".." ||
+		strings.HasPrefix(p, "../") ||
+		strings.HasSuffix(p, "/..") ||
+		strings.Contains(p, "/../")
 }
 
 // expandNestedIncludes parses the included file for nested include
