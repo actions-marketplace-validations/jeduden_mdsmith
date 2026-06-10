@@ -795,7 +795,7 @@ export class Wiring {
           binary: getBinary(),
           workspaceRoot: getWorkspaceRoot(),
           isTrusted,
-          showInfo: (msg, ...buttons) => showNotification(msg, ...buttons),
+          showInfo: showNotification,
           showError,
           ...outputDeps(),
         });
@@ -807,7 +807,7 @@ export class Wiring {
           workspaceRoot: getWorkspaceRoot(),
           isTrusted,
           confirm: confirmDestructive("mdsmith merge-driver install"),
-          showInfo: (msg, ...buttons) => showNotification(msg, ...buttons),
+          showInfo: showNotification,
           showError,
           ...outputDeps(),
         });
@@ -820,7 +820,7 @@ export class Wiring {
           configPath: getConfigPath(),
           isTrusted,
           confirm: confirmDestructive("mdsmith fix ."),
-          showInfo: (msg, ...buttons) => showNotification(msg, ...buttons),
+          showInfo: showNotification,
           showError,
           ...outputDeps(),
         });
