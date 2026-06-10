@@ -465,12 +465,15 @@ func TestLoad_InvalidConventionSurfacesError(t *testing.T) {
 	assert.Contains(t, err.Error(), "bogus")
 }
 
-// TestValidateConventionScalar_RejectsYAMLAnchors pins that a
-// config file whose convention: value uses anchors/aliases is
-// rejected by validateConventionScalar via UnmarshalNodeSafe.
-// Without the safe wrapper the direct yaml.Unmarshal into a
-// yaml.Node silently accepts anchors, leaving a latent risk for
-// any future .Decode() call on the resulting node.
+// TestValidateConventionScalar_RejectsYAMLAnchors pins that
+// config YAML using anchors/aliases is rejected by
+// validateConventionScalar via yamlutil.RejectYAMLAliases — the
+// same pre-check the kind-file and convention-file loaders run.
+// The old direct yaml.Unmarshal flagged an alias-valued
+// `convention:` only as a type error, and silently accepted
+// anchors on other keys (or an anchored scalar like
+// `convention: &a portable`), leaving a latent risk for any
+// future .Decode() call on the parsed node.
 func TestValidateConventionScalar_RejectsYAMLAnchors(t *testing.T) {
 	// A YAML doc with an anchor on the convention value.
 	data := []byte("base: &anchor portable\nconvention: *anchor\n")

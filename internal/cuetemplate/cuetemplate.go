@@ -115,7 +115,7 @@ func (t *Template) Render(fm map[string]any) (string, error) {
 	}
 	src, err := buildSource(fm, t.expr)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("building cue source: %w", err)
 	}
 	val := t.ctx.CompileString(src)
 	if err := val.Err(); err != nil {
@@ -146,11 +146,12 @@ func (t *Template) Render(fm map[string]any) (string, error) {
 //     row-expr can write `\(id)` instead of `\(fm.id)`.
 //   - The synthetic outField holding the user's expression.
 //
-// JSON marshalling is infallible for the value shapes
-// produced by the YAML frontmatter loader. A non-zero error
-// indicates a non-JSON-serialisable type reached frontmatter,
-// which is a programming error upstream; returning the error
-// instead of panicking keeps the LSP server alive.
+// JSON marshalling can fail for real frontmatter: yaml.v3
+// decodes the YAML scalars `.inf`, `-.inf`, and `.nan` into
+// float64 ±Inf/NaN values, which json.Marshal rejects. A
+// non-nil error therefore reports a frontmatter value with no
+// JSON encoding; returning it (instead of the old panic) keeps
+// check, fix, and the LSP server alive on such input.
 func buildSource(fm map[string]any, expr string) (string, error) {
 	// Single-pass filter: drop the renderer's synthetic field
 	// names from the JSON-emitted map AND collect the sorted

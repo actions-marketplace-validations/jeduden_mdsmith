@@ -22,14 +22,17 @@ warrant its own plan.
 
 ### A. cuetemplate panics on json.Marshal (S002)
 
-`buildCUESource` in
+`buildSource` in
 [`internal/cuetemplate/cuetemplate.go`](../internal/cuetemplate/cuetemplate.go)
 calls `json.Marshal(emit)` on front-matter-derived data
 and `panic`s on error. A catalog `row-expr:` directive
 reaches it. In the LSP it is unrecovered (see plan 242)
-and crashes the server. Standard go-yaml v3 scalars
-cannot trigger it today. A future non-marshalable type
-would make it live.
+and crashes the server. The audit rated the branch
+unreachable. It is live today: yaml.v3 decodes the
+scalars `.inf`, `-.inf`, and `.nan` into float64
+±Inf/NaN values, and `json.Marshal` rejects those.
+Front matter like `weight: .inf` in any file matched
+by a row-expr catalog triggers it.
 
 Return an error instead and propagate it up through
 `Render`. The catalog caller (`renderTemplate`) already
@@ -37,40 +40,44 @@ handles render errors, so only the signature changes.
 
 ### B. convention.go bypasses the safe YAML wrapper (S003)
 
-`parseConventionFileBody` in
+`validateConventionScalar` in
 [`internal/config/convention.go`](../internal/config/convention.go)
-calls `yaml.Unmarshal(data, &node)` directly. It does
-not use `yamlutil.UnmarshalNodeSafe`. There is no current
-exploit, since a yaml.Node does not expand aliases. But
-it breaks the project rule that every user-YAML entry
-point goes through the safe wrapper. A later `.Decode()`
-on the node would then reintroduce the alias risk.
+— the pre-check on the `.mdsmith.yml` top-level
+`convention:` scalar — calls `yaml.Unmarshal(data,
+&node)` directly with no anchor/alias guard. There is
+no current exploit, since a yaml.Node does not expand
+aliases. But it breaks the project rule that every
+user-YAML entry point rejects anchors/aliases. A later
+`.Decode()` on the node would then reintroduce the
+alias risk.
 
-Route the read through `yamlutil.UnmarshalNodeSafe`. The
-package already imports `yamlutil` for the pre-check.
+Guard the read with `yamlutil.RejectYAMLAliases`. The
+kind-file and convention-file loaders run the same
+pre-check. The tolerant `yaml.Unmarshal` stays: its
+parse errors defer to Load's `UnmarshalSafe`. The
+package already imports `yamlutil`.
 
 ## Tasks
 
-1. [x] Add a failing test that drives `buildCUESource`
+1. [x] Add a failing test that drives `buildSource`
    down its marshal-error branch and asserts an error
    return (not a panic); thread the error through
    `Render` and its catalog caller.
-2. [x] Replace the `panic` in `buildCUESource` with an
+2. [x] Replace the `panic` in `buildSource` with an
    error return.
-3. [x] Replace `yaml.Unmarshal(data, &node)` in
-   `parseConventionFileBody` with
-   `yamlutil.UnmarshalNodeSafe`; keep behaviour identical
-   for alias-free input and add a test that an
-   anchor/alias convention file is rejected.
+3. [x] Guard `validateConventionScalar` with
+   `yamlutil.RejectYAMLAliases`; keep behaviour
+   identical for alias-free input and add a test that
+   anchor/alias config YAML is rejected.
 
 ## Acceptance Criteria
 
-- [x] `buildCUESource` returns an error on marshal
+- [x] `buildSource` returns an error on marshal
       failure; no panic reaches the catalog render path or
       the LSP.
-- [x] Convention-file YAML is parsed via
-      `yamlutil.UnmarshalNodeSafe`; an anchor/alias file is
-      rejected.
+- [x] The `.mdsmith.yml` `convention:` scalar pre-check
+      rejects anchor/alias YAML via
+      `yamlutil.RejectYAMLAliases`.
 - [x] Both fixes covered by tests (driven red/green).
 - [x] All tests pass: `go test ./...`
 - [x] `go tool golangci-lint run` reports no issues

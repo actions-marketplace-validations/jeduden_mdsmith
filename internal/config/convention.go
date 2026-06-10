@@ -193,22 +193,27 @@ func validateConventionRuleSettings(
 	return nil
 }
 
-// validateConventionScalar returns an error when the top-level
-// `convention:` value in the raw YAML is not a string scalar.
-// yaml.v3 silently coerces bare ints and bools into string fields,
-// which would surface as "unknown convention 123" instead of a
-// clean type error. Inspecting the raw node tag is the only way to
-// catch the type mismatch before that coercion happens.
+// validateConventionScalar rejects YAML that uses anchors or
+// aliases anywhere in the document, then returns an error when
+// the top-level `convention:` value in the raw YAML is not a
+// string scalar. yaml.v3 silently coerces bare ints and bools
+// into string fields, which would surface as "unknown
+// convention 123" instead of a clean type error. Inspecting the
+// raw node tag is the only way to catch the type mismatch before
+// that coercion happens.
 func validateConventionScalar(data []byte) error {
-	// Route through UnmarshalNodeSafe so anchors/aliases are rejected
-	// consistently with every other user-YAML entry point. Anchor/alias
-	// errors are propagated; other parse errors are swallowed so Load's
-	// subsequent UnmarshalSafe call surfaces them with its own message.
-	node, err := yamlutil.UnmarshalNodeSafe(data)
-	if err != nil {
-		if strings.Contains(err.Error(), "anchors/aliases") {
-			return err
-		}
+	// Reject anchors/aliases up front via the shared yamlutil
+	// pre-check — the same idiom as the kind-file and
+	// convention-file loaders. RejectYAMLAliases errors only on
+	// anchor/alias use; the direct yaml.Unmarshal below is
+	// deliberate, since its parse errors must stay swallowed so
+	// Load's subsequent UnmarshalSafe call surfaces them with
+	// its own message.
+	if err := yamlutil.RejectYAMLAliases(data); err != nil {
+		return err
+	}
+	var node yaml.Node
+	if err := yaml.Unmarshal(data, &node); err != nil {
 		return nil
 	}
 	if node.Kind != yaml.DocumentNode || len(node.Content) == 0 {

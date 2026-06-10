@@ -1,6 +1,7 @@
 package cuetemplate
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -219,23 +220,29 @@ func TestTemplate_Render_CUEKeywordKeyIsQuoted(t *testing.T) {
 	assert.Equal(t, "MDS001", got)
 }
 
-// TestTemplate_Render_UnmarshalableValueReturnsError pins that
-// a frontmatter value that json.Marshal cannot serialise produces
-// an error return from Render rather than a panic. A chan is the
-// canonical non-JSON-marshallable Go type; go-yaml v3 scalars
-// never produce one, but the guard is needed for future-safety
-// and to keep the LSP alive if the type escapes into frontmatter.
-func TestTemplate_Render_UnmarshalableValueReturnsError(t *testing.T) {
+// TestTemplate_Render_MarshalErrorReturnsError pins that a
+// frontmatter value json.Marshal cannot serialise produces an
+// error return from Render rather than a panic. A chan is the
+// canonical non-JSON-marshalable Go type. A panic here would
+// still fail the test — the direct call needs no NotPanics
+// wrapper.
+func TestTemplate_Render_MarshalErrorReturnsError(t *testing.T) {
 	tpl, err := Compile(`"literal"`)
 	require.NoError(t, err)
-	// Use require.NotPanics so a panic produces a clear test failure
-	// rather than crashing the test binary with a non-deferred panic.
-	var gotErr error
-	require.NotPanics(t, func() {
-		_, gotErr = tpl.Render(map[string]any{
-			"bad": make(chan int),
-		})
-	})
-	require.Error(t, gotErr)
-	assert.Contains(t, gotErr.Error(), "encoding frontmatter")
+	_, err = tpl.Render(map[string]any{"bad": make(chan int)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "encoding frontmatter")
+}
+
+// TestTemplate_Render_InfFrontMatterReturnsError covers the
+// trigger reachable from plain Markdown: yaml.v3 decodes the
+// scalars `.inf` and `.nan` into float64 values json.Marshal
+// rejects, so front matter like `weight: .inf` must surface as
+// a render error, not a panic.
+func TestTemplate_Render_InfFrontMatterReturnsError(t *testing.T) {
+	tpl, err := Compile(`"literal"`)
+	require.NoError(t, err)
+	_, err = tpl.Render(map[string]any{"weight": math.Inf(1)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "encoding frontmatter")
 }
