@@ -7,6 +7,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// assertNoInBodySyncPoints fails when any collected sync point is an
+// in-body one — the shared assertion of the PI-opacity tests.
+func assertNoInBodySyncPoints(t *testing.T, tmpl *parsedSchema) {
+	t.Helper()
+	for idx, sps := range tmpl.SyncPoints {
+		for _, sp := range sps {
+			assert.False(t, sp.InBody,
+				"heading %d: a directive body must not yield a body sync point (got field %q)",
+				idx, sp.Field)
+		}
+	}
+}
+
+// assertHasInBodySyncPoint fails unless some in-body sync point was
+// collected for field — the positive control of the PI-opacity tests.
+func assertHasInBodySyncPoint(t *testing.T, tmpl *parsedSchema, field, msg string) {
+	t.Helper()
+	for _, sps := range tmpl.SyncPoints {
+		for _, sp := range sps {
+			if sp.InBody && sp.Field == field {
+				return
+			}
+		}
+	}
+	assert.Fail(t, msg)
+}
+
 // TestParseSchema_ContentDirectiveNoBodySync locks down plan 242: the
 // legacy MDS020 proto parser must treat a `<?content?>` directive row
 // as opaque. A `{field}`-looking token inside the directive body
@@ -16,13 +43,7 @@ func TestParseSchema_ContentDirectiveNoBodySync(t *testing.T) {
 	schemaSrc := "# {id}\n\n## Tagline\n\n<?content\nkind: paragraph\nbind: tag-{id}\n?>\n"
 	tmpl, err := parseSchema([]byte(schemaSrc), "", 0)
 	require.NoError(t, err)
-	for idx, sps := range tmpl.SyncPoints {
-		for _, sp := range sps {
-			assert.False(t, sp.InBody,
-				"heading %d: <?content?> body must not yield a body sync point (got field %q)",
-				idx, sp.Field)
-		}
-	}
+	assertNoInBodySyncPoints(t, tmpl)
 }
 
 // TestParseSchema_ContentDirectiveSingleLineNoBodySync covers the
@@ -32,13 +53,7 @@ func TestParseSchema_ContentDirectiveSingleLineNoBodySync(t *testing.T) {
 	schemaSrc := "# {id}\n\n## Tagline\n\n<?content kind: paragraph bind: tag-{id} ?>\n"
 	tmpl, err := parseSchema([]byte(schemaSrc), "", 0)
 	require.NoError(t, err)
-	for idx, sps := range tmpl.SyncPoints {
-		for _, sp := range sps {
-			assert.False(t, sp.InBody,
-				"heading %d: single-line <?content?> must not yield a body sync point (got field %q)",
-				idx, sp.Field)
-		}
-	}
+	assertNoInBodySyncPoints(t, tmpl)
 }
 
 // TestParseSchema_ContentDirectiveNotAHeading verifies the legacy
@@ -83,13 +98,7 @@ func TestParseSchema_PIBlockClosesOnExactLineOnly(t *testing.T) {
 	schemaSrc := "# {id}\n\n## Tagline\n\n<?content\nkind: paragraph\nbind: \"a?>b\"\nalso: tag-{id}\n?>\n"
 	tmpl, err := parseSchema([]byte(schemaSrc), "", 0)
 	require.NoError(t, err)
-	for idx, sps := range tmpl.SyncPoints {
-		for _, sp := range sps {
-			assert.False(t, sp.InBody,
-				"heading %d: a `?>` substring must not end the block early (got field %q)",
-				idx, sp.Field)
-		}
-	}
+	assertNoInBodySyncPoints(t, tmpl)
 }
 
 // TestParseSchema_AnyPIBlockSkipped verifies the skip is not
@@ -99,13 +108,20 @@ func TestParseSchema_AnyPIBlockSkipped(t *testing.T) {
 	schemaSrc := "# {id}\n\n## Tagline\n\n<?require\nfilename: \"{id}.md\"\n?>\n"
 	tmpl, err := parseSchema([]byte(schemaSrc), "", 0)
 	require.NoError(t, err)
-	for idx, sps := range tmpl.SyncPoints {
-		for _, sp := range sps {
-			assert.False(t, sp.InBody,
-				"heading %d: <?require?> body must not yield a body sync point (got field %q)",
-				idx, sp.Field)
-		}
-	}
+	assertNoInBodySyncPoints(t, tmpl)
+}
+
+// TestParseSchema_FencedDirectiveExampleDoesNotOpenPIBlock locks
+// down fence precedence: the block parser never opens a PI inside a
+// fenced code block, so a directive opener shown in a fence must not
+// flip the scanner into PI-skip state — a `{field}` body line after
+// the fence is still collected.
+func TestParseSchema_FencedDirectiveExampleDoesNotOpenPIBlock(t *testing.T) {
+	schemaSrc := "# {id}\n\n## Tagline\n\n```markdown\n<?content\nkind: paragraph\n```\n\ntag-{id} body line\n"
+	tmpl, err := parseSchema([]byte(schemaSrc), "", 0)
+	require.NoError(t, err)
+	assertHasInBodySyncPoint(t, tmpl, "id",
+		"the {id} line after the fence is body text; the fenced directive example must not suppress it")
 }
 
 // TestParseSchema_IndentedDirectiveExampleStaysBodyText is the
@@ -116,15 +132,7 @@ func TestParseSchema_IndentedDirectiveExampleStaysBodyText(t *testing.T) {
 	schemaSrc := "# {id}\n\n## Tagline\n\n    <?content {id} ?>\n"
 	tmpl, err := parseSchema([]byte(schemaSrc), "", 0)
 	require.NoError(t, err)
-	found := false
-	for _, sps := range tmpl.SyncPoints {
-		for _, sp := range sps {
-			if sp.InBody && sp.Field == "id" {
-				found = true
-			}
-		}
-	}
-	assert.True(t, found,
+	assertHasInBodySyncPoint(t, tmpl, "id",
 		"an indented directive example is body text; its {id} must be collected")
 }
 

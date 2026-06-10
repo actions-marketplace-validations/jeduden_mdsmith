@@ -8,14 +8,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// schemaFile writes src as a single-file proto.md schema in a fresh
+// temp dir and returns its path.
+func schemaFile(t *testing.T, src string) string {
+	t.Helper()
+	return writeFile(t, t.TempDir(), "schema.md", src)
+}
+
 // TestParseFile_ContentDirectiveParagraph is the happy path: a
 // `<?content kind: paragraph ?>` directive row in a proto.md section
 // body declares one content entry on the enclosing section's scope,
 // matching what the inline `content: [{ kind: paragraph }]` form
 // produces.
 func TestParseFile_ContentDirectiveParagraph(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"# {title}\n\n## Tagline\n\n<?content\nkind: paragraph\n?>\n")
 	sch, err := ParseFile(&FileReader{}, path)
 	require.NoError(t, err)
@@ -34,8 +40,7 @@ func TestParseFile_ContentDirectiveParagraph(t *testing.T) {
 // one section declare two ordered entries (the `text` / `text-2`
 // projection keys the inline form derives from positional order).
 func TestParseFile_ContentDirectiveTwoOrdered(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"## Body\n\n<?content\nkind: paragraph\n?>\n\n<?content\nkind: code-block\nlang: go\n?>\n")
 	sch, err := ParseFile(&FileReader{}, path)
 	require.NoError(t, err)
@@ -51,8 +56,7 @@ func TestParseFile_ContentDirectiveTwoOrdered(t *testing.T) {
 // `projection:` key passes through and is validated by the inline
 // rules (inline is legal on a paragraph).
 func TestParseFile_ContentDirectiveProjectionInline(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"## Tagline\n\n<?content\nkind: paragraph\nprojection: inline\n?>\n")
 	sch, err := ParseFile(&FileReader{}, path)
 	require.NoError(t, err)
@@ -64,8 +68,7 @@ func TestParseFile_ContentDirectiveProjectionInline(t *testing.T) {
 // TestParseFile_ContentDirectiveRejectsUnknownKind locks down that an
 // invalid kind fails at parse time with the inline form's diagnostic.
 func TestParseFile_ContentDirectiveRejectsUnknownKind(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"## Tagline\n\n<?content\nkind: bogus\n?>\n")
 	_, err := ParseFile(&FileReader{}, path)
 	require.Error(t, err)
@@ -76,8 +79,7 @@ func TestParseFile_ContentDirectiveRejectsUnknownKind(t *testing.T) {
 // that `projection: inline` on a code-block fails at parse time, the
 // same as the inline form.
 func TestParseFile_ContentDirectiveRejectsInlineOnCodeBlock(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"## Snippet\n\n<?content\nkind: code-block\nprojection: inline\n?>\n")
 	_, err := ParseFile(&FileReader{}, path)
 	require.Error(t, err)
@@ -88,8 +90,7 @@ func TestParseFile_ContentDirectiveRejectsInlineOnCodeBlock(t *testing.T) {
 // `bind: ""` on a content entry fails at parse time — a content entry
 // has no children to hoist, the same rule the inline form enforces.
 func TestParseFile_ContentDirectiveRejectsEmptyBind(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"## Tagline\n\n<?content\nkind: paragraph\nbind: \"\"\n?>\n")
 	_, err := ParseFile(&FileReader{}, path)
 	require.Error(t, err)
@@ -100,8 +101,7 @@ func TestParseFile_ContentDirectiveRejectsEmptyBind(t *testing.T) {
 // unknown key on the directive fails at parse time, matching the
 // inline content parser's unknown-key diagnostic.
 func TestParseFile_ContentDirectiveRejectsUnknownKey(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"## Tagline\n\n<?content\nkind: paragraph\nbogus: 1\n?>\n")
 	_, err := ParseFile(&FileReader{}, path)
 	require.Error(t, err)
@@ -119,8 +119,7 @@ func TestParseFile_ContentDirectiveRequiresKind(t *testing.T) {
 		"multi-line":  "## Tagline\n\n<?content\n\n?>\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := writeFile(t, dir, "schema.md", src)
+			path := schemaFile(t, src)
 			_, err := ParseFile(&FileReader{}, path)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "must set a `kind:` key")
@@ -132,8 +131,7 @@ func TestParseFile_ContentDirectiveRequiresKind(t *testing.T) {
 // `<?content` block left open at EOF (a missing `?>` line) is a
 // parse error rather than a silently accepted directive.
 func TestParseFile_ContentDirectiveUnclosedFails(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"## Tagline\n\n<?content\nkind: paragraph\n")
 	_, err := ParseFile(&FileReader{}, path)
 	require.Error(t, err)
@@ -145,8 +143,7 @@ func TestParseFile_ContentDirectiveUnclosedFails(t *testing.T) {
 // under a `## ...` row must fail instead of storing entries the
 // validation walk silently skips.
 func TestParseFile_ContentDirectiveOnSlotRowFails(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"## ...\n\n<?content\nkind: paragraph\n?>\n")
 	_, err := ParseFile(&FileReader{}, path)
 	require.Error(t, err)
@@ -178,8 +175,7 @@ func TestParseFile_ContentDirectiveAfterIncludeAttachesToHost(t *testing.T) {
 // directive diagnostic carries the absolute source line, including
 // the lines a front-matter block occupied.
 func TestParseFile_ContentDirectiveErrorNamesLine(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"---\ntitle: string\n---\n## Tagline\n\n<?content\nkind: bogus\n?>\n")
 	_, err := ParseFile(&FileReader{}, path)
 	require.Error(t, err)
@@ -192,8 +188,7 @@ func TestParseFile_ContentDirectiveErrorNamesLine(t *testing.T) {
 // directive body that is not valid YAML fails at parse time with the
 // invalid-directive diagnostic.
 func TestParseFile_ContentDirectiveRejectsInvalidYAML(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"## Tagline\n\n<?content\nkind: [unclosed\n?>\n")
 	_, err := ParseFile(&FileReader{}, path)
 	require.Error(t, err)
@@ -204,8 +199,7 @@ func TestParseFile_ContentDirectiveRejectsInvalidYAML(t *testing.T) {
 // `<?content?>` row above the first heading is rejected — the entry
 // would have no section to attach to.
 func TestParseFile_ContentDirectiveBeforeHeadingFails(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "schema.md",
+	path := schemaFile(t,
 		"<?content\nkind: paragraph\n?>\n\n## Tagline\n")
 	_, err := ParseFile(&FileReader{}, path)
 	require.Error(t, err)

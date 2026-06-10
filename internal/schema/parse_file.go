@@ -90,7 +90,7 @@ func parseFileBytes(
 		sch.Filename = fp
 	}
 
-	headings, fp2, err := collectFileHeadings(f, r, path, fmLineCount(prefix), visited, chain)
+	headings, fp2, err := collectFileHeadings(f, r, path, lint.CountLines(prefix), visited, chain)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +307,7 @@ func extractRequireFilename(f *lint.File) (string, error) {
 		if !ok || pi.Name != "require" {
 			continue
 		}
-		body := piYAMLBody(pi, f.Source, "require")
+		body := piYAMLBody(pi, f.Source)
 		if body == "" {
 			continue
 		}
@@ -332,7 +332,7 @@ func parseContentDirective(pi *piparser.ProcessingInstruction, source []byte) (C
 		return ContentEntry{}, fmt.Errorf(
 			"<?content?> directive is missing its closing `?>`")
 	}
-	body := piYAMLBody(pi, source, "content")
+	body := piYAMLBody(pi, source)
 	var m map[string]any
 	if err := yamlutil.UnmarshalSafe([]byte(body), &m); err != nil {
 		return ContentEntry{}, fmt.Errorf("invalid <?content?> directive: %w", err)
@@ -340,12 +340,12 @@ func parseContentDirective(pi *piparser.ProcessingInstruction, source []byte) (C
 	return parseContentEntry(m, "<?content?>")
 }
 
-func piYAMLBody(pi *piparser.ProcessingInstruction, source []byte, name string) string {
+func piYAMLBody(pi *piparser.ProcessingInstruction, source []byte) string {
 	lines := pi.Lines()
 	if lines.Len() == 1 {
 		seg := lines.At(0)
 		line := strings.TrimSpace(string(seg.Value(source)))
-		line = strings.TrimPrefix(line, "<?"+name)
+		line = strings.TrimPrefix(line, "<?"+pi.Name)
 		if idx := strings.Index(line, "?>"); idx >= 0 {
 			line = line[:idx]
 		}
@@ -362,8 +362,9 @@ func piYAMLBody(pi *piparser.ProcessingInstruction, source []byte, name string) 
 // collectFileHeadings walks the schema AST, collecting heading entries
 // and expanding <?include?> PIs by splicing the included file's
 // headings in place. lineBase is the number of source lines the
-// file's front matter occupied, so directive diagnostics name
-// absolute file lines rather than body-relative ones.
+// file's front matter occupied (lint.CountLines of the stripped
+// prefix); adding it to the 1-based body line from f.LineOfOffset
+// yields the absolute file line for directive diagnostics.
 func collectFileHeadings(
 	f *lint.File, r *FileReader, path string, lineBase int,
 	visited map[string]bool, chain []string,
@@ -419,13 +420,6 @@ func collectFileHeadings(
 	return heads, fp, nil
 }
 
-// fmLineCount returns the number of source lines a front-matter
-// prefix occupied (zero when the file has none), so body-relative
-// line numbers can be reported as absolute file lines.
-func fmLineCount(prefix []byte) int {
-	return bytes.Count(prefix, []byte("\n"))
-}
-
 func expandInclude(
 	pi *piparser.ProcessingInstruction, source []byte,
 	r *FileReader, schemaPath string, visited map[string]bool, chain []string,
@@ -467,7 +461,7 @@ func expandInclude(
 	visited[included] = true
 	nextChain := append([]string(nil), chain...)
 	nextChain = append(nextChain, included)
-	frag, fpFrag, err := collectFileHeadings(fragFile, r, included, fmLineCount(fragPrefix), visited, nextChain)
+	frag, fpFrag, err := collectFileHeadings(fragFile, r, included, lint.CountLines(fragPrefix), visited, nextChain)
 	delete(visited, included)
 	if err != nil {
 		return nil, "", err
@@ -482,7 +476,7 @@ func expandInclude(
 func resolveIncludePath(
 	pi *piparser.ProcessingInstruction, source []byte, schemaPath string,
 ) (string, error) {
-	body := piYAMLBody(pi, source, pi.Name)
+	body := piYAMLBody(pi, source)
 	if body == "" {
 		return "", fmt.Errorf(
 			"include processing instruction missing required 'file' attribute")

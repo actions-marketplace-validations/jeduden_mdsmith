@@ -1337,6 +1337,7 @@ func collectBodySyncPoints(
 	// body (e.g. a `bind:` value) must not become a body-sync point,
 	// since the row is schema syntax, not body-sync template text.
 	inPIBlock := false
+	inFence := false
 	start := 0
 	for i := 0; i <= len(content); i++ {
 		if i < len(content) && content[i] != '\n' {
@@ -1355,7 +1356,15 @@ func collectBodySyncPoints(
 			inPIBlock = !bytes.Equal(lineB, piClose)
 			continue
 		}
-		if isPIOpenLine(raw) {
+		if bytes.HasPrefix(lineB, fenceBacktick) || bytes.HasPrefix(lineB, fenceTilde) {
+			// A fenced code block owns its lines before the PI parser
+			// runs, so a directive opener shown inside a fence is
+			// code, not a directive. The marker line itself falls
+			// through as ordinary body text, as it did before the
+			// PI skip existed.
+			inFence = !inFence
+		}
+		if !inFence && isPIOpenLine(raw) {
 			// A single-line `<?name ... ?>` opens and closes on the
 			// same line; only a multi-line opener leaves us inside the
 			// block for subsequent lines. The parser closes an opener
@@ -1410,6 +1419,9 @@ func appendBodySyncFields(
 var (
 	piOpenPrefix = []byte("<?")
 	piClose      = []byte("?>")
+
+	fenceBacktick = []byte("```")
+	fenceTilde    = []byte("~~~")
 )
 
 // isPIOpenLine reports whether a raw body line opens a processing
@@ -1433,7 +1445,7 @@ func isPIOpenLine(raw []byte) bool {
 	if rest[0] == ' ' || rest[0] == '\t' {
 		return false
 	}
-	if rest[0] == '?' && len(rest) > 1 && rest[1] == '>' {
+	if bytes.HasPrefix(rest, piClose) {
 		return false
 	}
 	return true
