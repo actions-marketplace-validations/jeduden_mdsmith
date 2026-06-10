@@ -737,12 +737,12 @@ export class Wiring {
     };
     const isTrusted = () => api.workspace.isTrusted;
 
-    const outputDeps = () => ({
+    const outputDeps = {
       appendOutput: (text: string) => {
         this.getOutputChannel().append(text);
       },
       showOutput: () => this.showOutput(),
-    });
+    };
 
     // showNotification routes failures (messages containing "failed" or
     // "could not start") to showWarningMessage so they surface as
@@ -797,7 +797,7 @@ export class Wiring {
           isTrusted,
           showInfo: showNotification,
           showError,
-          ...outputDeps(),
+          ...outputDeps,
         });
       }),
 
@@ -809,7 +809,7 @@ export class Wiring {
           confirm: confirmDestructive("mdsmith merge-driver install"),
           showInfo: showNotification,
           showError,
-          ...outputDeps(),
+          ...outputDeps,
         });
       }),
 
@@ -822,7 +822,7 @@ export class Wiring {
           confirm: confirmDestructive("mdsmith fix ."),
           showInfo: showNotification,
           showError,
-          ...outputDeps(),
+          ...outputDeps,
         });
       }),
 

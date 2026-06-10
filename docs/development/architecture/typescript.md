@@ -44,16 +44,6 @@ editors/vscode/src/
 
 Tests live next to source as `*.test.ts`.
 
-**Current state**: `extension.ts` also
-runs the LSP client today. It watches
-`.mdsmith.yml` for config changes. It
-calls `vscode.commands.registerCommand`
-directly via `registerPaletteCommands`.
-That work should move to `wiring.ts` and
-`commands/*`. New code should not grow
-`extension.ts` further — place it where
-the target shape expects it.
-
 ## Single responsibility per module (SRP)
 
 Each `commands/<name>.ts` holds one
@@ -84,14 +74,13 @@ not modify `extension.ts`:
    `contributes.commands` section of
    `package.json`.
 
-**Current state**: commands register in
-`extension.ts` today via
-`registerPaletteCommands`. Add new
-entries to that helper. Do not call
+Commands register in the
+`registerPaletteCommands` helper of the
+`Wiring` class, and new entries belong
+in that helper so the wiring stays in
+one place. Do not call
 `vscode.commands.registerCommand` from
-the activation body. Keeping
-registration in one helper makes the
-eventual move to `wiring.ts` mechanical.
+the activation body.
 
 The `contributes` section of
 `package.json` is the public surface for
@@ -171,15 +160,12 @@ Target shape:
 - Construct the wiring object.
 - Hand control to `wiring.ts`.
 
-**Current state**: `extension.ts` also
-owns the LSP client. It owns a
-config-file watcher. It owns direct
-command registrations. Those concerns
-are slated to move to `wiring.ts` and
-dedicated command modules. The
-violations list flags new additions to
-`extension.ts` outside the existing
-`registerPaletteCommands` helper.
+`extension.ts` matches this shape: it
+constructs one `Wiring` and delegates
+`activate`/`deactivate` to it. The LSP
+client, the `.mdsmith.yml` watcher, and
+command registration live in
+`wiring.ts`.
 
 ## Tests
 
