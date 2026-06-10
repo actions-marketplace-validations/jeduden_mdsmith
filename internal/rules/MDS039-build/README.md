@@ -25,13 +25,20 @@ MDS039 validates each `<?build?>` directive in a Markdown file:
 
 1. **`recipe` resolves** — the recipe name must be declared in
    `build.recipes` in `.mdsmith.yml`.
-2. **`output` is present and safe** — `output` is required, must be a
-   relative path, and must not contain `..` path components.
-3. **Required params present** — params listed as required by the
+2. **`outputs` is present and safe** — `outputs` is a required,
+   non-empty list. Each entry must be a relative path with
+   forward-slash separators, no `..` components after `path.Clean`, no
+   Windows drive letter or UNC prefix, no reserved device name, and no
+   glob characters. Entries under `.mdsmith/` are rejected.
+3. **`inputs` is well-formed** — `inputs` is an optional list of paths
+   or doublestar globs. Each entry passes the same path-shape rules as
+   `outputs`, except glob characters are allowed.
+4. **Required params present** — params listed as required by the
    recipe schema must all be supplied.
-4. **No unknown params** (warning) — params not in the recipe's
-   `required` or `optional` lists produce a warning.
-5. **Body in sync** — the section body must equal the rendered
+5. **No unknown params** (warning) — params not in the recipe's
+   `required` or `optional` lists produce a warning. The old singular
+   `output:` is no longer known and draws this warning.
+6. **Body in sync** — the section body must equal the rendered
    `body-template`; MDS039 reports `generated section is out of date`
    when it diverges.
 
@@ -43,7 +50,10 @@ No external tool is executed.
 ```text
 <?build
 recipe: RECIPE-NAME
-output: path/to/artifact.ext
+inputs:
+  - path/to/source.md
+outputs:
+  - path/to/artifact.ext
 [recipe-specific params]
 ?>
 RENDERED BODY
@@ -52,23 +62,25 @@ RENDERED BODY
 
 ### Common parameters
 
-| Name     | Required | Description                                                     |
-| -------- | -------- | --------------------------------------------------------------- |
-| `recipe` | yes      | Recipe name declared in `build.recipes`                         |
-| `output` | yes      | Artifact path relative to the Markdown file; no `..` components |
+| Name      | Required | Description                                         |
+| --------- | -------- | --------------------------------------------------- |
+| `recipe`  | yes      | Recipe name declared in `build.recipes`             |
+| `outputs` | yes      | Non-empty list of relative artifact paths; no globs |
+| `inputs`  | no       | List of relative source paths or doublestar globs   |
 
-`output` accepts any file extension; MDS039 applies no extension
-filter.
+`outputs` entries accept any file extension; MDS039 applies no
+extension filter.
 
 ## Generated body
 
-Each recipe has a `body-template` rendered by `mdsmith fix`. Two
-placeholders are available:
+Each recipe has a `body-template`. `mdsmith fix` renders it once per
+`outputs` entry, in declared order, and joins the lines with newlines.
+Two placeholders are available per render iteration:
 
-| Placeholder | Value                                   |
-| ----------- | --------------------------------------- |
-| `{output}`  | The `output` param value                |
-| `{alt}`     | `"{recipe} output: {output}"` (default) |
+| Placeholder | Value                                        |
+| ----------- | -------------------------------------------- |
+| `{output}`  | The current `outputs` entry                  |
+| `{alt}`     | `"{recipe} output: {output}"` for that entry |
 
 When `body-template` is omitted from the recipe declaration, the
 default `[{output}]({output})` is used.
@@ -100,7 +112,8 @@ rules:
 <?build
 recipe: render
 source: diagram.svg
-output: docs/diagram.png
+outputs:
+  - docs/diagram.png
 ?>
 ![render output: docs/diagram.png](docs/diagram.png)
 <?/build?>
@@ -112,7 +125,8 @@ output: docs/diagram.png
 <?build
 recipe: render
 source: diagram.svg
-output: docs/diagram.png
+outputs:
+  - docs/diagram.png
 ?>
 outdated content
 <?/build?>
@@ -125,7 +139,8 @@ MDS039 reports: `generated section is out of date`
 ```markdown
 <?build
 recipe: nonexistent
-output: out.png
+outputs:
+  - out.png
 ?>
 content
 <?/build?>
@@ -138,7 +153,8 @@ MDS039 reports: `build directive references unknown recipe "nonexistent"`
 ```markdown
 <?build
 recipe: render
-output: out.png
+outputs:
+  - out.png
 ?>
 content
 <?/build?>
@@ -184,7 +200,8 @@ Embedded inline:
 <?build
 recipe: vhs
 source: demo.tape
-output: demo.gif
+outputs:
+  - demo.gif
 ?>
 ![demo](demo.gif)
 <?/build?>

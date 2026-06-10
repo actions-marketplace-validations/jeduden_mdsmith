@@ -14,7 +14,8 @@ diagnostics:
 
 <?build
 recipe: render
-output: out.png
+outputs:
+  - out.png
 ?>
 content
 <?/build?>

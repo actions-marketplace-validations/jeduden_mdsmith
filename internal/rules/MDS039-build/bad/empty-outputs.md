@@ -2,23 +2,22 @@
 settings:
   recipes:
     render:
-      body-template: "![{alt}]({output})"
       params:
         required:
           - source
 diagnostics:
   - line: 3
     column: 1
-    message: 'build directive recipe "render": unknown parameter "bogus"'
+    message: 'build directive "" must not be empty'
 ---
-# Unknown Param
+# Empty Outputs Entry
 
 <?build
 recipe: render
 source: diagram.svg
 outputs:
   - out.png
-bogus: value
+  - ""
 ?>
-![render output: out.png](out.png)
+content
 <?/build?>

@@ -4,7 +4,7 @@ package build
 
 import (
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -157,7 +157,8 @@ func (r *Rule) checkPair(f *lint.File, mp gensection.MarkerPair) []lint.Diagnost
 }
 
 // validateHard returns error-severity diagnostics for hard failures:
-// missing/invalid recipe, missing/unsafe output, missing required params.
+// missing/invalid recipe, missing/empty/unsafe outputs, invalid inputs,
+// missing required params. The first failure wins.
 func (r *Rule) validateHard(
 	filePath string, line int,
 	params map[string]string,
@@ -170,26 +171,11 @@ func (r *Rule) validateHard(
 		)}
 	}
 
-	output, hasOutput := params["output"]
-	if !hasOutput || strings.TrimSpace(output) == "" {
-		return []lint.Diagnostic{gensection.MakeDiag(
-			r.RuleID(), r.RuleName(), filePath, line,
-			`build directive missing required "output" parameter`,
-		)}
+	if diags := r.validateOutputs(filePath, line, params); diags != nil {
+		return diags
 	}
-
-	if filepath.IsAbs(output) || strings.HasPrefix(output, `\`) || hasDriveLetter(output) {
-		return []lint.Diagnostic{gensection.MakeDiag(
-			r.RuleID(), r.RuleName(), filePath, line,
-			fmt.Sprintf(`build directive "output" must be a relative path: %q`, output),
-		)}
-	}
-
-	if hasDotDotSegment(output) {
-		return []lint.Diagnostic{gensection.MakeDiag(
-			r.RuleID(), r.RuleName(), filePath, line,
-			fmt.Sprintf(`build directive "output" contains ".." path component: %q`, output),
-		)}
+	if diags := r.validateInputs(filePath, line, params); diags != nil {
+		return diags
 	}
 
 	schema, ok := r.resolveRecipe(recipeName)
@@ -212,6 +198,47 @@ func (r *Rule) validateHard(
 	return nil
 }
 
+// validateOutputs checks the required, non-empty "outputs" list and
+// validates each entry against the path-shape rules (no globs).
+func (r *Rule) validateOutputs(
+	filePath string, line int, params map[string]string,
+) []lint.Diagnostic {
+	raw, has := params["outputs"]
+	outputs := splitList(raw)
+	if !has || len(outputs) == 0 {
+		return []lint.Diagnostic{gensection.MakeDiag(
+			r.RuleID(), r.RuleName(), filePath, line,
+			`build directive missing required "outputs" list`,
+		)}
+	}
+	for _, out := range outputs {
+		if msg := validatePathEntry(out, false); msg != "" {
+			return []lint.Diagnostic{gensection.MakeDiag(
+				r.RuleID(), r.RuleName(), filePath, line,
+				fmt.Sprintf("build directive %q %s", out, msg),
+			)}
+		}
+	}
+	return nil
+}
+
+// validateInputs validates the optional "inputs" list. The list may be
+// absent or empty; each entry is validated against the path-shape rules
+// (doublestar globs allowed).
+func (r *Rule) validateInputs(
+	filePath string, line int, params map[string]string,
+) []lint.Diagnostic {
+	for _, in := range splitList(params["inputs"]) {
+		if msg := validatePathEntry(in, true); msg != "" {
+			return []lint.Diagnostic{gensection.MakeDiag(
+				r.RuleID(), r.RuleName(), filePath, line,
+				fmt.Sprintf("build directive %q %s", in, msg),
+			)}
+		}
+	}
+	return nil
+}
+
 // warnUnknownParams returns warning diagnostics for params not in the
 // recipe's required or optional lists. Results are in sorted key order.
 func (r *Rule) warnUnknownParams(
@@ -219,7 +246,7 @@ func (r *Rule) warnUnknownParams(
 	recipeName string, schema recipeSchema,
 	params map[string]string,
 ) []lint.Diagnostic {
-	known := map[string]bool{"recipe": true, "output": true}
+	known := map[string]bool{"recipe": true, "outputs": true, "inputs": true}
 	for _, p := range schema.Required {
 		known[p] = true
 	}
@@ -250,13 +277,15 @@ func (r *Rule) warnUnknownParams(
 	return diags
 }
 
-// generateBody renders the recipe's body-template using the directive params.
+// generateBody renders the recipe's body-template once per outputs
+// entry, in declared order, and joins the rendered lines with newlines.
+// {output} and {alt} refer to the current entry in each iteration.
 func (r *Rule) generateBody(
 	_ string, _ int,
 	params map[string]string,
 ) (string, []lint.Diagnostic) {
 	recipeName := params["recipe"]
-	output := params["output"]
+	outputs := splitList(params["outputs"])
 
 	schema, _ := r.resolveRecipe(recipeName)
 	tmpl := schema.BodyTemplate
@@ -264,8 +293,13 @@ func (r *Rule) generateBody(
 		tmpl = defaultBodyTemplate
 	}
 
-	alt := fmt.Sprintf("%s output: %s", recipeName, output)
-	body := strings.NewReplacer("{alt}", alt, "{output}", output).Replace(tmpl)
+	rendered := make([]string, 0, len(outputs))
+	for _, output := range outputs {
+		alt := fmt.Sprintf("%s output: %s", recipeName, output)
+		rendered = append(rendered,
+			strings.NewReplacer("{alt}", alt, "{output}", output).Replace(tmpl))
+	}
+	body := strings.Join(rendered, "\n")
 
 	return gensection.EnsureTrailingNewline(body), nil
 }
@@ -280,14 +314,99 @@ func (r *Rule) resolveRecipe(name string) (recipeSchema, bool) {
 	return recipeSchema{}, false
 }
 
-// hasDotDotSegment reports whether the path has a segment that is exactly "..".
-func hasDotDotSegment(p string) bool {
-	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if seg == ".." {
+// reservedDeviceNames is the set of Windows reserved device names,
+// rejected on every platform so a path that is harmless on Linux does
+// not become a device handle when the same repo is built on Windows.
+var reservedDeviceNames = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
+	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
+	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
+// splitList splits a newline-joined directive list value (the form
+// gensection.ValidateStringParams produces for a YAML sequence) into
+// trimmed, non-empty entries. An empty raw value yields nil.
+//
+// Empty and whitespace-only entries are intentionally preserved (not
+// dropped) so validatePathEntry can flag them as diagnostics; only the
+// trailing empty produced by a fully-empty value is removed.
+func splitList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "\n")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, p)
+	}
+	return out
+}
+
+// validatePathEntry validates one outputs: or inputs: entry against the
+// path-shape allowlist. It returns "" when the entry is acceptable, or a
+// short reason phrase suitable for embedding in a diagnostic. When
+// allowGlob is true, doublestar glob meta-characters (*, ?, [, {) are
+// permitted; outputs pass allowGlob=false and reject them.
+func validatePathEntry(p string, allowGlob bool) string {
+	if strings.TrimSpace(p) == "" {
+		return "must not be empty"
+	}
+	if p != strings.TrimSpace(p) {
+		return "must not have leading or trailing whitespace"
+	}
+	if strings.ContainsAny(p, "\x00\n\r") {
+		return "must not contain NUL, newline, or carriage return"
+	}
+	if strings.Contains(p, `\`) {
+		return "must use forward-slash separators only"
+	}
+	if hasDriveLetter(p) {
+		return "must not be a Windows drive path"
+	}
+	if strings.Contains(p, ":") {
+		return "must not contain a colon"
+	}
+	if hasReservedDeviceName(p) {
+		return "must not use a reserved device name"
+	}
+	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") {
+		return "must be a relative path"
+	}
+	if !allowGlob && strings.ContainsAny(p, "*?[") {
+		return "must not contain glob characters"
+	}
+	cleaned := path.Clean(p)
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return `must not contain ".." path components`
+	}
+	if underMdsmithDir(cleaned) {
+		return "must not be under .mdsmith/"
+	}
+	return ""
+}
+
+// hasReservedDeviceName reports whether any slash-separated segment of p,
+// with its extension stripped, is a Windows reserved device name
+// (case-insensitive). "CON", "dir/NUL.txt", and "COM1.log" all match;
+// "CONSOLE.md" does not.
+func hasReservedDeviceName(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if dot := strings.IndexByte(seg, '.'); dot >= 0 {
+			seg = seg[:dot]
+		}
+		if reservedDeviceNames[strings.ToUpper(seg)] {
 			return true
 		}
 	}
 	return false
+}
+
+// underMdsmithDir reports whether the cleaned, slash-separated path is
+// the .mdsmith state directory or a file inside it.
+func underMdsmithDir(cleaned string) bool {
+	return cleaned == ".mdsmith" || strings.HasPrefix(cleaned, ".mdsmith/")
 }
 
 // hasDriveLetter reports whether p begins with a Windows drive letter (e.g. C: or C:\).

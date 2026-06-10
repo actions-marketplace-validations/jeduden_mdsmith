@@ -2,23 +2,21 @@
 settings:
   recipes:
     render:
-      body-template: "![{alt}]({output})"
       params:
         required:
           - source
 diagnostics:
   - line: 3
     column: 1
-    message: 'build directive recipe "render": unknown parameter "bogus"'
+    message: 'build directive "out*.png" must not contain glob characters'
 ---
-# Unknown Param
+# Glob In Output
 
 <?build
 recipe: render
 source: diagram.svg
 outputs:
-  - out.png
-bogus: value
+  - out*.png
 ?>
-![render output: out.png](out.png)
+content
 <?/build?>

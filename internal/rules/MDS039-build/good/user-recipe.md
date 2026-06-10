@@ -12,7 +12,8 @@ settings:
 <?build
 recipe: chart
 data: data.csv
-output: chart.png
+outputs:
+  - chart.png
 ?>
 [chart.png](chart.png)
 <?/build?>

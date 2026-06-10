@@ -12,7 +12,8 @@ settings:
 <?build
 recipe: render
 source: demo.tape
-output: demo.mp4
+outputs:
+  - demo.mp4
 ?>
 ![render output: demo.mp4](demo.mp4)
 <?/build?>

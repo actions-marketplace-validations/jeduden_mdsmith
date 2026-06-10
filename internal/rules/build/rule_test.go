@@ -108,22 +108,58 @@ func TestResolveRecipe_UnknownWhenNoRecipes(t *testing.T) {
 
 func TestValidateHard_MissingRecipe(t *testing.T) {
 	r := ruleWithRender()
-	diags := r.validateHard("test.md", 1, map[string]string{"output": "out.png"})
+	diags := r.validateHard("test.md", 1, map[string]string{"outputs": "out.png"})
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, `missing required "recipe"`)
 }
 
-func TestValidateHard_MissingOutput(t *testing.T) {
+func TestValidateHard_MissingOutputs(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.validateHard("test.md", 1, map[string]string{"recipe": "render", "source": "a.svg"})
 	require.Len(t, diags, 1)
-	assert.Contains(t, diags[0].Message, `missing required "output"`)
+	assert.Contains(t, diags[0].Message, `missing required "outputs" list`)
+}
+
+func TestValidateHard_EmptyOutputsEntry(t *testing.T) {
+	r := ruleWithRender()
+	// A trailing empty entry alongside a valid one is a diagnostic.
+	// (gensection joins a YAML list with "\n", so "out.png\n" is a
+	// two-entry list ["out.png", ""].)
+	diags := r.validateHard("test.md", 1, map[string]string{
+		"recipe": "render", "source": "a.svg", "outputs": "out.png\n",
+	})
+	require.Len(t, diags, 1)
+	assert.Contains(t, diags[0].Message, "must not be empty")
+}
+
+func TestValidateHard_WhitespaceOnlyOutputEntry(t *testing.T) {
+	r := ruleWithRender()
+	// A single whitespace entry (joined value is non-empty) is flagged
+	// as an empty entry, not as a missing list.
+	diags := r.validateHard("test.md", 1, map[string]string{
+		"recipe": "render", "source": "a.svg", "outputs": "   ",
+	})
+	require.Len(t, diags, 1)
+	assert.Contains(t, diags[0].Message, "must not be empty")
+}
+
+func TestValidateHard_OutputsSingleEmptyEntryReadsAsMissing(t *testing.T) {
+	r := ruleWithRender()
+	// A list with a single empty-string entry joins to "" —
+	// indistinguishable from an absent list — so it reads as the
+	// missing-list diagnostic. The fixture exercises the multi-entry
+	// case where the empty-entry message surfaces.
+	diags := r.validateHard("test.md", 1, map[string]string{
+		"recipe": "render", "source": "a.svg", "outputs": "",
+	})
+	require.Len(t, diags, 1)
+	assert.Contains(t, diags[0].Message, `missing required "outputs" list`)
 }
 
 func TestValidateHard_DotDotOutput(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.validateHard("test.md", 1, map[string]string{
-		"recipe": "render", "source": "a.svg", "output": "../out/file.png",
+		"recipe": "render", "source": "a.svg", "outputs": "../out/file.png",
 	})
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, `".." path component`)
@@ -132,10 +168,29 @@ func TestValidateHard_DotDotOutput(t *testing.T) {
 func TestValidateHard_AbsoluteOutput(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.validateHard("test.md", 1, map[string]string{
-		"recipe": "render", "source": "a.svg", "output": "/tmp/out.png",
+		"recipe": "render", "source": "a.svg", "outputs": "/tmp/out.png",
 	})
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, "relative path")
+}
+
+func TestValidateHard_GlobInOutputRejected(t *testing.T) {
+	r := ruleWithRender()
+	diags := r.validateHard("test.md", 1, map[string]string{
+		"recipe": "render", "source": "a.svg", "outputs": "out*.png",
+	})
+	require.Len(t, diags, 1)
+	assert.Contains(t, diags[0].Message, "glob characters")
+}
+
+func TestValidateHard_MultipleOutputs_OneInvalid(t *testing.T) {
+	r := ruleWithRender()
+	// A second, invalid entry is rejected even when the first is fine.
+	diags := r.validateHard("test.md", 1, map[string]string{
+		"recipe": "render", "source": "a.svg", "outputs": "ok.png\n../bad.png",
+	})
+	require.Len(t, diags, 1)
+	assert.Contains(t, diags[0].Message, `".." path component`)
 }
 
 func TestValidateHard_WindowsDriveLetter(t *testing.T) {
@@ -143,10 +198,9 @@ func TestValidateHard_WindowsDriveLetter(t *testing.T) {
 	// C:\out.png and C:out.png must be rejected on all platforms.
 	for _, p := range []string{`C:\out.png`, `C:out.png`, `d:file.txt`} {
 		diags := r.validateHard("test.md", 1, map[string]string{
-			"recipe": "render", "source": "a.svg", "output": p,
+			"recipe": "render", "source": "a.svg", "outputs": p,
 		})
 		require.Len(t, diags, 1, "path=%q", p)
-		assert.Contains(t, diags[0].Message, "relative path", "path=%q", p)
 	}
 }
 
@@ -155,17 +209,44 @@ func TestValidateHard_BackslashAbsoluteOutput(t *testing.T) {
 	// Windows-style absolute paths are rejected even on non-Windows hosts.
 	for _, p := range []string{`\tmp\out.png`, `\\server\share\out.png`} {
 		diags := r.validateHard("test.md", 1, map[string]string{
-			"recipe": "render", "source": "a.svg", "output": p,
+			"recipe": "render", "source": "a.svg", "outputs": p,
 		})
 		require.Len(t, diags, 1, "path=%q", p)
-		assert.Contains(t, diags[0].Message, "relative path", "path=%q", p)
 	}
+}
+
+func TestValidateHard_InvalidInput(t *testing.T) {
+	r := ruleWithRender()
+	diags := r.validateHard("test.md", 1, map[string]string{
+		"recipe": "render", "source": "a.svg", "outputs": "out.png",
+		"inputs": "../escape.md",
+	})
+	require.Len(t, diags, 1)
+	assert.Contains(t, diags[0].Message, `".." path component`)
+}
+
+func TestValidateHard_GlobInput_Accepted(t *testing.T) {
+	r := ruleWithRender()
+	diags := r.validateHard("test.md", 1, map[string]string{
+		"recipe": "render", "source": "a.svg", "outputs": "out.png",
+		"inputs": "chapters/*.md\n**/extra.md",
+	})
+	assert.Empty(t, diags)
+}
+
+func TestValidateHard_EmptyInputs_Accepted(t *testing.T) {
+	r := ruleWithRender()
+	// inputs is optional; an absent list is fine.
+	diags := r.validateHard("test.md", 1, map[string]string{
+		"recipe": "render", "source": "a.svg", "outputs": "out.png",
+	})
+	assert.Empty(t, diags)
 }
 
 func TestValidateHard_EmptyRequiredParamValue(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.validateHard("test.md", 1, map[string]string{
-		"recipe": "render", "output": "out.png", "source": "   ",
+		"recipe": "render", "outputs": "out.png", "source": "   ",
 	})
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, `missing required parameter "source"`)
@@ -174,7 +255,7 @@ func TestValidateHard_EmptyRequiredParamValue(t *testing.T) {
 func TestValidateHard_UnknownRecipe(t *testing.T) {
 	r := &Rule{}
 	diags := r.validateHard("test.md", 1, map[string]string{
-		"recipe": "nope", "output": "out.png",
+		"recipe": "nope", "outputs": "out.png",
 	})
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, `unknown recipe "nope"`)
@@ -183,7 +264,7 @@ func TestValidateHard_UnknownRecipe(t *testing.T) {
 func TestValidateHard_MissingRequiredParam(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.validateHard("test.md", 1, map[string]string{
-		"recipe": "render", "output": "out.png",
+		"recipe": "render", "outputs": "out.png",
 	})
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, `missing required parameter "source"`)
@@ -192,7 +273,7 @@ func TestValidateHard_MissingRequiredParam(t *testing.T) {
 func TestValidateHard_Valid(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.validateHard("test.md", 1, map[string]string{
-		"recipe": "render", "output": "out.png", "source": "diagram.svg",
+		"recipe": "render", "outputs": "out.png", "source": "diagram.svg",
 	})
 	assert.Empty(t, diags)
 }
@@ -202,7 +283,16 @@ func TestValidateHard_Valid(t *testing.T) {
 func TestWarnUnknownParams_Clean(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.warnUnknownParams("test.md", 1, "render", renderRecipe, map[string]string{
-		"recipe": "render", "output": "out.png", "source": "diagram.svg",
+		"recipe": "render", "outputs": "out.png", "source": "diagram.svg",
+	})
+	assert.Empty(t, diags)
+}
+
+func TestWarnUnknownParams_InputsAllowed(t *testing.T) {
+	r := ruleWithRender()
+	// inputs is a reserved known param and must not warn.
+	diags := r.warnUnknownParams("test.md", 1, "render", renderRecipe, map[string]string{
+		"recipe": "render", "outputs": "out.png", "source": "a.svg", "inputs": "in.md",
 	})
 	assert.Empty(t, diags)
 }
@@ -210,7 +300,7 @@ func TestWarnUnknownParams_Clean(t *testing.T) {
 func TestWarnUnknownParams_OptionalAllowed(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.warnUnknownParams("test.md", 1, "render", renderRecipe, map[string]string{
-		"recipe": "render", "output": "out.png", "source": "a.svg", "title": "My Chart",
+		"recipe": "render", "outputs": "out.png", "source": "a.svg", "title": "My Chart",
 	})
 	assert.Empty(t, diags)
 }
@@ -218,17 +308,29 @@ func TestWarnUnknownParams_OptionalAllowed(t *testing.T) {
 func TestWarnUnknownParams_Unknown(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.warnUnknownParams("test.md", 1, "render", renderRecipe, map[string]string{
-		"recipe": "render", "output": "out.png", "source": "a.svg", "extra": "val",
+		"recipe": "render", "outputs": "out.png", "source": "a.svg", "extra": "val",
 	})
 	require.Len(t, diags, 1)
 	assert.Equal(t, lint.Warning, diags[0].Severity)
 	assert.Contains(t, diags[0].Message, `unknown parameter "extra"`)
 }
 
+func TestWarnUnknownParams_OutputSingularIsUnknown(t *testing.T) {
+	r := ruleWithRender()
+	// The old singular "output" param is no longer known; it draws the
+	// unknown-param warning.
+	diags := r.warnUnknownParams("test.md", 1, "render", renderRecipe, map[string]string{
+		"recipe": "render", "outputs": "out.png", "source": "a.svg", "output": "stray.png",
+	})
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Warning, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, `unknown parameter "output"`)
+}
+
 func TestWarnUnknownParams_Sorted(t *testing.T) {
 	r := ruleWithRender()
 	diags := r.warnUnknownParams("test.md", 1, "render", renderRecipe, map[string]string{
-		"recipe": "render", "output": "out.png", "source": "a.svg",
+		"recipe": "render", "outputs": "out.png", "source": "a.svg",
 		"zzz": "1", "aaa": "2",
 	})
 	require.Len(t, diags, 2)
@@ -241,7 +343,7 @@ func TestWarnUnknownParams_Sorted(t *testing.T) {
 func TestGenerateBody_CustomTemplate(t *testing.T) {
 	r := ruleWithRender()
 	body, diags := r.generateBody("test.md", 1, map[string]string{
-		"recipe": "render", "output": "docs/out.png", "source": "a.svg",
+		"recipe": "render", "outputs": "docs/out.png", "source": "a.svg",
 	})
 	require.Empty(t, diags)
 	assert.Equal(t, "![render output: docs/out.png](docs/out.png)\n", body)
@@ -252,7 +354,7 @@ func TestGenerateBody_DefaultTemplate(t *testing.T) {
 		"plain": {Required: []string{"data"}},
 	}}
 	body, diags := r.generateBody("test.md", 1, map[string]string{
-		"recipe": "plain", "output": "out.txt", "data": "input.csv",
+		"recipe": "plain", "outputs": "out.txt", "data": "input.csv",
 	})
 	require.Empty(t, diags)
 	assert.Equal(t, "[out.txt](out.txt)\n", body)
@@ -261,9 +363,33 @@ func TestGenerateBody_DefaultTemplate(t *testing.T) {
 func TestGenerateBody_AltDefault(t *testing.T) {
 	r := ruleWithRender()
 	body, _ := r.generateBody("test.md", 1, map[string]string{
-		"recipe": "render", "output": "fig.png", "source": "a.svg",
+		"recipe": "render", "outputs": "fig.png", "source": "a.svg",
 	})
 	assert.Equal(t, "![render output: fig.png](fig.png)\n", body)
+}
+
+func TestGenerateBody_MultipleOutputs(t *testing.T) {
+	r := ruleWithRender()
+	// The body-template renders once per outputs entry, in declared
+	// order, joined with newlines.
+	body, diags := r.generateBody("test.md", 1, map[string]string{
+		"recipe": "render", "source": "a.svg",
+		"outputs": "book.html\nbook.epub",
+	})
+	require.Empty(t, diags)
+	assert.Equal(t,
+		"![render output: book.html](book.html)\n"+
+			"![render output: book.epub](book.epub)\n",
+		body)
+}
+
+func TestGenerateBody_MultipleOutputs_DefaultTemplate(t *testing.T) {
+	r := &Rule{recipes: map[string]recipeSchema{"plain": {Required: []string{"data"}}}}
+	body, _ := r.generateBody("test.md", 1, map[string]string{
+		"recipe": "plain", "data": "in.csv",
+		"outputs": "a.txt\nb.txt\nc.txt",
+	})
+	assert.Equal(t, "[a.txt](a.txt)\n[b.txt](b.txt)\n[c.txt](c.txt)\n", body)
 }
 
 // --- Check (integration) ---
@@ -276,24 +402,46 @@ func TestCheck_NoDirectives(t *testing.T) {
 
 func TestCheck_CorrectBody(t *testing.T) {
 	r := ruleWithRender()
-	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutput: out.png\n?>\n" +
+	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutputs:\n  - out.png\n?>\n" +
 		"![render output: out.png](out.png)\n<?/build?>\n"
+	f := newFile(t, src)
+	assert.Empty(t, r.Check(f))
+}
+
+func TestCheck_MultiOutputCorrectBody(t *testing.T) {
+	r := ruleWithRender()
+	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutputs:\n  - book.html\n  - book.epub\n?>\n" +
+		"![render output: book.html](book.html)\n" +
+		"![render output: book.epub](book.epub)\n<?/build?>\n"
 	f := newFile(t, src)
 	assert.Empty(t, r.Check(f))
 }
 
 func TestCheck_StaleBody(t *testing.T) {
 	r := ruleWithRender()
-	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutput: out.png\n?>\nwrong\n<?/build?>\n"
+	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutputs:\n  - out.png\n?>\nwrong\n<?/build?>\n"
 	f := newFile(t, src)
 	diags := r.Check(f)
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, "out of date")
 }
 
+func TestCheck_OutputSingularRejected(t *testing.T) {
+	r := ruleWithRender()
+	// Only the old singular `output:` is present — `outputs:` is
+	// required, so this is a hard error, and the stray `output:` would
+	// also warn (but the hard error short-circuits).
+	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutput: out.png\n?>\ncontent\n<?/build?>\n"
+	f := newFile(t, src)
+	diags := r.Check(f)
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Error, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, `missing required "outputs" list`)
+}
+
 func TestCheck_UnknownRecipe(t *testing.T) {
 	r := &Rule{}
-	src := "# Test\n\n<?build\nrecipe: ghost\noutput: out.png\n?>\ncontent\n<?/build?>\n"
+	src := "# Test\n\n<?build\nrecipe: ghost\noutputs:\n  - out.png\n?>\ncontent\n<?/build?>\n"
 	f := newFile(t, src)
 	diags := r.Check(f)
 	require.Len(t, diags, 1)
@@ -302,7 +450,7 @@ func TestCheck_UnknownRecipe(t *testing.T) {
 
 func TestCheck_UnknownParam_AndCorrectBody(t *testing.T) {
 	r := ruleWithRender()
-	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutput: out.png\nextra: val\n?>\n" +
+	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutputs:\n  - out.png\nextra: val\n?>\n" +
 		"![render output: out.png](out.png)\n<?/build?>\n"
 	f := newFile(t, src)
 	diags := r.Check(f)
@@ -313,7 +461,7 @@ func TestCheck_UnknownParam_AndCorrectBody(t *testing.T) {
 
 func TestCheck_UnknownParam_AndStaleBody(t *testing.T) {
 	r := ruleWithRender()
-	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutput: out.png\nextra: val\n?>\nwrong\n<?/build?>\n"
+	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutputs:\n  - out.png\nextra: val\n?>\nwrong\n<?/build?>\n"
 	f := newFile(t, src)
 	diags := r.Check(f)
 	require.Len(t, diags, 2)
@@ -327,18 +475,28 @@ func TestCheck_UnknownParam_AndStaleBody(t *testing.T) {
 
 func TestFix_RegeneratesBody(t *testing.T) {
 	r := ruleWithRender()
-	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutput: out.png\n?>\nwrong content\n<?/build?>\n"
+	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutputs:\n  - out.png\n?>\nwrong content\n<?/build?>\n"
 	f := newFile(t, src)
 	got := string(r.Fix(f))
 	assert.Contains(t, got, "![render output: out.png](out.png)")
 	assert.NotContains(t, got, "wrong content")
 }
 
+func TestFix_MultiOutput(t *testing.T) {
+	r := ruleWithRender()
+	src := "# Demo\n\n<?build\nrecipe: render\nsource: a.svg\noutputs:\n  - book.html\n  - book.epub\n?>\nstale\n<?/build?>\n"
+	f := newFile(t, src)
+	got := string(r.Fix(f))
+	assert.Contains(t, got, "![render output: book.html](book.html)")
+	assert.Contains(t, got, "![render output: book.epub](book.epub)")
+	assert.NotContains(t, got, "stale")
+}
+
 func TestFix_DefaultTemplate(t *testing.T) {
 	r := &Rule{recipes: map[string]recipeSchema{
 		"plain": {Required: []string{"data"}},
 	}}
-	src := "# Test\n\n<?build\nrecipe: plain\ndata: input.csv\noutput: out.txt\n?>\nstale\n<?/build?>\n"
+	src := "# Test\n\n<?build\nrecipe: plain\ndata: input.csv\noutputs:\n  - out.txt\n?>\nstale\n<?/build?>\n"
 	f := newFile(t, src)
 	got := string(r.Fix(f))
 	assert.Contains(t, got, "[out.txt](out.txt)")
@@ -346,31 +504,28 @@ func TestFix_DefaultTemplate(t *testing.T) {
 
 func TestFix_SkipsInvalidDirective(t *testing.T) {
 	r := &Rule{}
-	src := "# Test\n\n<?build\nrecipe: ghost\noutput: out.png\n?>\ncontent\n<?/build?>\n"
+	src := "# Test\n\n<?build\nrecipe: ghost\noutputs:\n  - out.png\n?>\ncontent\n<?/build?>\n"
 	f := newFile(t, src)
 	got := r.Fix(f)
 	assert.Equal(t, src, string(got))
 }
 
-// --- hasDotDotSegment ---
+// --- splitList ---
 
-func TestHasDotDotSegment(t *testing.T) {
+func TestSplitList(t *testing.T) {
 	cases := []struct {
-		path string
-		want bool
+		raw  string
+		want []string
 	}{
-		{"../out.png", true},
-		{"a/../b.png", true},
-		{"a/b/c.png", false},
-		{"out.png", false},
-		{"./out.png", false},
-		{"..", true},
-		{"a/b/..c.png", false},
-		{`a\..\b.png`, true},
-		{`a\b\c.png`, false},
+		{"", nil},
+		{"a.png", []string{"a.png"}},
+		{"a.png\nb.png", []string{"a.png", "b.png"}},
+		// Empty entries are preserved so validatePathEntry can flag them.
+		{"a.png\n", []string{"a.png", ""}},
+		{"\n", []string{"", ""}},
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, hasDotDotSegment(c.path), "path=%q", c.path)
+		assert.Equal(t, c.want, splitList(c.raw), "raw=%q", c.raw)
 	}
 }
 
@@ -487,8 +642,126 @@ func TestValidateHard_AnyExtension(t *testing.T) {
 	r := ruleWithRender()
 	for _, ext := range []string{"out.gif", "out.mp4", "out.svg", "out.txt", "out"} {
 		diags := r.validateHard("test.md", 1, map[string]string{
-			"recipe": "render", "output": ext, "source": "a.svg",
+			"recipe": "render", "outputs": ext, "source": "a.svg",
 		})
 		assert.Empty(t, diags, "extension %q should be accepted", ext)
+	}
+}
+
+// --- validatePathEntry (path-shape rules) ---
+
+func TestValidatePathEntry_Valid(t *testing.T) {
+	for _, p := range []string{
+		"out.png", "docs/out.png", "a/b/c.txt", "out", "._hidden.md",
+	} {
+		assert.Empty(t, validatePathEntry(p, false), "path %q should be accepted", p)
+		assert.Empty(t, validatePathEntry(p, true), "path %q should be accepted (glob)", p)
+	}
+}
+
+func TestValidatePathEntry_Empty(t *testing.T) {
+	for _, p := range []string{"", "   ", "\t"} {
+		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected", p)
+	}
+}
+
+func TestValidatePathEntry_LeadingTrailingWhitespace(t *testing.T) {
+	for _, p := range []string{" out.png", "out.png ", "\tout.png", "out.png\t"} {
+		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected", p)
+	}
+}
+
+func TestValidatePathEntry_NUL(t *testing.T) {
+	assert.NotEmpty(t, validatePathEntry("out\x00.png", false))
+}
+
+func TestValidatePathEntry_Newline(t *testing.T) {
+	assert.NotEmpty(t, validatePathEntry("out\n.png", false))
+	assert.NotEmpty(t, validatePathEntry("out\r.png", false))
+}
+
+func TestValidatePathEntry_Backslash(t *testing.T) {
+	assert.NotEmpty(t, validatePathEntry(`a\b.png`, false))
+}
+
+func TestValidatePathEntry_DriveLetter(t *testing.T) {
+	for _, p := range []string{`C:\out.png`, `C:out.png`, `d:file.txt`} {
+		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected", p)
+	}
+}
+
+func TestValidatePathEntry_UNC(t *testing.T) {
+	for _, p := range []string{`\\?\out.png`, `\\server\share\f`} {
+		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected", p)
+	}
+}
+
+func TestValidatePathEntry_NTFSADS(t *testing.T) {
+	// foo:bar — NTFS alternate data stream syntax.
+	assert.NotEmpty(t, validatePathEntry("foo:bar", false))
+	assert.NotEmpty(t, validatePathEntry("dir/foo:bar.txt", false))
+}
+
+func TestValidatePathEntry_ReservedDeviceNames(t *testing.T) {
+	for _, p := range []string{
+		"CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "LPT9",
+		"con", "Con", "nul.txt", "dir/CON", "COM1.log",
+	} {
+		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected", p)
+	}
+}
+
+func TestValidatePathEntry_ReservedDeviceNames_NotMatchedAsSubstring(t *testing.T) {
+	// CONSOLE / NULLABLE are not reserved device names.
+	for _, p := range []string{"CONSOLE.md", "NULLABLE", "COMPANY", "LPT10"} {
+		assert.Empty(t, validatePathEntry(p, false), "path %q should be accepted", p)
+	}
+}
+
+func TestValidatePathEntry_Absolute(t *testing.T) {
+	for _, p := range []string{"/tmp/out.png", "/out.png"} {
+		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected", p)
+	}
+}
+
+func TestValidatePathEntry_Tilde(t *testing.T) {
+	for _, p := range []string{"~/out.png", "~"} {
+		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected", p)
+	}
+}
+
+func TestValidatePathEntry_DotDot(t *testing.T) {
+	// A path that escapes root after Clean (or is "..") is rejected.
+	for _, p := range []string{"../out.png", "..", "a/../../b.png"} {
+		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected", p)
+	}
+}
+
+func TestValidatePathEntry_InteriorDotDotThatCleansInBounds(t *testing.T) {
+	// Per the plan's path-shape rule, the check is on the result of
+	// path.Clean: "a/../b.png" cleans to "b.png", which stays in-root,
+	// so it is accepted.
+	assert.Empty(t, validatePathEntry("a/../b.png", false))
+}
+
+func TestValidatePathEntry_UnderMdsmithDir(t *testing.T) {
+	for _, p := range []string{".mdsmith/state", ".mdsmith/out.png"} {
+		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected", p)
+	}
+}
+
+func TestValidatePathEntry_OutputsRejectGlobChars(t *testing.T) {
+	// allowGlob=false: glob meta-characters are rejected.
+	for _, p := range []string{"out*.png", "out?.png", "out[1].png"} {
+		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected for outputs", p)
+	}
+}
+
+func TestValidatePathEntry_InputsAcceptGlobChars(t *testing.T) {
+	// allowGlob=true: doublestar globs are accepted.
+	for _, p := range []string{
+		"src/*.md", "**/*.md", "chapters/[0-9]*.md", "a?b.md", "{a,b}.md",
+	} {
+		assert.Empty(t, validatePathEntry(p, true), "path %q should be accepted for inputs", p)
 	}
 }
