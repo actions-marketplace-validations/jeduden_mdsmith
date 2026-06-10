@@ -1,74 +1,3 @@
-// Package cuelite is the public, versioned façade mdsmith uses for the
-// small CUE subset it depends on — schema constraints, query filters,
-// placeholder paths, and catalog templates. Like
-// github.com/jeduden/mdsmith/pkg/markdown it is an exported public
-// surface, imported under github.com/jeduden/mdsmith/cue/cuelite, and
-// it sits at the bottom of the layering map: it imports no internal
-// mdsmith package.
-//
-// # Strategy: CUE-backed façade, then in-house flip
-//
-// The package lands first as a thin wrapper over cuelang.org/go. Every
-// method delegates to CUE, so mdsmith call sites can move onto the
-// façade with behaviour unchanged. Only afterward is the implementation
-// flipped, method by method, to a small in-house pure-Go engine behind
-// this same stable API. Throughout that flip a differential oracle keeps
-// the flip honest: the harness in internal/cuelitetest runs a value
-// through both the in-house path (this façade) and an INDEPENDENT
-// CUE-backed oracle it implements itself (internal/cuelitetest's
-// OraclePath, talking to cuelang.org/go directly, not this façade), and
-// asserts identical accept/reject outcomes and identical error field
-// paths. This façade's own delegation to CUE is deleted at the flip
-// (plan 240); the oracle is the harness's, not the façade's. Until a
-// method is flipped, both paths reduce to CUE, so the harness is a green
-// scaffold the later phases extend.
-//
-// Phase 0 (plan 236) exposes only the minimal surface the delegation
-// pattern, the differential harness, and the benchmark need: Compile,
-// CompileJSON, the Value methods Unify and Validate, the package-level
-// Errors accessor, and the path-tagged PathError. The per-surface
-// façade methods (ParsePath, LookupPath, String, Decode, Exists,
-// Fields, …) arrive in the phases that migrate each call site.
-//
-// # Value isolation and the interim context cost
-//
-// A cue.Value is tied to the *cue.Context it was built in, and CUE
-// v0.16.1 documents that values created from the same Context are not
-// safe for concurrent use, and that long-lived contexts can grow
-// unbounded. So each Compile/CompileJSON builds its own *cue.Context.
-// Independently compiled roots are therefore isolated from one another.
-//
-// Unify needs both operands in one context, and it gets there by
-// REBUILDING one side into the other's context. Whichever side still
-// retains source is the side rebuilt; the result then lives in — and is
-// NOT isolated from — the context of the side that was NOT rebuilt. Unify
-// tries the operand first (rebuild the operand into the receiver's
-// context, the common fresh-operand-against-a-root case) and otherwise
-// rebuilds the receiver into the operand's context. When BOTH sides are
-// derived results with no source, neither can be rebuilt and Unify
-// returns errCrossContext as a bottom.
-//
-// Two consequences follow for concurrent use, and they are the teachable
-// safe rule:
-//
-//   - A source-carrying Value used as the NON-rebuilt side has its context
-//     MUTATED by each cross-context Unify (the rebuilt operand is compiled
-//     INTO that context). So a compiled schema shared across goroutines —
-//     used as the receiver in schemaVal.Unify(dataVal) — must have external
-//     synchronization, or each goroutine must compile its own copy. Sharing
-//     one compiled Value across goroutines without locking is a data race
-//     under the same CUE v0.16.1 disclaimer.
-//   - Repeated cross-context Unify against ONE long-lived Value accumulates
-//     a compiled document in its context per call — CUE's documented
-//     long-lived-context growth. A benchmark that validates many documents
-//     against one cached schema therefore pays an N-dependent per-op cost.
-//
-// Both are interim costs of the CUE-backed phase. The in-house engine of
-// plan 218 erases them — a flipped Value is a context-free immutable
-// struct, shareable across goroutines and free of context growth —
-// without changing this API: Value stays a value type whose Unify takes
-// and returns a Value, so a bottom (⊥) absorbs cleanly in either
-// implementation.
 package cuelite
 
 import (
@@ -86,18 +15,18 @@ import (
 	cuejson "cuelang.org/go/encoding/json"
 )
 
-// Value is an immutable compiled CUE value behind the cuelite façade.
-// It is a value type: methods take and return Value by copy, so a
-// zero/bottom Value composes without a nil receiver. A Value compiled
-// by Compile or CompileJSON carries the compiled cue.Value and its
-// original source, so Unify can rebuild it inside another Value's
-// context when the two come from different roots. A Value carrying err
-// is a bottom (⊥): Unify with it yields a bottom, and Validate returns
-// the carried error. The zero Value (no compiled cue.Value, no source,
-// no error) is also a bottom: Validate reports it and Unify absorbs it,
-// so a caller that forgot to compile never triggers a nil-context
-// panic. Once the implementation is flipped to the in-house engine a
-// Value becomes a context-free struct; this API does not change.
+// Value is an immutable compiled CUE value. It is a value type:
+// methods take and return Value by copy, so a zero or bottom Value
+// composes without a nil receiver. A Value compiled by [Compile] or
+// [CompileJSON] retains its original source, so [Value.Unify] can
+// rebuild it inside another Value's context when the two come from
+// different roots.
+//
+// A Value carrying an error is a bottom (⊥): Unify with it yields a
+// bottom, and [Value.Validate] returns the carried error. The zero
+// Value (no compiled cue.Value, no source, no error) is also a bottom:
+// Validate reports it and Unify absorbs it, so a caller that forgot to
+// compile gets an error instead of a nil-context panic.
 type Value struct {
 	val cue.Value
 	// src is the retained source a cross-context Unify rebuilds the Value
@@ -138,10 +67,10 @@ func (v Value) isBottom() (error, bool) {
 	return nil, false
 }
 
-// Compile compiles a CUE source string into a Value. It is the façade
-// over cue.Context.CompileString. A syntactically invalid source or a
-// bottom value reports an error. The returned Value owns a fresh
-// *cue.Context.
+// Compile compiles a CUE source string into a [Value]. It is the
+// façade over cue.Context.CompileString. A syntactically invalid
+// source or a bottom value reports an error. The returned Value owns a
+// fresh *cue.Context.
 func Compile(src string) (Value, error) {
 	ctx := cuecontext.New()
 	val := ctx.CompileString(src)
@@ -151,33 +80,30 @@ func Compile(src string) (Value, error) {
 	return Value{val: val, src: src, hasSrc: true}, nil
 }
 
-// CompileJSON compiles a JSON document into a Value. It is the façade
-// over the JSON-data lift mdsmith uses to validate marshalled front
-// matter against a schema. The input must be strict JSON: arbitrary
-// CUE source (an unquoted key, an expression) is rejected, unlike a
-// raw CompileBytes.
+// CompileJSON compiles a JSON document into a [Value]. It is the
+// façade over the JSON-data lift mdsmith uses to validate marshalled
+// front matter against a schema. The input must be strict JSON:
+// arbitrary CUE source (an unquoted key, an expression) is rejected,
+// unlike a raw CompileBytes.
 //
-// Duplicate object keys are rejected outright, naming the offending
-// key. This is the strict-JSON no-duplicate-keys contract, and it is
-// the rationale the scanner and buildJSON cross-reference: CUE's JSON
-// lift instead UNIFIES same-named keys (mergeable or equal duplicates
-// compile to a phantom merged object, only conflicting ones error),
-// whereas real JSON consumers are last-wins, so cuelite enforces the
-// contract before the CUE lift rather than validating a value no JSON
-// reader would produce.
+// A duplicate object key is rejected outright, naming the offending
+// key. CUE's own JSON lift instead unifies same-named keys: mergeable
+// or equal duplicates compile to a phantom merged object that no
+// last-wins JSON reader would produce, and only conflicting ones
+// error. cuelite therefore enforces the no-duplicate contract before
+// the lift.
 //
 // Duplicate detection is best-effort on two edge inputs that defer to
 // the CUE lift's own UTF-8 handling: a document that is not valid
 // UTF-8, and a decoded key that contains U+FFFD (a lone-surrogate
 // escape such as "\ud800", or a literal "�"). Such keys forgo
-// scanner-level dup detection; a lone-surrogate key still errors at the
-// build (Extract or BuildExpr reports "invalid string: unmatched
-// surrogate pair"), and a literal-"�" duplicate is the only key shape
-// that escapes scanner detection: the CUE lift then unifies the two
-// same-named keys, so a CONFLICTING literal-"�" duplicate is still
-// rejected (the unify bottoms) while only a mergeable or equal one slips
-// through as a phantom merge — a key shape no front-matter marshaller
-// produces.
+// scanner-level duplicate detection. A lone-surrogate key still errors
+// at the build ("invalid string: unmatched surrogate pair"). A
+// literal-"�" duplicate is the only key shape that escapes the
+// scanner: the CUE lift then unifies the two same-named keys, so a
+// conflicting literal-"�" duplicate is still rejected, and only a
+// mergeable or equal one slips through as a phantom merge — a key
+// shape no front-matter marshaller produces.
 //
 // The returned Value owns a fresh *cue.Context.
 func CompileJSON(data []byte) (Value, error) {
@@ -395,21 +321,26 @@ var errCrossContext = stderrors.New(
 	"cannot unify two derived values from different contexts; " +
 		"unify a source-retaining Compile/CompileJSON value instead")
 
-// Unify returns the meet of v and o — the value satisfying both. It is
+// Unify returns the meet of v and o: the value satisfying both. It is
 // the façade over cue.Value.Unify. A bottom (⊥) operand absorbs: if
 // either v or o is a bottom (an error-carrying or zero Value), the
 // result carries that bottom, so a compile failure or an uninitialized
 // operand flows through a Unify chain instead of panicking.
 //
-// Unification needs both values in one context. Unify rebuilds WHICHEVER
-// side has retained source into the other's context: it first tries the
-// operand in the receiver's context (the common case — a fresh operand
-// against a root), and otherwise rebuilds the receiver into the operand's
-// context (the operand is a derived result but the receiver still carries
-// source). So order does not matter as long as at least one side retains
-// source. Only when NEITHER side has source — both are derived results in
-// different contexts — does Unify absorb as a bottom rather than vanishing
-// into an empty struct that would silently drop every merged constraint.
+// Unification needs both values in one context. Unify rebuilds
+// whichever side has retained source into the other side's context: it
+// first tries the operand in the receiver's context (the common case,
+// a fresh operand against a root), and otherwise rebuilds the receiver
+// into the operand's context. Order does not matter as long as at
+// least one side is a [Compile] or [CompileJSON] result. Only when
+// neither side retains source — both are derived results in different
+// contexts — does Unify absorb as a bottom rather than vanishing into
+// an empty struct that would silently drop every merged constraint.
+//
+// The result lives in the context of the side that was not rebuilt,
+// and it retains no source of its own. Each cross-context call
+// compiles the rebuilt operand into that context; the package
+// documentation describes the concurrency and memory consequences.
 func (v Value) Unify(o Value) Value {
 	if err, ok := v.isBottom(); ok {
 		return bottom(err)
@@ -436,29 +367,28 @@ func (v Value) Unify(o Value) Value {
 	return bottom(errCrossContext)
 }
 
-// Validate reports whether the value is concrete and free of conflicts,
-// mirroring cue.Value.Validate(cue.Concrete(true)). A value that
-// satisfies the schema returns nil. On any rejection it upholds one
-// invariant the whole consumer chain depends on:
+// Validate reports whether the value is concrete and free of
+// conflicts, mirroring cue.Value.Validate(cue.Concrete(true)). A value
+// that satisfies the schema returns nil. On any rejection it upholds
+// the invariant every consumer depends on:
 //
 //	Validate() != nil  ⇒  len(Errors(Validate())) ≥ 1
 //
-// — so a loop over Errors (the internal/schema validator emitting one
-// MDS020 diagnostic per failing field, the differential harness comparing
-// every rejected path) always emits at least one diagnostic for a failing
-// value and never silently accepts it. Two failure shapes feed that
-// invariant:
+// A loop over [Errors] therefore always emits at least one diagnostic
+// for a failing value and never silently accepts it. Two failure
+// shapes feed that invariant:
 //
-//   - A schema/data conflict returns one *PathError per offending leaf,
-//     each tagged with its field path, so callers see every rejection and
-//     not only the first.
+//   - A schema/data conflict returns one [*PathError] per offending
+//     leaf, each tagged with its field path, so callers see every
+//     rejection and not only the first.
 //   - A bottom Value — an error-carrying or zero Value, including a
-//     replayed compile error or a cross-context derived bottom — returns a
-//     single *PathError with an empty path carrying the bottom's message,
-//     rather than a bare Go error that Errors would flatten to nil.
+//     replayed compile error or a cross-context derived bottom —
+//     returns a single [*PathError] with an empty path carrying the
+//     bottom's message, rather than a bare Go error that Errors would
+//     flatten to nil.
 //
-// The concrete shape of a multi-leaf result is unspecified: enumerate the
-// per-field failures with the package-level Errors accessor (or
+// The concrete shape of a multi-leaf result is unspecified: enumerate
+// the per-field failures with the package-level [Errors] accessor (or
 // errors.As), never by hand-traversing the join.
 func (v Value) Validate() error {
 	if err, ok := v.isBottom(); ok {

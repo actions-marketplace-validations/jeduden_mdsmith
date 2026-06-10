@@ -10,14 +10,15 @@ import (
 // at which it occurred. The path mirrors cuelang.org/go/cue/errors
 // Error.Path() — the dotted route into the data tree where the value
 // failed its constraint (for example []string{"meta", "status"}). A
-// nil path marks an error not associated with a specific leaf.
+// nil path marks an error not associated with a specific leaf, such as
+// a bottom [Value]'s compile failure.
 //
-// A PathError may wrap the underlying error it was built from — the CUE
-// validation error for a per-leaf failure, or a bottom Value's cause —
-// reachable through Unwrap so errors.Is/As keep working against the
-// original error or a sentinel. Its own message, not the wrapped cause,
-// is the rejection; Errors treats a PathError as a leaf and does not
-// descend into the wrapped error.
+// A PathError may wrap the underlying error it was built from — the
+// CUE validation error for a per-leaf failure, or a bottom Value's
+// cause — reachable through [PathError.Unwrap] so errors.Is/As keep
+// working against the original error or a sentinel. Its own message,
+// not the wrapped cause, is the rejection; [Errors] treats a PathError
+// as a leaf and does not descend into the wrapped error.
 type PathError struct {
 	path    []string
 	msg     string
@@ -45,14 +46,13 @@ func (e *PathError) Unwrap() error {
 
 // Path returns the field path the error is tagged with, or nil when
 // the error is not associated with a specific leaf. It mirrors
-// cue/errors Error.Path() so the differential harness can compare
-// in-house and CUE-backed error locations field by field.
+// cue/errors Error.Path().
 //
 // The returned slice is a fresh copy, never the error's internal slice
 // (matching cue/errors, which clones in Error.Path): a caller that
-// mutates it — the harness collects leaf paths into its own structures —
-// cannot corrupt a later Error() render. slices.Clone(nil) is nil, so an
-// unpathed error still returns nil rather than an empty slice.
+// mutates the copy cannot corrupt a later Error() render.
+// slices.Clone(nil) is nil, so an unpathed error still returns nil
+// rather than an empty slice.
 func (e *PathError) Path() []string {
 	return slices.Clone(e.path)
 }
@@ -66,16 +66,14 @@ func (e *PathError) Error() string {
 	return strings.Join(e.path, ".") + ": " + e.msg
 }
 
-// Errors enumerates the per-field failures carried by an error returned
-// from Validate. It is THE way a consumer reads every rejecting leaf,
-// and it does not depend on the concrete shape Validate returns — which
-// Validate's own doc leaves unspecified. Whatever that shape is (today a
-// bare *PathError for a single failing field, an errors.Join of
-// *PathErrors for several, a path-free *PathError for a bottom), Errors
-// flattens it into one slice so callers (the internal/schema validator
-// emitting one MDS020 diagnostic per field, the differential harness
-// comparing every rejected path) iterate uniformly without type-switching
-// on the result. It mirrors cuelang.org/go/cue/errors.Errors.
+// Errors enumerates the per-field failures carried by an error
+// returned from [Value.Validate]. It does not depend on the concrete
+// shape Validate returns, which Validate's own doc leaves unspecified.
+// Whatever that shape is (today a bare [*PathError] for a single
+// failing field, an errors.Join of *PathErrors for several, a
+// path-free *PathError for a bottom), Errors flattens it into one
+// slice, so callers iterate uniformly without type-switching on the
+// result. It mirrors cuelang.org/go/cue/errors.Errors.
 //
 // Errors is a full error-tree walk: it descends through both join
 // wrappers (Unwrap() []error) and single wrappers (Unwrap() error),
@@ -83,13 +81,13 @@ func (e *PathError) Error() string {
 // hidden behind a fmt.Errorf("%w", …) wrapper, or a join nested inside
 // such a wrapper, is therefore reported in full — not truncated to the
 // first leaf an errors.As would stop at. A nil error, or an error tree
-// carrying no *PathError, yields nil — never a non-nil empty slice — so
-// a caller can range over the result unconditionally.
+// carrying no *PathError, yields nil — never a non-nil empty slice —
+// so a caller can range over the result unconditionally.
 //
-// This walk underpins the invariant documented on Validate: every
-// non-nil error Validate returns decomposes to at least one *PathError,
-// so a consumer loop over Errors emits at least one diagnostic for any
-// failing value.
+// This walk underpins the invariant documented on [Value.Validate]:
+// every non-nil error Validate returns decomposes to at least one
+// *PathError, so a consumer loop over Errors emits at least one
+// diagnostic for any failing value.
 func Errors(err error) []*PathError {
 	if err == nil {
 		return nil
