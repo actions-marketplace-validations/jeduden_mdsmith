@@ -49,7 +49,7 @@ jobs:
           mdsmith merge-driver ci-install
           mdsmith pre-merge-commit install
 
-      - uses: jeduden/merge-queue-action@389ad414544a693f6c98e0dfdca349007b64d0df #v0.7.8
+      - uses: jeduden/merge-queue-action@2edfb80a17f2f70481d9e153428c17448ff6d120 #v0.7.9
         with:
           token: ${{ secrets.MERGE_QUEUE_TOKEN }}
           ci_workflow: .github/workflows/ci.yml
