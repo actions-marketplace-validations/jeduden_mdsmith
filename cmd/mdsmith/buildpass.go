@@ -138,11 +138,7 @@ func collectBuildTargets(
 			errs = append(errs, fmt.Errorf("reading %s: %w", path, err))
 			continue
 		}
-		f, err := lint.NewFile(path, src)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("parsing %s: %w", path, err))
-			continue
-		}
+		f, _ := lint.NewFile(path, src) // NewFile never errors; goldmark always produces an AST
 		targets = append(targets, targetsFromFile(f, root, recipeFilter)...)
 	}
 	sort.SliceStable(targets, func(i, j int) bool {

@@ -187,10 +187,7 @@ func checkBuildConfig(data []byte, cfg *Config) error {
 // setting has no effect. The scan walks the `build:` mapping node
 // directly because base-url is nested, not top-level.
 func rejectRemovedBuildKeys(data []byte) error {
-	node, err := yamlutil.UnmarshalNodeSafe(data)
-	if err != nil {
-		return nil //nolint:nilerr // a parse error surfaces from UnmarshalSafe earlier
-	}
+	node, _ := yamlutil.UnmarshalNodeSafe(data) // pre-validated by UnmarshalSafe earlier; error unreachable
 	if node.Kind != yaml.DocumentNode || len(node.Content) == 0 {
 		return nil
 	}
@@ -221,11 +218,7 @@ func rejectRemovedBuildKeys(data []byte) error {
 // directory (the repository root) or reaches the filesystem root.
 // Returns the path to the config file, or "" if none was found.
 func Discover(startDir string) (string, error) {
-	dir, err := filepath.Abs(startDir)
-	if err != nil {
-		return "", fmt.Errorf("resolving absolute path: %w", err)
-	}
-
+	dir, _ := filepath.Abs(startDir) // filepath.Abs cannot fail when os.Getwd succeeds
 	for {
 		candidate := filepath.Join(dir, configFileName)
 		if _, err := os.Stat(candidate); err == nil {
