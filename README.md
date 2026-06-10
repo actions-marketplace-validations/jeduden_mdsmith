@@ -54,6 +54,9 @@ Together they keep a whole docs tree consistent as it grows, so
 the same Markdown can drive your README, your docs site, and
 downstream pipelines.
 
+Already on markdownlint? `mdsmith init --from-markdownlint`
+converts your config and notes whatever needs review.
+
 One rule engine runs everywhere you work: in CI, in your editor
 through `mdsmith lsp`, and in your coding agent through a Claude
 Code plugin. The check that blocks a merge is the same one you see
