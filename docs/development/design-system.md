@@ -85,9 +85,11 @@ viewport.
   dropdowns, `--shadow-lg` modals. No glow and no colored
   shadows.
 - `--shadow-float` (and `-sm` for inline doc screenshots)
-  is the one big-shadow moment: terminal mocks and product
-  screenshots floating on a `.shot-stage` cell, via `.shot`
-  on the window. Never on buttons, cards, or menus.
+  is the one big-shadow moment, reserved for terminal mocks
+  and product screenshots. The hero demo and the feature
+  artifact frames apply the token directly; new showcases
+  put `.shot` on the window inside a `.shot-stage` cell.
+  Never on buttons, cards, or menus.
 
 ## Components
 

@@ -1668,8 +1668,8 @@ a.install-label:hover { color: var(--forge-300); text-decoration: underline; }
   border: 1px solid var(--steel-800);
   border-radius: var(--radius-md);
   overflow: hidden;
-  /* Screenshot float tier — the hero demo is a product screenshot
-     on the hero stage, not UI chrome. */
+  /* Screenshot float tier — reserved for screenshots, never UI
+     chrome (see docs/development/design-system.md). */
   box-shadow: var(--shadow-float);
 }
 .hero-demo-bar {
