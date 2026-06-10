@@ -1,7 +1,7 @@
 ---
 id: 246
 title: "Typed block projection and full-document extract"
-status: "🔲"
+status: "🔳"
 summary: >-
   A block-level analogue of the inline-span grammar: a section
   projects its whole body as a typed, recursive `blocks` list,
@@ -100,7 +100,7 @@ contract instead of prose.
 
 ## Tasks
 
-1. Implement the block walker in
+1. [x] Implement the block walker in
    [`internal/extract`](../internal/extract) over the grammar
    table above, reusing plan 244's item shape and plan 245's
    `columns`/`rows` shape; paragraphs default to `text`.

@@ -164,7 +164,7 @@ footer: |
 | 243        | ✅     | sonnet | [`mdsmith extract` projects the document H1 as `title`](plan/243_extract-h1-title.md)                                                   |
 | 244        | ✅     | opus   | [Structured list projection; fix nested-item text corruption](plan/244_structured-list-projection.md)                                   |
 | 245        | ✅     | sonnet | [Table projection modes: `records` and `rows`](plan/245_table-projection-modes.md)                                                      |
-| 246        | 🔲     | opus   | [Typed block projection and full-document extract](plan/246_block-projection-full-extract.md)                                           |
+| 246        | 🔳     | opus   | [Typed block projection and full-document extract](plan/246_block-projection-full-extract.md)                                           |
 | 2606022122 | ✅     | sonnet | [Review and centralize YAML handling](plan/2606022122_yaml-handling-review.md)                                                          |
 | 2606022123 | ✅     | sonnet | [Catalog directive — accept `..` globs within project root](plan/2606022123_catalog-dotdot-globs.md)                                    |
 | 2606022124 | ✅     | opus   | [Section schema — unify entry shape under `heading:` discriminator](plan/2606022124_schema-entry-unification.md)                        |
