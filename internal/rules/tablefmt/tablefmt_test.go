@@ -59,61 +59,20 @@ func TestSplitRowBytes_EscapedPipe(t *testing.T) {
 		input string
 		want  []string
 	}{
-		{
-			desc:  "single escaped pipe in middle of cell",
-			input: `| a \| b | c |`,
-			want:  []string{`a \| b`, "c"},
-		},
-		{
-			desc:  "multiple escaped pipes in one cell",
-			input: `| a \| b \| c | d |`,
-			want:  []string{`a \| b \| c`, "d"},
-		},
-		{
-			desc:  "escaped pipe at start of cell content",
-			input: `| \| text | other |`,
-			want:  []string{`\| text`, "other"},
-		},
-		{
-			desc:  "escaped pipe at end of cell content",
-			input: `| text \| | other |`,
-			want:  []string{`text \|`, "other"},
-		},
-		{
-			desc:  "double backslash before pipe: second \\ escapes the | (\\| is not a delimiter)",
-			input: `| a \\| b |`,
-			want:  []string{`a \\| b`},
-		},
-		{
-			desc:  "escaped pipe between real pipes in multi-cell row",
-			input: `| a | b \| c | d |`,
-			want:  []string{"a", `b \| c`, "d"},
-		},
-		{
-			desc:  "only an escaped pipe — single cell, no real delimiter",
-			input: `| \| |`,
-			want:  []string{`\|`},
-		},
-		{
-			desc:  "escaped pipe in every cell",
-			input: `| a \| x | b \| y | c \| z |`,
-			want:  []string{`a \| x`, `b \| y`, `c \| z`},
-		},
-		{
-			desc:  "backslash not followed by pipe is kept verbatim",
-			input: `| a\b | c |`,
-			want:  []string{`a\b`, "c"},
-		},
-		{
-			desc:  "trailing backslash (no following pipe) kept verbatim",
-			input: `| a\ | b |`,
-			want:  []string{`a\`, "b"},
-		},
+		{"single \\| in cell middle", `| a \| b | c |`, []string{`a \| b`, "c"}},
+		{"multiple \\| in one cell", `| a \| b \| c | d |`, []string{`a \| b \| c`, "d"}},
+		{"\\| at cell start", `| \| text | other |`, []string{`\| text`, "other"}},
+		{"\\| at cell end", `| text \| | other |`, []string{`text \|`, "other"}},
+		{"\\\\| second \\ escapes the |", `| a \\| b |`, []string{`a \\| b`}},
+		{"\\| between real pipes in multi-cell row", `| a | b \| c | d |`, []string{"a", `b \| c`, "d"}},
+		{"only \\| — single cell no real delimiter", `| \| |`, []string{`\|`}},
+		{"\\| in every cell", `| a \| x | b \| y | c \| z |`, []string{`a \| x`, `b \| y`, `c \| z`}},
+		{"backslash not before pipe kept verbatim", `| a\b | c |`, []string{`a\b`, "c"}},
+		{"trailing backslash no following pipe", `| a\ | b |`, []string{`a\`, "b"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
-			got := splitRowBytes([]byte(tt.input))
-			assertCells(t, tt.want, got)
+			assertCells(t, tt.want, splitRowBytes([]byte(tt.input)))
 		})
 	}
 }
