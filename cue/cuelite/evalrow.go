@@ -419,22 +419,48 @@ func stringRepeatOperands(l, r *engineValue) (string, int64, bool) {
 	return "", 0, false
 }
 
-// evalRowAdd applies `+` to two evaluated operands: string+string is
-// concatenation, number+number is addition (kept int when both are int, else
-// float). A mixed string/number is an invalid operation, matching CUE.
+// evalRowAdd applies `+` to two evaluated operands. string+string is
+// concatenation — the only `+` the real row corpus uses. int+int is a CHECKED
+// addition: CUE is arbitrary-precision, so an int64 overflow is reported as
+// out-of-subset rather than silently wrapping (consistent with the big-literal
+// policy in compileBasicLit). FLOAT arithmetic — any `+` with a float operand —
+// is rejected loudly: the engine holds only a float64, so `0.1 + 0.2` would
+// render float64 noise where CUE keeps a decimal, and the real corpus never
+// adds floats (the documented plan-239 divergence; display-interpolation of a
+// float VALUE is unaffected, it is only float `+` that rejects). A mixed
+// string/number is an invalid operation, matching CUE.
 func evalRowAdd(l, r *engineValue) (*engineValue, error) {
 	if l.kind == kString && r.kind == kString {
 		return &engineValue{kind: kString, str: l.str + r.str}, nil
 	}
-	ln, lok := l.numericValue()
-	rn, rok := r.numericValue()
-	if lok && rok {
-		if l.kind == kInt && r.kind == kInt {
-			return &engineValue{kind: kInt, i: l.i + r.i}, nil
+	if l.kind == kInt && r.kind == kInt {
+		sum, ok := checkedAddInt64(l.i, r.i)
+		if !ok {
+			return nil, fmt.Errorf("cuelite: unsupported integer overflow in %d + %d (big integers are not in the subset)", l.i, r.i)
 		}
-		return &engineValue{kind: kFloat, f: ln + rn}, nil
+		return &engineValue{kind: kInt, i: sum}, nil
+	}
+	if l.kind == kFloat || r.kind == kFloat {
+		_, lok := l.numericValue()
+		_, rok := r.numericValue()
+		if lok && rok {
+			return nil, fmt.Errorf("cuelite: unsupported float arithmetic (float + is not in the subset)")
+		}
 	}
 	return nil, fmt.Errorf("cuelite: invalid operation: cannot add %s and %s", l.describe(), r.describe())
+}
+
+// checkedAddInt64 adds two int64 values, returning ok=false on overflow or
+// underflow. CUE's integers are arbitrary-precision, so a sum the int64 engine
+// cannot represent is out of the supported subset rather than a silent wrap.
+func checkedAddInt64(a, b int64) (int64, bool) {
+	sum := a + b
+	// Overflow occurred iff the operands share a sign and the sum's sign differs
+	// from theirs.
+	if (a > 0 && b > 0 && sum < 0) || (a < 0 && b < 0 && sum >= 0) {
+		return 0, false
+	}
+	return sum, true
 }
 
 // evalRowSelector evaluates a field selection (`fm.id`, `m.name`): the base

@@ -118,9 +118,11 @@ func TestRender_NumberAddition(t *testing.T) {
 }
 
 func TestRender_FloatAddition(t *testing.T) {
+	// Float `+` is rejected loudly as out-of-subset (item 8): the engine holds
+	// only float64 and would diverge from CUE's decimal rendering.
 	_, err := renderRow(t, `1.5 + 2`, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "concrete string")
+	assert.Contains(t, err.Error(), "unsupported float arithmetic")
 }
 
 func TestRender_StructIndexNonStringIsError(t *testing.T) {

@@ -472,3 +472,50 @@ func TestRender_MultilineInterpolationMultibyte(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "héllo Z", got)
 }
+
+// --- item 7: int addition overflow is a checked, loud rejection ---
+
+func TestRender_IntAdditionOverflowIsRejected(t *testing.T) {
+	// CUE is arbitrary-precision; the in-house int64 engine rejects an add that
+	// would overflow rather than silently wrapping.
+	_, err := renderRow(t, `"\(x + 1)"`, map[string]any{"x": int64(9223372036854775807)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported")
+}
+
+func TestRender_IntAdditionUnderflowIsRejected(t *testing.T) {
+	_, err := renderRow(t, `"\(x + y)"`, map[string]any{
+		"x": int64(-9223372036854775808), "y": int64(-1),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported")
+}
+
+func TestRender_IntAdditionInRangeStillWorks(t *testing.T) {
+	got, err := renderRow(t, `"\(x + 1)"`, map[string]any{"x": 41})
+	require.NoError(t, err)
+	assert.Equal(t, "42", got)
+}
+
+// --- item 8: float arithmetic is a loud out-of-subset rejection ---
+
+func TestRender_FloatArithmeticIsRejected(t *testing.T) {
+	// 0.1 + 0.2 renders float64 noise vs CUE's decimal; the engine rejects
+	// float `+` loudly rather than diverge.
+	_, err := renderRow(t, `"\(0.1 + 0.2)"`, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported")
+}
+
+func TestRender_IntPlusFloatIsRejected(t *testing.T) {
+	_, err := renderRow(t, `"\(1 + 0.5)"`, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported")
+}
+
+func TestRender_FloatDisplayInterpolationStillWorks(t *testing.T) {
+	// Display-interpolation of a float VALUE (not arithmetic) is unchanged.
+	got, err := renderRow(t, `"w=\(weight)"`, map[string]any{"weight": 1.5})
+	require.NoError(t, err)
+	assert.Equal(t, "w=1.5", got)
+}
