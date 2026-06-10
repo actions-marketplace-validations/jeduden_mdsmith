@@ -25,6 +25,15 @@ asterisks, not `**`). The hero template splits the line on that
 span, and `sync-messaging --check` fails if the span is missing
 or doubled.
 
+The Lead stays category + promise, with no rule-area or feature
+enumeration: the homepage renders the concrete scope (style,
+readability, structure, cross-file integrity, auto-fix) in the
+positioning statement directly below the hero, so any
+enumeration in the Lead reads twice on one screen. The fuller
+enumeration lives in the Tagline, whose surfaces (package
+registries, meta description, footer) never sit next to the
+statement.
+
 ## Headline
 
 Mark*down*, smithed.
@@ -37,10 +46,7 @@ Markdown as a single source of truth
 
 mdsmith is a Markdown linter and formatter that keeps your
 writing neat and consistent — fast enough to stay out of your
-way. Auto-fix on save, instant navigation, cross-file integrity,
-and generated sections that keep derived data in sync, so the
-same Markdown drives docs, READMEs, and downstream pipelines
-without drift.
+way.
 
 ## Tagline
 

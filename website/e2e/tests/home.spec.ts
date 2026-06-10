@@ -48,6 +48,11 @@ test.describe("homepage positioning", () => {
     const lead = page.locator(".hero-lead");
     await expect(lead).toBeVisible();
     await expect(lead).toContainText("Markdown linter and formatter");
+    // The lead's job is category + promise; the concrete scope
+    // ("cross-file integrity", auto-fix, …) belongs solely to the
+    // positioning statement right below it. Guard against the copy
+    // drifting back into a feature enumeration that duplicates it.
+    await expect(lead).not.toContainText("cross-file integrity");
   });
 
   test("hero links markdownlint users to the migration guide", async ({
