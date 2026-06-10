@@ -25,9 +25,9 @@ kinds:
 	cfg := loadFromString(t, yml)
 	require.Contains(t, cfg.Kinds, "rfc")
 	body := cfg.Kinds["rfc"]
-	require.NotNil(t, body.Schema)
-	require.Contains(t, body.Schema, "frontmatter")
-	require.Contains(t, body.Schema, "sections")
+	require.NotNil(t, body.Schema.Map())
+	require.Contains(t, body.Schema.Map(), "frontmatter")
+	require.Contains(t, body.Schema.Map(), "sections")
 }
 
 // TestKindRejectsInlineMapInRules rejects a kind whose
@@ -119,7 +119,7 @@ func TestEffectiveInjectsInlineSchema(t *testing.T) {
 			"required-structure": {Enabled: true},
 		},
 		Kinds: map[string]KindBody{
-			"rfc": {Schema: inline},
+			"rfc": {Schema: inlineSchemaRef(inline)},
 		},
 		KindAssignment: []KindAssignmentEntry{
 			{Glob: []string{"docs/rfcs/*.md"}, Kinds: []string{"rfc"}},
@@ -148,9 +148,9 @@ func TestEffectiveInjectsInlineSchemaSourcePath(t *testing.T) {
 		Rules: map[string]RuleCfg{"required-structure": {Enabled: true}},
 		Kinds: map[string]KindBody{
 			"rfc": {
-				Schema: map[string]any{
+				Schema: inlineSchemaRef(map[string]any{
 					"sections": []any{map[string]any{"heading": "Overview"}},
-				},
+				}),
 				SourcePath: "/work/.mdsmith.yml",
 			},
 		},
@@ -181,9 +181,9 @@ func TestEffectiveComposesSchemaSourcesAcrossKinds(t *testing.T) {
 					"schema": "schemas/a.md",
 				}},
 			}},
-			"b": {Schema: map[string]any{
+			"b": {Schema: inlineSchemaRef(map[string]any{
 				"sections": []any{map[string]any{"heading": "Overview"}},
-			}},
+			})},
 		},
 		KindAssignment: []KindAssignmentEntry{
 			{Glob: []string{"*.md"}, Kinds: []string{"a", "b"}},
@@ -215,12 +215,12 @@ func TestValidateKindAllowsInlineWithoutFileSchemaSetting(t *testing.T) {
 	}{
 		{
 			name: "inline only",
-			body: KindBody{Schema: map[string]any{"sections": []any{}}},
+			body: KindBody{Schema: inlineSchemaRef(map[string]any{"sections": []any{}})},
 		},
 		{
 			name: "inline plus unrelated rule",
 			body: KindBody{
-				Schema: map[string]any{"sections": []any{}},
+				Schema: inlineSchemaRef(map[string]any{"sections": []any{}}),
 				Rules: map[string]RuleCfg{
 					"line-length": {Enabled: true},
 				},
@@ -229,7 +229,7 @@ func TestValidateKindAllowsInlineWithoutFileSchemaSetting(t *testing.T) {
 		{
 			name: "inline plus required-structure without schema key",
 			body: KindBody{
-				Schema: map[string]any{"sections": []any{}},
+				Schema: inlineSchemaRef(map[string]any{"sections": []any{}}),
 				Rules: map[string]RuleCfg{
 					"required-structure": {Enabled: true, Settings: map[string]any{
 						"placeholders": []any{"foo"},
@@ -240,7 +240,7 @@ func TestValidateKindAllowsInlineWithoutFileSchemaSetting(t *testing.T) {
 		{
 			name: "inline plus required-structure with empty schema",
 			body: KindBody{
-				Schema: map[string]any{"sections": []any{}},
+				Schema: inlineSchemaRef(map[string]any{"sections": []any{}}),
 				Rules: map[string]RuleCfg{
 					"required-structure": {Enabled: true, Settings: map[string]any{
 						"schema": "",
@@ -266,7 +266,7 @@ func TestEmptyInlineSchemaDoesNotTriggerMutex(t *testing.T) {
 	cfg := &Config{
 		Kinds: map[string]KindBody{
 			"k": {
-				Schema: map[string]any{}, // empty inline source
+				Schema: inlineSchemaRef(map[string]any{}), // empty inline source
 				Rules: map[string]RuleCfg{
 					"required-structure": {Enabled: true, Settings: map[string]any{
 						"schema": "schemas/k.md",
@@ -399,9 +399,9 @@ func TestTranslateLayerSettings_NilSettingsPassthrough(t *testing.T) {
 // lands in schema-sources.
 func TestKindLayerRules_InlineSchemaWithoutPathPattern(t *testing.T) {
 	body := KindBody{
-		Schema: map[string]any{
+		Schema: inlineSchemaRef(map[string]any{
 			"sections": []any{map[string]any{"heading": "X"}},
-		},
+		}),
 		// PathPattern intentionally empty.
 	}
 	out := kindLayerRules("k", body, nil)
@@ -468,7 +468,7 @@ func TestEmptyInlineSchemaIsNoOp(t *testing.T) {
 					"schema": "schemas/a.md",
 				}},
 			}},
-			"b": {Schema: map[string]any{}}, // empty — should be ignored
+			"b": {Schema: inlineSchemaRef(map[string]any{})}, // empty — should be ignored
 		},
 		KindAssignment: []KindAssignmentEntry{
 			{Glob: []string{"*.md"}, Kinds: []string{"a", "b"}},
@@ -493,9 +493,9 @@ func TestEmptyInlineSchemaIsNoOp(t *testing.T) {
 func TestInlineSchemaMarksRequiredStructureExplicit(t *testing.T) {
 	cfg := &Config{
 		Kinds: map[string]KindBody{
-			"k": {Schema: map[string]any{
+			"k": {Schema: inlineSchemaRef(map[string]any{
 				"sections": []any{map[string]any{"heading": "X"}},
-			}},
+			})},
 		},
 		KindAssignment: []KindAssignmentEntry{
 			{Glob: []string{"*.md"}, Kinds: []string{"k"}},
@@ -544,9 +544,9 @@ func TestEffectiveInlineSchemaInjectsSourceEntryWithoutPriorRule(t *testing.T) {
 	cfg := &Config{
 		Rules: map[string]RuleCfg{"line-length": {Enabled: true}},
 		Kinds: map[string]KindBody{
-			"k": {Schema: map[string]any{
+			"k": {Schema: inlineSchemaRef(map[string]any{
 				"sections": []any{map[string]any{"heading": "X"}},
-			}},
+			})},
 		},
 		KindAssignment: []KindAssignmentEntry{
 			{Glob: []string{"*.md"}, Kinds: []string{"k"}},
@@ -572,9 +572,9 @@ func TestEffectiveInlineSchemaSourceSurvivesNilSettings(t *testing.T) {
 		},
 		ExplicitRules: map[string]bool{"required-structure": true},
 		Kinds: map[string]KindBody{
-			"k": {Schema: map[string]any{
+			"k": {Schema: inlineSchemaRef(map[string]any{
 				"sections": []any{map[string]any{"heading": "X"}},
-			}},
+			})},
 		},
 		KindAssignment: []KindAssignmentEntry{
 			{Glob: []string{"*.md"}, Kinds: []string{"k"}},
@@ -662,9 +662,9 @@ func TestEffectiveComposesInlineThenFileSources(t *testing.T) {
 			"required-structure": {Enabled: true},
 		},
 		Kinds: map[string]KindBody{
-			"a": {Schema: map[string]any{
+			"a": {Schema: inlineSchemaRef(map[string]any{
 				"sections": []any{map[string]any{"heading": "Overview"}},
-			}},
+			})},
 			"b": {Rules: map[string]RuleCfg{
 				"required-structure": {Enabled: true, Settings: map[string]any{
 					"schema": "schemas/b.md",

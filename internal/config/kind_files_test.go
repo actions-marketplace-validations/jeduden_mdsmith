@@ -58,8 +58,8 @@ rules:
 	dk := got["audit-log"]
 	assert.Equal(t, "docs/**/*.md", dk.body.PathPattern)
 	assert.Equal(t, 600, dk.body.Rules["max-file-length"].Settings["max"])
-	require.NotNil(t, dk.body.Schema)
-	assert.Contains(t, dk.body.Schema, "frontmatter")
+	require.NotNil(t, dk.body.Schema.Map())
+	assert.Contains(t, dk.body.Schema.Map(), "frontmatter")
 	assert.Equal(t,
 		filepath.Join(dir, ".mdsmith", "kinds", "audit-log.yaml"),
 		dk.sourcePath)

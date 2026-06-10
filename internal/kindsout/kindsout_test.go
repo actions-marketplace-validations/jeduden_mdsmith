@@ -112,14 +112,14 @@ func TestMakeBodyJSON_IncludesPathPattern(t *testing.T) {
 // inheritance is auditable without re-reading every schema.
 func TestWriteBodyText_RendersExtendsChain(t *testing.T) {
 	kinds := map[string]config.KindBody{
-		"rfc-base": {Schema: map[string]any{"frontmatter": map[string]any{
+		"rfc-base": {Schema: config.InlineSchema(map[string]any{"frontmatter": map[string]any{
 			"id": `=~"^RFC-[0-9]{4}$"`,
-		}}},
+		}})},
 		"rfc-ratified": {
 			Extends: "rfc-base",
-			Schema: map[string]any{"frontmatter": map[string]any{
+			Schema: config.InlineSchema(map[string]any{"frontmatter": map[string]any{
 				"status": `"ratified"`,
-			}},
+			}}),
 		},
 	}
 	var buf bytes.Buffer
@@ -139,7 +139,7 @@ func TestWriteBodyText_RendersExtendsChain(t *testing.T) {
 // in child-first order.
 func TestWriteBodyText_RendersExtendsChainMultiHop(t *testing.T) {
 	kinds := map[string]config.KindBody{
-		"a": {Schema: map[string]any{"frontmatter": map[string]any{"a": "string"}}},
+		"a": {Schema: config.InlineSchema(map[string]any{"frontmatter": map[string]any{"a": "string"}})},
 		"b": {Extends: "a"},
 		"c": {Extends: "b"},
 	}
@@ -155,7 +155,7 @@ func TestWriteBodyText_RendersExtendsChainMultiHop(t *testing.T) {
 // header lines.
 func TestWriteBodyText_NoExtendsOmitsHeader(t *testing.T) {
 	kinds := map[string]config.KindBody{
-		"plan": {Schema: map[string]any{"filename": "plan-*.md"}},
+		"plan": {Schema: config.InlineSchema(map[string]any{"filename": "plan-*.md"})},
 	}
 	var buf bytes.Buffer
 	require.NoError(t, WriteBodyText(&buf, "plan", kinds["plan"], kinds))
@@ -168,14 +168,14 @@ func TestWriteBodyText_NoExtendsOmitsHeader(t *testing.T) {
 // shape: extends + chain + per-leaf provenance.
 func TestMakeBodyJSON_PopulatesExtendsAndProvenance(t *testing.T) {
 	kinds := map[string]config.KindBody{
-		"rfc-base": {Schema: map[string]any{"frontmatter": map[string]any{
+		"rfc-base": {Schema: config.InlineSchema(map[string]any{"frontmatter": map[string]any{
 			"id": `=~"^RFC-[0-9]{4}$"`,
-		}}},
+		}})},
 		"rfc-ratified": {
 			Extends: "rfc-base",
-			Schema: map[string]any{"frontmatter": map[string]any{
+			Schema: config.InlineSchema(map[string]any{"frontmatter": map[string]any{
 				"status": `"ratified"`,
-			}},
+			}}),
 		},
 	}
 	out := MakeBodyJSON("rfc-ratified", kinds["rfc-ratified"], kinds)
@@ -204,12 +204,12 @@ func TestMakeBodyJSON_NilKindsMapOmitsExtendsMetadata(t *testing.T) {
 // the writer-error tests so each test isn't a long inline literal.
 func extendsKindsForTest() map[string]config.KindBody {
 	return map[string]config.KindBody{
-		"base": {Schema: map[string]any{"frontmatter": map[string]any{
+		"base": {Schema: config.InlineSchema(map[string]any{"frontmatter": map[string]any{
 			"id": "string",
-		}}},
-		"child": {Extends: "base", Schema: map[string]any{
+		}})},
+		"child": {Extends: "base", Schema: config.InlineSchema(map[string]any{
 			"frontmatter": map[string]any{"status": `"ratified"`},
-		}},
+		})},
 	}
 }
 
@@ -263,12 +263,12 @@ func TestWriteBodyText_EffectiveFrontmatterLeafWriteError(t *testing.T) {
 // the renderer treats that as "no leaves to report".
 func TestEffectiveFrontmatterLeaves_ResolverErrorReturnsNil(t *testing.T) {
 	kinds := map[string]config.KindBody{
-		"a": {Extends: "b", Schema: map[string]any{"frontmatter": map[string]any{
+		"a": {Extends: "b", Schema: config.InlineSchema(map[string]any{"frontmatter": map[string]any{
 			"x": "string",
-		}}},
-		"b": {Extends: "a", Schema: map[string]any{"frontmatter": map[string]any{
+		}})},
+		"b": {Extends: "a", Schema: config.InlineSchema(map[string]any{"frontmatter": map[string]any{
 			"y": "string",
-		}}},
+		}})},
 	}
 	out := effectiveFrontmatterLeaves(kinds, "a")
 	assert.Nil(t, out)
@@ -279,7 +279,7 @@ func TestEffectiveFrontmatterLeaves_ResolverErrorReturnsNil(t *testing.T) {
 // frontmatter keys contributes nothing to the audit list.
 func TestEffectiveFrontmatterLeaves_NoFrontmatterReturnsNil(t *testing.T) {
 	kinds := map[string]config.KindBody{
-		"a": {Schema: map[string]any{"filename": "x.md"}},
+		"a": {Schema: config.InlineSchema(map[string]any{"filename": "x.md"})},
 	}
 	out := effectiveFrontmatterLeaves(kinds, "a")
 	assert.Nil(t, out)
@@ -302,7 +302,7 @@ func TestWriteExtendsHeader_NilKindsReturnsAfterExtendsLine(t *testing.T) {
 // nil without writing anything.
 func TestWriteEffectiveFrontmatter_EmptyLeavesNoOutput(t *testing.T) {
 	kinds := map[string]config.KindBody{
-		"a": {Schema: map[string]any{"filename": "x.md"}},
+		"a": {Schema: config.InlineSchema(map[string]any{"filename": "x.md"})},
 	}
 	var buf bytes.Buffer
 	require.NoError(t, writeEffectiveFrontmatter(&buf, kinds, "a"))

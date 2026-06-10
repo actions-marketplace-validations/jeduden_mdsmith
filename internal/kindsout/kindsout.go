@@ -148,7 +148,7 @@ func frontmatterKeyOwners(
 	for i := len(chain) - 1; i >= 0; i-- {
 		k := chain[i]
 		body := kinds[k]
-		fm, _ := body.Schema["frontmatter"].(map[string]any)
+		fm, _ := body.Schema.Map()["frontmatter"].(map[string]any)
 		for key := range fm {
 			owners[key] = k
 		}

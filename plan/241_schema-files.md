@@ -1,7 +1,7 @@
 ---
 id: 241
 title: Schema-per-file config under `.mdsmith/schemas/`
-status: "🔲"
+status: "🔳"
 model: opus
 depends-on: [146, 156, 208, 209]
 summary: >-

@@ -262,7 +262,7 @@ func buildLayers(cfg *Config, filePath string, kinds []ResolvedKind) []layerInfo
 // pushed to `schema-sources` is the chain-merged form rather than
 // the kind's own block in isolation. The kinds map argument lets
 // the resolver walk the chain; nil indicates "no chain context" and
-// falls back to `body.Schema` directly (used by unit tests).
+// falls back to `body.Schema.Map()` directly (used by unit tests).
 func kindLayerRules(
 	kindName string, body KindBody, kinds map[string]KindBody,
 ) map[string]RuleCfg {
@@ -304,11 +304,11 @@ func resolveLayerInlineSchema(
 	kindName string, body KindBody, kinds map[string]KindBody,
 ) map[string]any {
 	if body.Extends == "" || kinds == nil {
-		return body.Schema
+		return body.Schema.Map()
 	}
 	resolved, err := ResolveKindInlineSchema(kinds, kindName)
 	if err != nil {
-		return body.Schema
+		return body.Schema.Map()
 	}
 	return resolved
 }

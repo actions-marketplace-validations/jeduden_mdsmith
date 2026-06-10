@@ -125,10 +125,10 @@ func extendsChainSchemas(
 	for i := len(chain) - 1; i >= 0; i-- {
 		kind := chain[i]
 		body := kinds[kind]
-		if len(body.Schema) == 0 {
+		if len(body.Schema.Map()) == 0 {
 			continue
 		}
-		out = append(out, schemaChainEntry{kind: kind, raw: body.Schema})
+		out = append(out, schemaChainEntry{kind: kind, raw: body.Schema.Map()})
 	}
 	return out, nil
 }
