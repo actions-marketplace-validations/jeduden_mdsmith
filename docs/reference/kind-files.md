@@ -96,18 +96,26 @@ inline or file kind — with no extra wiring.
 
 ## Schema sources
 
-A kind file accepts the same three schema sources
+A kind file accepts the same four schema sources
 as an inline kind, and they remain mutually
 exclusive (acceptance criterion #6 of plan 208):
 
-- inline `schema:` block
+- inline `schema:` mapping
+- named `schema:` reference to an entry in the
+  top-level `schemas:` registry or a
+  [`.mdsmith/schemas/<name>.yaml`](schema-files.md)
+  file
 - `rules.required-structure.schema:` path to a
   `proto.md`
 - legacy `rules.required-structure.inline-schema:`
   map
 
-Setting two on the same kind errors at config load
-with both source names.
+The `schema:` key is polymorphic: a YAML scalar is a
+registry name, a YAML mapping is an inline body. A
+named reference resolves to its body before the kind
+validates, so it conflicts with the other sources on
+the same footing — setting two on the same kind
+errors at config load with both source names.
 
 A schema shared across kinds is shared via
 `extends:` — the inheritance chain works
