@@ -156,7 +156,12 @@ lint-fix flags.
    package `internal/build/`. Implement the
    custom-recipe builder. Tokenize via
    `strings.Fields`; substitute `{param}`,
-   `{inputs}`, `{outputs}` after.
+   `{inputs}`, `{outputs}` after. Resolve
+   `inputs:` globs with the doublestar
+   matcher, re-check every resolved path
+   against the project root through plan
+   102's shared validator, and enforce the
+   10 000-match glob cap there.
 2. Implement basic multi-output atomic
    write: per-target temp dir, post-recipe
    rename, full rollback on failure. Plan
@@ -215,6 +220,9 @@ lint-fix flags.
       shell is invoked
 - [ ] `{outputs}` and `{inputs}` each
       expand to one argv per resolved entry
+- [ ] A resolved input escaping the project
+      root, or one glob matching more than
+      10 000 files, is a build error
 - [ ] Tokenization uses `strings.Fields`;
       param values containing whitespace
       pass as one argv entry

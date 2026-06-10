@@ -203,10 +203,10 @@ well-defined semantics.
 output paths: plan 2606101546 substitutes
 the staging paths for it at exec time.
 Named params are opaque strings, never
-rewritten — a recipe taking its output path
-via a named param writes past the staging
-dir and fails plan 2606101548's
-post-conditions. A single-output recipe
+rewritten, and must not carry output paths
+— the staging contract (plan 2606101548)
+covers only writes to the substituted
+`{outputs}` paths. A single-output recipe
 also uses `{outputs}` (one declared output
 expands to one argv): `command: "tool -o
 {outputs}"`. A multi-output recipe gets one

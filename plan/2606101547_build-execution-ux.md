@@ -65,13 +65,11 @@ success, mdsmith prints `OK <target>`. On
 failure, mdsmith prints the failure block
 (see below) including the in-memory tail.
 
-`--build-stream` switches to live mode.
-Lines are forwarded to the user's terminal
-as they arrive, prefixed with the target
-name (e.g. `[book.html] reading
-chapter 1...`). The log file is still
-written. Useful for a single-target debug
-run.
+`--build-stream` switches to live mode:
+lines are forwarded as they arrive,
+prefixed with the target name (e.g.
+`[book.html] reading chapter 1...`). The
+log file is still written.
 
 Each cache entry (plan 103) carries an
 `action-id` whose log lives at
@@ -79,9 +77,9 @@ Each cache entry (plan 103) carries an
 Logs survive until their entry is
 invalidated; a schema-version bump removes
 both. `--build-no-cache` writes logs but
-no entry; the next `mdsmith fix` deletes
-any `.mdsmith/build-logs/<id>.log` whose
-`<id>` matches no entry's `action-id`.
+no entry; the next `fix` deletes logs
+whose `<id>` matches no entry's
+`action-id`.
 
 ### Failure diagnostic format
 
@@ -150,9 +148,9 @@ so the next regular run skips the
 re-verify but surfaces the flag in
 `--build-explain`.
 
-Cost: roughly 2× wall-clock. Used by
-maintainers when adding a new recipe,
-not by the default `fix` flow.
+Cost: roughly 2× wall-clock; for
+maintainers adding a recipe, not the
+default `fix` flow.
 
 ### `--build-jobs N`
 
@@ -167,16 +165,14 @@ recipes finish.
 Plan 103 rejects any overlap in declared
 `outputs:` paths at target-graph load,
 after every `<?build?>` directive has been
-collected. It covers exact and directory-
-prefix collisions. A clean load guarantees
-disjoint output paths, so the parallel-
-safety contract holds for free.
+collected. A clean load guarantees disjoint
+output paths, so the parallel-safety
+contract holds for free.
 
-Output ordering: per-target lines (`OK`,
-`FAIL`, `SKIP`) print in the order
-recipes *complete*, not the order they
-were declared. The final summary lists
-all targets in declared order.
+Per-target lines (`OK`, `FAIL`, `SKIP`)
+print in completion order; the final
+summary lists all targets in declared
+order.
 
 ### Flags on `mdsmith fix`
 
@@ -188,6 +184,11 @@ Extends the build-pass flag set:
 | `--build-explain TARGET` | Print ActionID inputs for `TARGET`; run no recipe           |
 | `--build-verify`         | Run each recipe twice; warn on output mismatch              |
 | `--build-jobs N`         | Run up to N recipes concurrently (default 1)                |
+
+`--build-explain` and `--build-verify` are
+usage errors combined with each other or
+with `--build-dry-run` or
+`--build-check-stale`.
 
 ### Out of scope
 
@@ -230,7 +231,8 @@ spikes](../docs/research/build-orchestrator/go-only.md).
    recipe twice in independent staging
    dirs (plan 2606101548), `diff` outputs,
    warn and set the `unstable` cache
-   flag on mismatch.
+   flag on mismatch. The flag extends plan
+   103's cache entry schema (a bool).
 7. Implement `--build-jobs N`: concurrent
    recipe execution behind a work-pool.
    Plan 103 already rejects overlapping

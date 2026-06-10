@@ -36,12 +36,11 @@ git diffs.
 
 Go's build cache hashes `(action description ‖
 input contents)` into an ActionID. mdsmith
-borrows the content-addressed input model but
-stores its cache as JSON keyed by sorted
-`outputs` set, the ActionID *inside* each
-entry (see "Cache file" below). Content
-hashing beats mtime: git checkouts and CI
-restores rarely preserve it.
+borrows the model; its cache is JSON keyed
+by sorted `outputs` set with the ActionID
+inside each entry (see "Cache file" below).
+Content hashing beats mtime: git checkouts
+rarely preserve it.
 
 ## Design
 
@@ -67,27 +66,26 @@ its effective input set computed as
 `{ demo.tape } ∪ directive.inputs`. Authors
 do not restate the recipe's own source file.
 
-A param named in `default-inputs` is a path
-param: its `{param}` token expands to the
+A param named in `default-inputs` is a
+path param: its token expands to the
 absolute root-joined path at exec time,
-like `{inputs}`, so the recipe finds the
-file from the staging cwd (plan
-2606101548). The ActionID hashes the
-declared relative value.
+like `{inputs}`, so the recipe finds it
+from the staging cwd (plan 2606101548).
+The ActionID hashes the relative path the
+param supplies (`demo.tape`), never the
+absolute expansion.
 
 ### ActionID
 
 The ActionID is sha256 over these fields,
 each prefixed with its 8-byte big-endian
-length. The hashed path is always the
+length. Hashed paths are always the
 project-root-relative, slash-normalized
-form, so the ActionID stays stable across
-clones. Symlink resolution feeds the safety
-check only; it never alters that string.
-Inputs run `EvalSymlinks` for root-escape
-protection before hashing. Outputs resolve
-only the longest existing prefix (plan
-102). Fields, in order:
+form, stable across clones. Symlink
+resolution feeds the safety check only.
+Inputs run `EvalSymlinks` before hashing.
+Outputs resolve only the longest existing
+prefix (plan 102). Fields, in order:
 
 ```text
 recipe.command
@@ -135,13 +133,12 @@ poisoned entries and hand-edited artifacts.
 A target is identified in the cache by its
 sorted `outputs` list, length-framed and
 joined. Any overlap across two directives'
-`outputs:` paths is a build error reporting
-both source locations. Overlap covers exact
-collisions and directory-prefix collisions
-(`book/` vs `book/index.html`). Without it
-cache ownership is ambiguous and serial
-builds become "last writer wins"; plan 2606101547
-reuses the rule for parallel safety.
+`outputs:` paths — exact or directory-prefix
+(`book/` vs `book/index.html`) — is a build
+error reporting both source locations;
+otherwise cache ownership is ambiguous.
+Plan 2606101547 reuses the rule for
+parallel safety.
 
 ### Cache file
 
@@ -183,9 +180,11 @@ Extends plan 2606101546's build-pass flag set:
 | `--build-no-cache`    | Treat all targets as stale; do not read or write the cache (debugging)  |
 
 `--build-check-stale` makes artifact
-freshness a CI signal a reviewer can trust.
-The lint-fix pass still runs unless
-combined with `--build-only`.
+freshness a CI signal. The lint-fix pass
+still runs unless combined with
+`--build-only`. `--build-force` combined
+with `--build-check-stale` or
+`--build-no-cache` is a usage error.
 
 ### Interaction with plan 2606101546
 
@@ -215,7 +214,8 @@ hashing. Parallel builds: plan 2606101547.
    field, lookup by sorted output-set key.
 3. Implement `internal/build/staleness.go`:
    resolve directive `inputs` ∪ recipe
-   `default-inputs`, expand globs, compute
+   `default-inputs`, expand directive globs
+   (`default-inputs` stay literal), compute
    the length-framed ActionID, check output
    presence and content hash, return
    `STALE | FRESH | ERROR` per target.

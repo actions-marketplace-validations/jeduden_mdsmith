@@ -23,12 +23,11 @@ depends-on: [2606101546]
 ## Goal
 
 Make the build pass safe on an untrusted
-repo. Plan 2606101546 wires the recipe through
-`os/exec`. Plan 2606101548 adds the defenses that
+repo. Plan 2606101546 wires recipes through
+`os/exec`; this plan adds the defenses that
 stop a hostile recipe or config from
-escaping its declared inputs/outputs,
-leaking child processes, or writing where
-it should not.
+escaping its declared outputs, leaking
+child processes, or writing elsewhere.
 
 ## Context
 
@@ -56,11 +55,10 @@ config as trusted (direnv-style):
   the build pass exit with a clear "config
   changed since trusted; review and re-trust"
   message.
-- `mdsmith trust` (a tiny new subcommand)
-  diffs the current `.mdsmith.yml` against
-  the stored `.mdsmith.yml.trust` contents
-  and overwrites `.mdsmith.yml.trust` with
-  the current config on confirmation.
+- `mdsmith trust` (a new subcommand) diffs
+  the current `.mdsmith.yml` against the
+  stored trust contents and overwrites the
+  marker on confirmation.
 - `mdsmith fix --no-build` is the only
   override: it skips the build pass without
   touching the trust marker.
@@ -70,12 +68,13 @@ The trust file is per-clone (in
 `MDSMITH_TRUST_BUILD=1` instead of a file —
 they are presumed sandboxed.
 
-A workspace with no `<?build?>` directives
-never consults the gate — nothing executes.
-The gate covers `.mdsmith.yml` because it
-is the only file that can declare `build:`;
-if config ever spreads across files, the
-gate must widen with it.
+A run with neither `<?build?>` directives
+nor `build.hooks` (plan 104) never consults
+the gate — nothing would execute. The gate
+covers `.mdsmith.yml` because it is the
+only file that can declare `build:`; if
+config ever spreads across files, the gate
+must widen with it.
 
 ### Hermetic execution environment
 
@@ -84,10 +83,10 @@ Each recipe is invoked with:
 - `Cmd.Env` is exactly `PATH` plus the
   `build.exec.env-pass-through` names.
   `PATH` is `build.exec.path` (default
-  `/usr/bin:/bin` on Unix). `env-pass-through`
-  is the single inheritance mechanism;
+  `/usr/bin:/bin` on Unix); pass-through
+  is the single inheritance mechanism,
   default `[HOME, LANG, LC_ALL]`. Nothing
-  else from the parent environment leaks in.
+  else leaks in.
 - `Cmd.Dir` set to the per-recipe staging
   dir (see "Atomic write hardening" below).
 - A new process group via `Setpgid` on
@@ -98,7 +97,10 @@ Each recipe is invoked with:
 
 On `--build-timeout` expiry, mdsmith sends
 SIGTERM to the process group, waits up to
-5 s, then sends SIGKILL. A recipe that
+5 s, then sends SIGKILL. Windows has no
+SIGTERM: there mdsmith sends
+`CTRL_BREAK_EVENT` to the group, waits 5 s,
+then `TerminateProcess`. A recipe that
 spawns daemons cannot leave orphans behind.
 
 ### Atomic write hardening
@@ -117,11 +119,10 @@ by:
    writable on Unix (`0o002` set); the
    user fixes the permissions.
 3. mdsmith creates the per-recipe staging
-   dir via `os.MkdirTemp` with a random
-   suffix under `.mdsmith/build-staging/`.
-   Combined with steps 1 and 2, this
-   prevents a hostile output dir from
-   pre-creating a symlink at the temp name.
+   dir via `os.MkdirTemp` (random suffix)
+   under `.mdsmith/build-staging/`. With
+   steps 1-2 this stops a hostile parent
+   from planting a symlink at the temp name.
 4. Each declared output path maps to a
    file inside the staging dir; mdsmith
    pre-creates parent dirs there. Only
@@ -170,7 +171,10 @@ dirs of declared outputs; full-tree scans
 are too expensive, so writes into an
 unrelated subtree are missed. Symlinks are
 snapshotted via `Lstat` metadata plus
-`os.Readlink`, never followed.
+`os.Readlink`, never followed. A snapshot
+scope above 2 000 directory entries is a
+build error naming the oversized dir —
+point outputs at a narrower directory.
 
 PATH allowlisting and `Cmd.Dir` are for
 build determinism, not filesystem
@@ -188,14 +192,12 @@ build:
     env-pass-through: [HOME, LANG, LC_ALL, SOURCE_DATE_EPOCH]
 ```
 
-Both keys are optional. Setting
-`env-pass-through` *replaces* the default
-`[HOME, LANG, LC_ALL]` (no append), so
+Both keys are optional. `env-pass-through`
+*replaces* the default list (no append) —
 re-list the defaults you still want; the
 example adds `SOURCE_DATE_EPOCH` for
-reproducible builds. MDS040 validates that
-no pass-through name is empty or contains
-`=`.
+reproducible builds. MDS040 rejects empty
+pass-through names or names containing `=`.
 
 ## Tasks
 
@@ -222,16 +224,14 @@ no pass-through name is empty or contains
    set to staging, `Setpgid` (Unix) or
    process group (Windows), SIGTERM-then-
    SIGKILL on timeout.
-5. Replace plan 2606101546's basic atomic write
-   with the hardened version: `Lstat`
-   `.mdsmith/build-staging/` and refuse if
-   it is a symlink, not a directory, or
-   world-writable; `os.MkdirTemp` per-recipe
-   dir under it; per-destination `Lstat`
-   symlink refusal followed by `os.Rename`.
-   Document the partial-failure semantics
-   for multi-output rename (best-effort
-   cleanup; next `fix` reruns the recipe).
+5. Replace plan 2606101546's basic atomic
+   write with the hardened version:
+   staging-root checks, `os.MkdirTemp`
+   per-recipe dir, per-destination `Lstat`
+   symlink refusal, `os.Rename` replace.
+   Document the multi-output
+   partial-failure semantics (cleanup;
+   next `fix` reruns the recipe).
 6. Implement output post-conditions in
    `internal/build/postcheck.go`: snapshot
    staging dir + output parents pre-recipe,

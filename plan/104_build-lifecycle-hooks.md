@@ -155,11 +155,10 @@ project-relative paths) wrap the binary in a
 script that does its own validation.
 
 The baseline is intentionally narrow.
-Tightening to per-kind schemas (`kind: path
-| port | url`) is a future extension; for
-now the threat surface is reduced to "no
-control characters can sneak into argv" and
-operators retain full flexibility.
+Per-kind value schemas (`kind: path | port
+| url`) are a future extension; for now
+the bar is "no control characters in argv"
+and operators keep flexibility.
 
 ### Execution gate
 
@@ -182,6 +181,8 @@ debugging without the gate.
 filter hooks — they are global.
 `--build-dry-run` (plan 2606101546) lists hooks
 alongside recipes; nothing executes.
+`--build-check-stale` (plan 103) also runs
+no hooks.
 
 ### Interaction with staleness (plan 103)
 
