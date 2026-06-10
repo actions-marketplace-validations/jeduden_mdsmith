@@ -23,6 +23,17 @@ type RunCache struct {
 	parsedSchema sync.Map // string (absPath) -> *runCacheEntry
 	compiledCUE  sync.Map // string (CUE source) -> *runCacheEntry
 
+	// uniqueFieldIndex memoizes MDS069's per-scope value→first-file
+	// index. Keys encode a rule scope (field + globs), not a path.
+	// uniqueFieldScopes mirrors each entry's ScopeInvalidator so
+	// Invalidate can keep indexes whose scope the edited path cannot
+	// touch; it is written only AFTER the entry's once completes
+	// (the same post-once discipline as schemaIncludes) so reads
+	// never race an in-flight build. Entries without a registered
+	// scope drop on every invalidation — the safe default.
+	uniqueFieldIndex  sync.Map // string (scope key) -> *runCacheEntry
+	uniqueFieldScopes sync.Map // string (scope key) -> ScopeInvalidator
+
 	// schemaDependents maps a fragment path to the set of schema
 	// paths whose ParsedSchema slot reached it via <?include?>.
 	// Invalidate(fragment) walks this set so dependent schemas are
@@ -86,6 +97,56 @@ func NewRunCache() *RunCache {
 // same key block on the same once and observe the same value.
 func (c *RunCache) FrontMatter(absPath string, build func() any) any {
 	return load(&c.frontMatter, absPath, build)
+}
+
+// ScopeInvalidator scopes the unique-field-index slot's response to
+// Invalidate. A cached value that implements it is dropped only when
+// the invalidated path can fall inside its scope; values without it
+// drop on every invalidation — the safe default.
+type ScopeInvalidator interface {
+	MatchesInvalidatedPath(absPath string) bool
+}
+
+// UniqueFieldIndex returns build's result for key, computed at most
+// once per key in this cache's lifetime. Keys encode a rule's whole
+// uniqueness scope (field plus include/exclude globs). When the
+// built value implements ScopeInvalidator it is registered for
+// targeted invalidation; the registration happens after load
+// returns (post-once), so Invalidate's reads never race the build.
+func (c *RunCache) UniqueFieldIndex(key string, build func() any) any {
+	v := load(&c.uniqueFieldIndex, key, build)
+	// Register (or refresh) the scope when missing or when the
+	// entry was rebuilt under the same key — a racing Invalidate
+	// between load and Store could otherwise leave the scope map
+	// pointing at a previous index instance. Scopes for one key
+	// are equivalent (the key encodes the settings), so a stale
+	// pointer answers correctly; the refresh keeps the invariant
+	// "the registered scope belongs to the live entry" honest.
+	if si, ok := v.(ScopeInvalidator); ok {
+		if cur, found := c.uniqueFieldScopes.Load(key); !found || cur != any(si) {
+			c.uniqueFieldScopes.Store(key, si)
+		}
+	}
+	return v
+}
+
+// dropUniqueFieldIndexes clears unique-field index entries that the
+// edited path could affect. An entry with a registered
+// ScopeInvalidator survives when absPath falls outside its scope —
+// an edit to an unrelated file must not force an index rebuild on
+// the next lint pass. Entries without a scope, or any call with an
+// empty absPath, drop unconditionally.
+func (c *RunCache) dropUniqueFieldIndexes(absPath string) {
+	c.uniqueFieldIndex.Range(func(k, _ any) bool {
+		if siv, ok := c.uniqueFieldScopes.Load(k); ok && absPath != "" {
+			if !siv.(ScopeInvalidator).MatchesInvalidatedPath(absPath) {
+				return true
+			}
+		}
+		c.uniqueFieldIndex.Delete(k)
+		c.uniqueFieldScopes.Delete(k)
+		return true
+	})
 }
 
 // Includes returns build's result for absPath. The value is the list
@@ -320,6 +381,8 @@ func (c *RunCache) invalidate(absPath string, visited map[string]bool) {
 	c.frontMatter.Delete(absPath)
 	c.includes.Delete(absPath)
 	c.anchors.Delete(absPath)
+
+	c.dropUniqueFieldIndexes(absPath)
 
 	// Read the schema's includes + cueSources from the dedicated
 	// sync.Maps. Both are written AFTER ParsedSchema's load returns

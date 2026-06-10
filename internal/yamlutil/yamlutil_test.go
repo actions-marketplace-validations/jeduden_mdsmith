@@ -171,3 +171,69 @@ func TestTopLevelMappingLines(t *testing.T) {
 		assert.Equal(t, map[string]int{"id": 3}, lines)
 	})
 }
+
+func TestTopLevelScalarField(t *testing.T) {
+	doc, err := yamlutil.UnmarshalNodeSafe([]byte(
+		"id: 7\ntitle: \"7\"\nempty:\nlist:\n  - a\n"))
+	require.NoError(t, err)
+
+	v, line, ok := yamlutil.TopLevelScalarField(&doc, "id", 1)
+	require.True(t, ok)
+	assert.Equal(t, "7", v)
+	assert.Equal(t, 2, line, "body line 1 shifts by the offset")
+
+	v, _, ok = yamlutil.TopLevelScalarField(&doc, "title", 1)
+	require.True(t, ok, "quoted scalar is a scalar")
+	assert.Equal(t, "7", v, "quoted and bare ints share text")
+
+	_, _, ok = yamlutil.TopLevelScalarField(&doc, "empty", 1)
+	assert.False(t, ok, "null value carries no scalar text")
+
+	_, _, ok = yamlutil.TopLevelScalarField(&doc, "list", 1)
+	assert.False(t, ok, "sequence value carries no scalar text")
+
+	_, _, ok = yamlutil.TopLevelScalarField(&doc, "absent", 1)
+	assert.False(t, ok)
+
+	_, _, ok = yamlutil.TopLevelScalarField(nil, "id", 1)
+	assert.False(t, ok, "nil document degrades to not-found")
+}
+
+func TestTopLevelScalarField_CanonicalSpellings(t *testing.T) {
+	doc, err := yamlutil.UnmarshalNodeSafe([]byte(
+		"hex: 0x10\nunders: 1_000\nflag: True\nf: 7.0\nbig: 99999999999999999999999\n"))
+	require.NoError(t, err)
+
+	v, _, ok := yamlutil.TopLevelScalarField(&doc, "hex", 1)
+	require.True(t, ok)
+	assert.Equal(t, "16", v, "hex ints canonicalize to decimal")
+
+	v, _, ok = yamlutil.TopLevelScalarField(&doc, "unders", 1)
+	require.True(t, ok)
+	assert.Equal(t, "1000", v, "underscore ints canonicalize")
+
+	v, _, ok = yamlutil.TopLevelScalarField(&doc, "flag", 1)
+	require.True(t, ok)
+	assert.Equal(t, "true", v, "bool spellings canonicalize")
+
+	v, _, ok = yamlutil.TopLevelScalarField(&doc, "f", 1)
+	require.True(t, ok)
+	assert.Equal(t, "7", v, "floats canonicalize via %g")
+
+	v, _, ok = yamlutil.TopLevelScalarField(&doc, "big", 1)
+	require.True(t, ok)
+	assert.Equal(t, "1e+23", v,
+		"yaml.v3 resolves over-int64 literals as !!float; both "+
+			"spellings of such a value canonicalize the same way")
+}
+
+func TestTopLevelScalarField_NonMappingDocuments(t *testing.T) {
+	doc, err := yamlutil.UnmarshalNodeSafe([]byte("- just\n- a list\n"))
+	require.NoError(t, err)
+	_, _, ok := yamlutil.TopLevelScalarField(&doc, "id", 1)
+	assert.False(t, ok, "sequence documents carry no top-level mapping")
+
+	nilRoot := yaml.Node{Content: []*yaml.Node{nil}}
+	_, _, ok = yamlutil.TopLevelScalarField(&nilRoot, "id", 1)
+	assert.False(t, ok, "a nil root degrades to not-found")
+}
