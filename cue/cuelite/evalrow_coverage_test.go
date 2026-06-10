@@ -397,7 +397,6 @@ func TestRowLen_StructIsRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported len of a struct")
 }
 
-
 // TestEvalRowInterpolation_ParseQuotesError covers the ParseQuotes-error branch
 // via a constructed interpolation whose first/last fragments are not valid
 // quote delimiters. The CUE parser never emits this shape.

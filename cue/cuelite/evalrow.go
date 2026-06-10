@@ -189,7 +189,7 @@ var rowReserved = map[string]bool{
 	fmField: true, "strings": true,
 	"package": true, "import": true, "for": true, "in": true,
 	"if": true, "let": true, "true": true, "false": true, "null": true,
-	"_": true,
+	"_":         true,
 	rowOutField: true, rowScaffoldOutField: true,
 }
 
@@ -520,7 +520,8 @@ func evalRowAdd(l, r *engineValue) (*engineValue, error) {
 	if l.kind == kInt && r.kind == kInt {
 		sum, ok := checkedAddInt64(l.i, r.i)
 		if !ok {
-			return nil, fmt.Errorf("cuelite: unsupported integer overflow in %d + %d (big integers are not in the subset)", l.i, r.i)
+			return nil, fmt.Errorf(
+				"cuelite: unsupported integer overflow in %d + %d (big integers are not in the subset)", l.i, r.i)
 		}
 		return &engineValue{kind: kInt, i: sum}, nil
 	}
@@ -676,7 +677,8 @@ func evalRowList(n *ast.ListLit, scope *rowScope) (*engineValue, error) {
 // idiom and the per-peer projection); any other clause is rejected.
 func evalRowComprehension(c *ast.Comprehension, scope *rowScope) ([]*engineValue, error) {
 	if len(c.Clauses) != 1 {
-		return nil, fmt.Errorf("cuelite: unsupported multi-clause comprehension (only a single-clause comprehension is in the subset)")
+		return nil, fmt.Errorf(
+			"cuelite: unsupported multi-clause comprehension (only a single-clause comprehension is in the subset)")
 	}
 	// The CUE grammar requires a comprehension value to be a brace-delimited
 	// struct (`[for x in xs {…}]`), so the parser always yields a *ast.StructLit
@@ -721,7 +723,8 @@ func evalRowIfClause(clause *ast.IfClause, body *ast.StructLit, scope *rowScope)
 // row subset.
 func evalRowForClause(clause *ast.ForClause, body *ast.StructLit, scope *rowScope) ([]*engineValue, error) {
 	if clause.Key != nil {
-		return nil, fmt.Errorf("cuelite: unsupported for-comprehension key variable (the two-variable for form is not in the subset)")
+		return nil, fmt.Errorf(
+			"cuelite: unsupported for-comprehension key variable (the two-variable for form is not in the subset)")
 	}
 	src, err := evalRow(clause.Source, scope)
 	if err != nil {

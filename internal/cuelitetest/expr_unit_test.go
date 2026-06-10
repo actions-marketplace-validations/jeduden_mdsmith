@@ -138,9 +138,9 @@ func TestHatchedDivergence(t *testing.T) {
 // non-number branches and floatEqualish's tolerance.
 func TestNumericallyEquivalent(t *testing.T) {
 	assert.True(t, numericallyEquivalent("1.50", "1.5"))
-	assert.True(t, numericallyEquivalent("a-b", "a-b"))      // hyphen is punctuation, not a sign
-	assert.True(t, numericallyEquivalent("1e3", "1000"))     // exponent vs plain
-	assert.True(t, numericallyEquivalent("-1.5", "-1.50"))   // leading sign
+	assert.True(t, numericallyEquivalent("a-b", "a-b"))       // hyphen is punctuation, not a sign
+	assert.True(t, numericallyEquivalent("1e3", "1000"))      // exponent vs plain
+	assert.True(t, numericallyEquivalent("-1.5", "-1.50"))    // leading sign
 	assert.False(t, numericallyEquivalent("1.5", "1.5x"))     // trailing length differs
 	assert.False(t, numericallyEquivalent("1.5", "9.9"))      // value differs
 	assert.False(t, numericallyEquivalent("ab", "ba"))        // non-numeric byte differs

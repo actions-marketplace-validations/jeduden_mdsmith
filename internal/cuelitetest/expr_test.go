@@ -312,11 +312,11 @@ func FuzzExpr(f *testing.F) {
 		// construct pins the class.
 		{`strings.Join([for x in xs if x != "b" {x}], ",")`, `{"xs":["a","b","c"]}`}, // for…if combined
 		{`strings.Join([for i, x in xs {"\(i):\(x)"}], ",")`, `{"xs":["a","b"]}`},    // for i, x in
-		{`"\({a:1}.a)"`, ``},                  // struct literal in expr
-		{`"\(0.1 + 0.2)"`, ``},                // float arithmetic
+		{`"\({a:1}.a)"`, ``},                        // struct literal in expr
+		{`"\(0.1 + 0.2)"`, ``},                      // float arithmetic
 		{`"\(x + 1)"`, `{"x":9223372036854775807}`}, // big-int overflow
-		{`"\(len(m))"`, `{"m":{"k":"v"}}`},    // len(struct)
-		{`'a\(id)b'`, `{"id":"X"}`},           // bytes interpolation
+		{`"\(len(m))"`, `{"m":{"k":"v"}}`},          // len(struct)
+		{`'a\(id)b'`, `{"id":"X"}`},                 // bytes interpolation
 		// Scope binding contract (item 6): hidden keys, reserved names, the fm
 		// drop — both arms must agree.
 		{`_key`, `{"_key":"hidden"}`},
