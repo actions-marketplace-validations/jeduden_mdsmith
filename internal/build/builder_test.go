@@ -250,38 +250,32 @@ func TestBuild_GlobCapExceeded(t *testing.T) {
 
 func TestArgvExpansion_ListsExpandPerEntry(t *testing.T) {
 	// {outputs} and {inputs} each expand to one argv per resolved entry.
-	argv, err := expandArgv(
+	argv := expandArgv(
 		strings.Fields("tool {inputs} -o {outputs}"),
 		map[string]string{},
 		[]string{"in1", "in2"},
 		[]string{"out1"},
 	)
-	require.NoError(t, err)
 	assert.Equal(t, []string{"tool", "in1", "in2", "-o", "out1"}, argv)
 }
 
 func TestArgvExpansion_ParamWhitespaceStaysOneEntry(t *testing.T) {
-	argv, err := expandArgv(
+	argv := expandArgv(
 		strings.Fields("tool {value}"),
 		map[string]string{"value": "a b c"},
 		nil, nil,
 	)
-	require.NoError(t, err)
 	assert.Equal(t, []string{"tool", "a b c"}, argv)
 }
 
 func TestSubstituteParams_UnclosedBrace(t *testing.T) {
 	// An unclosed { is written through literally rather than panicking.
-	out, err := substituteParams("{unclosed", nil)
-	require.NoError(t, err)
-	assert.Equal(t, "{unclosed", out)
+	assert.Equal(t, "{unclosed", substituteParams("{unclosed", nil))
 }
 
 func TestSubstituteParams_AbsentOptionalParam(t *testing.T) {
 	// A {name} placeholder with no matching param expands to the empty string.
-	out, err := substituteParams("{missing}", map[string]string{})
-	require.NoError(t, err)
-	assert.Equal(t, "", out)
+	assert.Equal(t, "", substituteParams("{missing}", map[string]string{}))
 }
 
 func TestBuild_RecipeDoesNotProduceOutput(t *testing.T) {
@@ -322,15 +316,72 @@ func TestBuild_InputGlobMalformed(t *testing.T) {
 	b := NewCustomBuilder(map[string]RecipeSpec{
 		"echo": recipeCmd("echo hi"),
 	})
-	// "[z-a]" is a character class with inverted range — doublestar returns
-	// an error for it.
+	// "[" is an unclosed character class — doublestar returns a syntax error.
 	err := b.Build(context.Background(), Target{
 		Recipe:  "echo",
 		Root:    root,
-		Inputs:  []string{"[z-a]"},
+		Inputs:  []string{"["},
 		Outputs: []string{"out.txt"},
 	})
 	require.Error(t, err)
+}
+
+func TestBuild_InputGlobMatchEscapesRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is unreliable on Windows CI")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("s"), 0o644))
+	require.NoError(t, os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "leak.txt")))
+
+	b := NewCustomBuilder(map[string]RecipeSpec{
+		"copy": recipeCmd("cp {inputs} {outputs}"),
+	})
+	// Glob "*.txt" matches leak.txt; ResolvePathInRoot follows the symlink
+	// and detects it escapes the project root.
+	err := b.Build(context.Background(), Target{
+		Recipe:  "copy",
+		Root:    root,
+		Inputs:  []string{"*.txt"},
+		Outputs: []string{"out.txt"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "project root")
+}
+
+func TestCommitOutputs_MkdirAllError(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a regular file where a directory is expected. MkdirAll will
+	// fail because "file.txt" exists as a file, not a directory.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "file.txt"), []byte("x"), 0o644))
+
+	stageDir := t.TempDir()
+	stage := filepath.Join(stageDir, "out0")
+	require.NoError(t, os.WriteFile(stage, []byte("data"), 0o644))
+
+	err := commitOutputs(root, []string{"file.txt/result.txt"}, []string{stage})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating output dir")
+}
+
+func TestCommitOutputs_RenameFallbackToCopyFails(t *testing.T) {
+	root := t.TempDir()
+
+	// Pre-create the final path as a directory. os.Rename(file→dir) fails
+	// with EISDIR and copyFile also fails (can't open a directory for
+	// writing), exercising the error return at the end of the fallback.
+	// This requires no special permissions and works on all supported OSes.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "result"), 0o755))
+
+	stageDir := t.TempDir()
+	stage := filepath.Join(stageDir, "out0")
+	require.NoError(t, os.WriteFile(stage, []byte("data"), 0o644))
+
+	err := commitOutputs(root, []string{"result"}, []string{stage})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writing output")
 }
 
 func TestCopyFile_Success(t *testing.T) {
@@ -353,16 +404,12 @@ func TestCopyFile_ReadError(t *testing.T) {
 func TestSubstituteParams_PrefixBeforePlaceholder(t *testing.T) {
 	// A token with literal prefix text before a {name} placeholder exercises
 	// the WriteByte branch that copies non-'{' characters one at a time.
-	out, err := substituteParams("prefix-{name}", map[string]string{"name": "val"})
-	require.NoError(t, err)
-	assert.Equal(t, "prefix-val", out)
+	assert.Equal(t, "prefix-val", substituteParams("prefix-{name}", map[string]string{"name": "val"}))
 }
 
 func TestSubstituteParams_EmbeddedListPlaceholder(t *testing.T) {
 	// {inputs} or {outputs} embedded inside a larger token (not a standalone
 	// token) must pass through literally — the MDS040 validator rejects such
 	// commands; here we verify the substituteParams passthrough.
-	out, err := substituteParams("prefix-{inputs}-suffix", nil)
-	require.NoError(t, err)
-	assert.Equal(t, "prefix-{inputs}-suffix", out)
+	assert.Equal(t, "prefix-{inputs}-suffix", substituteParams("prefix-{inputs}-suffix", nil))
 }

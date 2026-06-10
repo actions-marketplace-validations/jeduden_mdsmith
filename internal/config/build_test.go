@@ -48,6 +48,14 @@ func TestRejectRemovedBuildKeys_BuildNullValue(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRejectRemovedBuildKeys_NullDocumentRoot(t *testing.T) {
+	// A null document root (ScalarNode, not MappingNode) must not error in
+	// rejectRemovedBuildKeys — the mapping-kind guard returns nil early.
+	yml := []byte("null\n")
+	_, err := loadFromBytes(yml, "", false)
+	require.NoError(t, err)
+}
+
 // --- ValidateBuildConfig ---
 
 func TestValidateBuildConfig_Nil(t *testing.T) {

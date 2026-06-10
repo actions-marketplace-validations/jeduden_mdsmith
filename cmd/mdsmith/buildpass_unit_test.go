@@ -218,9 +218,11 @@ func TestCollectBuildTargets_MultipleFilesSort(t *testing.T) {
 
 func TestCollectBuildTargets_EmptyRecipeSkipped(t *testing.T) {
 	root := t.TempDir()
-	// Directive with empty recipe: must be skipped silently.
+	// Directive with an explicitly empty string recipe (not null, which would
+	// cause ParseDirective to fail earlier): must be skipped at the recipe==""
+	// check.
 	md := "# Build\n\n" +
-		"<?build\nrecipe:\noutputs:\n  - out.txt\n?>\n" +
+		"<?build\nrecipe: \"\"\noutputs:\n  - out.txt\n?>\n" +
 		"[out.txt](out.txt)\n<?/build?>\n"
 	p := filepath.Join(root, "doc.md")
 	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
@@ -242,4 +244,37 @@ func TestCollectBuildTargets_EmptyOutputsSkipped(t *testing.T) {
 	targets, errs := collectBuildTargets([]string{p}, root, "", 0)
 	assert.Empty(t, errs)
 	assert.Empty(t, targets, "directive with no outputs must be skipped")
+}
+
+func TestCollectBuildTargets_TwoDirectivesSameFileSortedByLine(t *testing.T) {
+	root := t.TempDir()
+	// Two directives in the same file: sort must use line number.
+	md := "# First\n\n" +
+		"<?build\nrecipe: cp\noutputs:\n  - a.txt\n?>\n" +
+		"[a.txt](a.txt)\n<?/build?>\n\n" +
+		"# Second\n\n" +
+		"<?build\nrecipe: cp\noutputs:\n  - b.txt\n?>\n" +
+		"[b.txt](b.txt)\n<?/build?>\n"
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	targets, errs := collectBuildTargets([]string{p}, root, "", 0)
+	assert.Empty(t, errs)
+	require.Len(t, targets, 2)
+	assert.Less(t, targets[0].line, targets[1].line)
+}
+
+func TestCollectBuildTargets_MalformedDirectiveSkipped(t *testing.T) {
+	root := t.TempDir()
+	// Directive whose YAML body contains a non-string param value causes
+	// ParseDirective to return nil with diagnostics — must be skipped.
+	md := "# Build\n\n" +
+		"<?build\nrecipe:\n  nested: map\noutputs:\n  - out.txt\n?>\n" +
+		"[out.txt](out.txt)\n<?/build?>\n"
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	targets, errs := collectBuildTargets([]string{p}, root, "", 0)
+	assert.Empty(t, errs)
+	assert.Empty(t, targets, "directive with non-string recipe param must be skipped")
 }

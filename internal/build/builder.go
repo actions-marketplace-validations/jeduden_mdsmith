@@ -105,10 +105,7 @@ func (b *CustomBuilder) Build(ctx context.Context, target Target) error {
 		absInputs[i] = filepath.Join(target.Root, filepath.FromSlash(in))
 	}
 
-	argv, err := expandArgv(tokens, target.Params, absInputs, stagePaths)
-	if err != nil {
-		return err
-	}
+	argv := expandArgv(tokens, target.Params, absInputs, stagePaths)
 
 	if err := runRecipe(ctx, target.Root, argv); err != nil {
 		return fmt.Errorf("recipe %q failed: %w", target.Recipe, err)
@@ -186,7 +183,7 @@ func isGlob(p string) bool {
 // value containing whitespace stays a single argv entry.
 func expandArgv(
 	tokens []string, params map[string]string, inputs, outputs []string,
-) ([]string, error) {
+) []string {
 	argv := make([]string, 0, len(tokens))
 	for _, tok := range tokens {
 		switch tok {
@@ -195,14 +192,10 @@ func expandArgv(
 		case "{outputs}":
 			argv = append(argv, outputs...)
 		default:
-			expanded, err := substituteParams(tok, params)
-			if err != nil {
-				return nil, err
-			}
-			argv = append(argv, expanded)
+			argv = append(argv, substituteParams(tok, params))
 		}
 	}
-	return argv, nil
+	return argv
 }
 
 // substituteParams replaces {name} placeholders in a single token with
@@ -210,9 +203,9 @@ func expandArgv(
 // caller before this point, so a bare {inputs}/{outputs} embedded in a
 // larger token is left untouched here (the MDS040 command validator
 // already rejects embedded list placeholders).
-func substituteParams(tok string, params map[string]string) (string, error) {
+func substituteParams(tok string, params map[string]string) string {
 	if !strings.ContainsRune(tok, '{') {
-		return tok, nil
+		return tok
 	}
 	var b strings.Builder
 	i := 0
@@ -242,7 +235,7 @@ func substituteParams(tok string, params map[string]string) (string, error) {
 		b.WriteString(v)
 		i += close + 1
 	}
-	return b.String(), nil
+	return b.String()
 }
 
 // runRecipe execs argv with the project root as the working directory.
