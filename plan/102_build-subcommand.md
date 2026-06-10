@@ -172,7 +172,7 @@ declares multiple narrower patterns.
 ### Recipe `command` placeholders
 
 Recipe `command` strings (plan 100) keep
-existing `{param}` rules. Two new collective
+the `{param}` rules; two collective
 placeholders are added:
 
 | Placeholder | Expansion                               |
@@ -214,13 +214,13 @@ declared as params.
 
 ### Dependency-graph edges
 
-The link graph's `<?build?>` edge reads
-the old `source:` param
-(`internal/linkgraph/directives.go`); it
+The link graph's build edge keys on a
+`source:` param MDS039 never knew
+(`internal/linkgraph/directives.go`). It
 moves to one edge per `inputs:` entry,
-globs handled like `<?catalog?>` globs.
+globs handled like `<?catalog?>` globs, so
 `mdsmith deps`, `--incoming`, and the LSP
-call-hierarchy keep their build edges.
+call-hierarchy gain real build edges.
 
 ## Tasks
 
@@ -264,8 +264,9 @@ call-hierarchy keep their build edges.
 7. Update the build edge in
    `internal/linkgraph/directives.go`: one
    edge per `inputs:` entry (globs like
-   catalog globs), replacing `source:`.
-   Cover `deps` and `--incoming` in tests.
+   catalog globs), replacing `source:` and
+   its stale comment. Cover `deps` and
+   `--incoming` in tests.
 
 ## Acceptance Criteria
 
