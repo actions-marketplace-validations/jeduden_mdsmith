@@ -168,10 +168,9 @@ is code, which span is a link — set
 paragraph then projects under an `inline` key as a
 typed, recursive span list instead of a flat string.
 
-A website headline whose hero template renders one
-emphasised word is the canonical case. The copy
-itself is the source of truth, and the consumer reads
-the emphasis position from the data:
+The canonical case is a website headline whose hero
+template renders one emphasised word — the consumer
+reads the emphasis position from the data:
 
 ```markdown
 ---
@@ -229,23 +228,11 @@ the trailing text:
 }
 ```
 
-Nesting composes through the same shape. A paragraph
-``run **`mdsmith fix`** daily`` projects the strong span
-with the code span nested in its `children` — the
-consumer walks one uniform tree, with no flat-versus-
-recursive mode switch:
-
-```json
-"inline": [
-  { "span": "text", "value": "run " },
-  {
-    "children": [{ "span": "code", "value": "mdsmith fix" }],
-    "level": 2,
-    "span": "strong"
-  },
-  { "span": "text", "value": " daily" }
-]
-```
+Nesting composes through the same shape: a paragraph
+``run **`mdsmith fix`** daily`` projects the strong
+span with the code span nested in its `children` —
+the consumer walks one uniform tree, with no
+flat-versus-recursive mode switch.
 
 Leaf spans (text, code, autolink) carry a `value`;
 container spans (emphasis, strong, link) carry
@@ -271,9 +258,8 @@ the list entry. Each item then projects as an object with
 its own `text`, a `checked` bool on task items, and a
 recursive `children` array on items that nest a sub-list.
 
-A sprint checklist is the canonical case. A status tool
-reads each task's `checked` state and walks `children`
-for sub-tasks:
+The canonical case is a sprint checklist whose
+status tool reads `checked` and walks `children`:
 
 ```markdown
 ---
@@ -402,24 +388,10 @@ emits:
 }
 ```
 
-The `columns` array preserves document order; the `rows`
-array omits object keys entirely, so duplicate column
-headers pose no problem and a chart script reads
-`latency.rows[0][1]` by index.
+A chart script reads `latency.rows[0][1]` by index.
 
-For the default `records` projection the same table
-produces `latency.rows` as an array of objects keyed by
-column header:
-
-```json
-"latency": {
-  "rows": [
-    { "Operation": "check", "p50 ms": "12", "p99 ms": "45" },
-    { "Operation": "fix",   "p50 ms": "18", "p99 ms": "70" }
-  ]
-}
-```
-
+The default `records` projection emits the same
+table as an array of objects keyed by column header.
 The full projection matrix and duplicate-header
 semantics are in the
 [extract reference][extract-table].
@@ -470,62 +442,24 @@ When the schema roots at H2 (all inline schemas do),
 under a reserved `title` key beside `frontmatter` —
 the `"title": "Product copy"` line in the
 [worked example](#worked-example) output above.
-When there is no H1, the `title` key is omitted.
-When a scope bound to `title` (via slug or `bind:`)
-collides with the reserved key, `extract` reports
-it as a collision before emitting any data; rename
-the scope with `bind:` to resolve it.
+When there is no H1 the key is omitted, and a scope
+that resolves to `title` (via slug or `bind:`) is
+reported as a collision before any data is emitted;
+rename the scope with `bind:` to resolve it.
 
-`<?include extract: title?>` splices the H1 plain
-text directly into a host file with no intermediate
-file needed:
-
-```markdown
-<?include
-file: docs/copy/product.md
-extract: title
-?>
-Product copy
-<?/include?>
-```
+An `<?include?>` with `extract: title` splices the
+H1 plain text directly into a host file, exactly
+like the `tagline.text` embed shown in
+[Reading a value back](#reading-a-value-back-into-markdown).
 
 ### Enforcing H1 ↔ frontmatter consistency
 
 Enforcement requires a file-based schema. An inline
 `schema:` starts matching at H2 — the H1 belongs to
 [first-line-heading][mds004] — so the kind switches
-to a `proto.md` whose first row is the `{title}`
-placeholder:
-
-```markdown
-# {title}
-
-## ...
-```
-
-```yaml
-kinds:
-  product-copy:
-    rules:
-      required-structure:
-        schema: copy-proto.md
-```
-
-The `{title}` row requires the frontmatter field
-and checks the H1 text against its value. A drifted
-H1 fails `mdsmith check`:
-
-```text
-docs/copy/product.md:4:1 MDS020 heading does not match frontmatter: expected "Product copy" (from title), got "Product page copy"
-```
-
-The synced H1 also becomes data. `mdsmith extract`
-projects the H1 scope under a `title` key, with the
-captured heading text inside.
-
-The section paragraphs come back too. A
-`<?content?>` directive row in a `proto.md` section
-body declares the same content entry the inline
+to a `proto.md` rooted at the `{title}` placeholder.
+A `<?content?>` directive row in a section body
+declares the same content entry the inline
 `content:` list declares, so the worked example's
 sections keep their `text` projections instead of
 collapsing to empty objects:
@@ -546,8 +480,26 @@ kind: paragraph
 ?>
 ```
 
-`mdsmith extract` then projects the H1 key, the
-synced heading text, and each section's paragraph:
+```yaml
+kinds:
+  product-copy:
+    rules:
+      required-structure:
+        schema: copy-proto.md
+```
+
+The `{title}` row requires the frontmatter field
+and checks the H1 text against its value. A drifted
+H1 fails `mdsmith check`:
+
+```text
+docs/copy/product.md:4:1 MDS020 heading does not match frontmatter: expected "Product copy" (from title), got "Product page copy"
+```
+
+The synced H1 also becomes data. `mdsmith extract`
+projects the H1 scope under a `title` key — the
+captured heading text inside — and each section's
+paragraph beneath it:
 
 ```json
 {
