@@ -133,11 +133,11 @@ excluded from the WASM bindings (plan 215):
 recipes exec processes, which the WASM and
 LSP in-memory fix paths must never do. The
 in-process fix API (`fix.Source`) has no
-build stage. The merge driver and the
-pre-merge-commit hook script reach fix
-through other paths, so task 4 wires
-`--no-build` into both (the hook generator
-lives in `internal/githooks`). A merge
+build stage, which exempts the LSP and the
+merge driver by construction. The
+pre-merge-commit hook script still runs the
+CLI, so task 4 wires `--no-build` into its
+generator (`internal/githooks`). A merge
 never executes recipes.
 
 ### `mdsmith fix` flags
@@ -196,9 +196,9 @@ combine freely with a run.
    above. Print per-target summary;
    non-zero exit on failure. Keep the pass
    out of `pkg/mdsmith` and `fix.Source`.
-   Pass `--no-build` in the merge-driver
-   invocation and in the `internal/githooks`
-   script (regenerate its golden file).
+   Pass `--no-build` in the
+   `internal/githooks` script (regenerate
+   its golden file).
 5. Integration tests:
 
   - `cp`-based single-output recipe runs
