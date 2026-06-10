@@ -1,7 +1,7 @@
 ---
 id: 244
 title: "Structured list projection; fix nested-item text corruption"
-status: "🔲"
+status: "🔳"
 summary: >-
   Fix flat list projection concatenating nested-item text into
   the parent with no separator, then add `projection: tree` so
@@ -102,7 +102,7 @@ projects each item as an object:
 
 ## Acceptance Criteria
 
-- [ ] Flat `items` never concatenates nested-item text into a
+- [x] Flat `items` never concatenates nested-item text into a
   parent string; the corrupt case above projects
   `"[ ] open item with bold"`.
 - [ ] `projection: tree` emits item objects with `text`,
