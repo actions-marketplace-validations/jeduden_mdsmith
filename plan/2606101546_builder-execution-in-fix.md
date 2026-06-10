@@ -216,7 +216,13 @@ combine freely with a run.
    flags, the per-target summary, and
    `{outputs}` / `{inputs}` argv expansion.
    Remove references to `mdsmith build`,
-   built-in recipes, and `base-url`.
+   built-in recipes, and `base-url`. Add a
+   markdown-as-data example: a recipe runs
+   `mdsmith extract` on an input file and
+   pipes the JSON into a chart tool. Note
+   in `docs/reference/telemetry.md` that
+   recipes are user code; mdsmith itself
+   still makes no network calls.
 7. Update `demo.tape` to use a `cp`-based
    custom recipe so the demo shows `fix`
    running a build.

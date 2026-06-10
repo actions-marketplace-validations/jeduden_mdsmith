@@ -22,9 +22,8 @@ artifact paths in `outputs:` (was a single
 string `output:` in plan 101) and a list of
 input paths or globs in `inputs:`. The body
 template renders once per output. Recipe
-`command` strings can reference `{outputs}` and
-`{inputs}` to pass the lists to the recipe
-binary as separate argv arguments.
+`command` strings reference `{outputs}` and
+`{inputs}` to pass the lists as argv.
 
 ## Context
 
@@ -34,12 +33,11 @@ and MDS040). Plan 2606101546 wires targets through
 a `Builder` into `mdsmith fix`; plan 103
 layers staleness.
 
-`output:` and `outputs:` are not both
-accepted. Clean break: no deprecation, no
-migration. A directive with only `output:`
-fails because `outputs:` is required (see
-"MDS039 update" below). MDS039 also warns
-on the stray `output:` as an unknown param.
+`output:` is gone — a clean break, no
+deprecation, no migration. A directive with
+only `output:` fails because `outputs:` is
+required (see "MDS039 update"); the stray
+`output:` draws the unknown-param warning.
 
 ## Design
 
@@ -79,10 +77,9 @@ recipe will write. This keeps post-build
 verification deterministic: every declared
 output must exist after the recipe returns.
 
-Each entry in `inputs:` is a literal path or a
-glob. Globs are evaluated at build time (plan
-2606101546). Plan 102 only validates the path shape
-(see "MDS039 update" below).
+Each `inputs:` entry is a literal path or
+a glob. Globs resolve at build time (plan
+2606101546); plan 102 validates shape only.
 
 ### Body template — rendered once per output
 
@@ -111,10 +108,9 @@ MDS039 (plan 101) is changed to:
 2. Require `outputs:` (list of strings,
    non-empty). Each entry is validated per
    "Path-shape rules" below.
-3. Accept optional `inputs:` (list of strings,
-   may be empty). Each entry is a relative
-   path with no `..` or a glob. The glob shape
-   is validated; resolution is plan 2606101546's job.
+3. Accept optional `inputs:` (list, may be
+   empty): relative paths or globs. Shape
+   only; resolution is plan 2606101546's job.
 4. Render `body-template` once per `outputs`
    entry as described above.
 
@@ -155,17 +151,16 @@ is re-checked against the project root.
 Inputs (which must exist) use
 `filepath.EvalSymlinks` to resolve the full
 chain. Outputs may not exist yet: the check
-walks the longest existing prefix of the
-output path with `EvalSymlinks` and joins
-the remaining segments with
-`filepath.Join`. The full check uses OS-
-native separators internally; the result is
-normalised back to forward slashes via
-`filepath.ToSlash` before comparison and
-diagnostic output, preserving the slash-
-only invariant on Windows. A symlinked
-output or input pointing outside the
-project is a build error.
+walks the longest existing prefix with
+`EvalSymlinks` and joins the remaining
+segments with `filepath.Join`. The check
+uses OS-native separators internally and
+normalises back to forward slashes
+(`filepath.ToSlash`) before comparison and
+diagnostics, keeping the slash-only
+invariant on Windows. A symlinked output
+or input outside the project is a build
+error.
 
 ### Glob match cap
 
@@ -202,31 +197,30 @@ well-defined semantics.
 output paths: plan 2606101546 substitutes
 the staging paths for it at exec time.
 Named params are opaque strings, never
-rewritten, and must not carry output paths
-— the staging contract (plan 2606101548)
-covers only writes to the substituted
-`{outputs}` paths. A single-output recipe
-also uses `{outputs}` (one declared output
-expands to one argv): `command: "tool -o
-{outputs}"`. A multi-output recipe gets one
-argv per entry: `command: "magick convert
-in.svg {outputs}"` with `outputs: [a.png,
-b.png]`.
+rewritten, and must not carry output
+paths. The staging contract (plan
+2606101548) covers only writes to the
+substituted `{outputs}` paths. One
+declared output expands to one argv
+(`command: "tool -o {outputs}"`). Several
+expand to one argv each (`command:
+"magick convert in.svg {outputs}"`,
+`outputs: [a.png, b.png]`).
 
 The actual argv expansion happens in plan
 2606101546. Plan 102's MDS040 update only
 validates that the reserved names are not
 declared as params.
 
-### Fixture and doc updates
+### Dependency-graph edges
 
-- `internal/rules/MDS039-build/good/`, `bad/`,
-  and `fixed/` fixtures are rewritten for the
-  new directive shape.
-- `docs/guides/directives/build.md` documents
-  `outputs:`, `inputs:`, and the once-per-
-  output body render. The old singular form
-  is deleted outright, not marked deprecated.
+The link graph's `<?build?>` edge reads
+the old `source:` param
+(`internal/linkgraph/directives.go`); it
+moves to one edge per `inputs:` entry,
+globs handled like `<?catalog?>` globs.
+`mdsmith deps`, `--incoming`, and the LSP
+call-hierarchy keep their build edges.
 
 ## Tasks
 
@@ -257,18 +251,21 @@ declared as params.
    error.
 4. Rewrite MDS039 fixtures (`good/`, `bad/`,
    `fixed/`) for the new directive shape.
-5. Update unit tests in
-   `internal/rules/build/rule_test.go`:
+5. Update `internal/rules/build/rule_test.go`:
    replace every `output:` use with
-   `outputs:` (list). Add cases for
-   multi-output body rendering and for empty
-   `outputs:`.
+   `outputs:`; add cases for multi-output
+   body rendering and empty `outputs:`.
 6. Update the user guide
    `docs/guides/directives/build.md`:
    document `outputs:` (list), `inputs:`
    (list), the once-per-output body render,
    and the `{outputs}` / `{inputs}`
    placeholders. Delete singular-form prose.
+7. Update the build edge in
+   `internal/linkgraph/directives.go`: one
+   edge per `inputs:` entry (globs like
+   catalog globs), replacing `source:`.
+   Cover `deps` and `--incoming` in tests.
 
 ## Acceptance Criteria
 
@@ -307,6 +304,9 @@ declared as params.
       `params.required` or `params.optional`
 - [ ] All MDS039 fixtures use the new
       directive shape
+- [ ] `mdsmith deps` lists one build edge
+      per `inputs:` entry; `--incoming` on
+      an input names the directive's file
 - [ ] `docs/guides/directives/build.md`
       describes `outputs:` and `inputs:`; no
       singular-form prose remains

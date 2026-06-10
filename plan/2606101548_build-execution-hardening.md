@@ -82,10 +82,9 @@ files, the gate must widen with it.
 Each recipe is invoked with:
 
 - `Cmd.Env` is exactly `PATH` plus the
-  `build.exec.env-pass-through` names.
-  `PATH` is `build.exec.path` (default
-  `/usr/bin:/bin` on Unix); pass-through
-  is the single inheritance mechanism,
+  `build.exec.env-pass-through` names:
+  `PATH` from `build.exec.path` (default
+  `/usr/bin:/bin` on Unix), pass-through
   default `[HOME, LANG, LC_ALL]`. Nothing
   else leaks in.
 - `Cmd.Dir` set to the per-recipe staging
@@ -245,16 +244,14 @@ pass-through names or names containing `=`.
   - Editing `.mdsmith.yml` after trust
     invalidates the marker; `mdsmith
     trust` shows the diff and re-trusts.
-  - `mdsmith fix --no-build` skips the
-    gate.
+  - `mdsmith fix --no-build` skips the gate.
   - A write outside declared `outputs:` is
     a build failure; the file is left in
     place and named in the warning.
   - Recipe exiting 0 without producing a
     declared output is a build failure.
-  - World-writable
-    `.mdsmith/build-staging/` is refused
-    at start.
+  - A group- or world-writable staging
+    root is refused at start.
   - A recipe that spawns a child process
     and exceeds `--build-timeout` is
     killed (process group); the child is
@@ -271,6 +268,9 @@ pass-through names or names containing `=`.
    `MDSMITH_TRUST_BUILD=1`. Export it in
    `demo.tape`'s hidden setup so the build
    demo (plan 2606101546) keeps running.
+   Note that the default `build.exec.path`
+   omits mdsmith's own install dir; a
+   self-invoking recipe adds it.
 
 ## Acceptance Criteria
 
