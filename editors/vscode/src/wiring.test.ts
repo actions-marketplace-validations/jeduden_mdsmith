@@ -22,11 +22,14 @@ import {
   forwardMdsmithConfigChange,
   notifyConfigChangeToClient,
   startupErrorMessage,
+  Wiring,
   RUN_OFF,
   RUN_ON_SAVE,
   RUN_ON_TYPE,
+  type ClientLike,
   type FileSystemWatcherLike,
-  type RestartPolicyState
+  type RestartPolicyState,
+  type VscodeApi
 } from "./wiring";
 
 // ExecutableLaunchShape is the subset of vscode-languageclient's
@@ -417,5 +420,345 @@ describe("decideClose", () => {
     expect(decision.restart).toBe(true);
     expect(decision.capExceeded).toBe(false);
     expect(state.restarts).toEqual([windowMs + 1_000]);
+  });
+});
+
+// --- Wiring orchestrator -------------------------------------------------
+//
+// The Wiring class is the extension's composition root: it owns the
+// LanguageClient lifecycle, the .mdsmith.yml watcher, and all command
+// registrations. It reaches the editor only through an injected
+// `VscodeApi` (the live `vscode` namespace in production) and a
+// `createClient` factory, so the orchestration is driven here with fakes
+// instead of a real VS Code host. extension.ts supplies the real
+// `vscode` + LanguageClient and nothing else.
+
+// FakeDisposable counts dispose() calls so watcher / subscription
+// lifecycle assertions can confirm cleanup happened exactly once.
+class FakeDisposable {
+  disposed = 0;
+  dispose() {
+    this.disposed++;
+  }
+}
+
+// FakeClient stands in for a vscode-languageclient LanguageClient. It
+// records start/stop/sendNotification calls, lets a test force start()
+// to reject, and captures the mdsmith/superseded notification handler
+// so the supersede path can be exercised without a live server.
+class FakeClient {
+  started = 0;
+  stopped = 0;
+  notifications = 0;
+  running = false;
+  startRejection: Error | undefined;
+  supersededHandler: (() => void) | undefined;
+  constructor(public readonly clientOptions: ClientOptionsCapture) {}
+  onNotification(method: string, handler: () => void): { dispose(): void } {
+    if (method === "mdsmith/superseded") this.supersededHandler = handler;
+    return { dispose() {} };
+  }
+  async start(): Promise<void> {
+    this.started++;
+    if (this.startRejection) {
+      throw this.startRejection;
+    }
+    this.running = true;
+  }
+  async stop(): Promise<void> {
+    this.stopped++;
+    this.running = false;
+  }
+  isRunning(): boolean {
+    return this.running;
+  }
+  async sendNotification(_type: unknown, _params?: unknown): Promise<void> {
+    this.notifications++;
+  }
+}
+
+// ClientOptionsCapture is the subset of LanguageClientOptions the Wiring
+// tests inspect after construction (the error handler and the hover
+// middleware). Typed loosely on purpose — the production type comes from
+// vscode-languageclient and is not imported at runtime here.
+interface ClientOptionsCapture {
+  errorHandler?: { closed(): { action: number }; markSuperseded?(): void };
+  middleware?: { provideHover?: unknown };
+}
+
+// makeFakeApi builds a minimal stand-in for the `vscode` namespace
+// covering every member the Wiring class touches. Spies record what was
+// registered / shown so tests can assert on the wiring without a host.
+function makeFakeApi(overrides?: {
+  configuration?: Record<string, unknown>;
+  workspaceFolders?: Array<{ uri: { fsPath: string } }>;
+  errorMessageChoice?: string;
+}) {
+  const registeredCommands: string[] = [];
+  const registeredSchemes: string[] = [];
+  const createdWatchers: Array<{ glob: string; disposable: FakeDisposable }> = [];
+  const createdChannels: FakeDisposable[] = [];
+  const errorMessages: string[] = [];
+  let configChangeListener: ((e: { affectsConfiguration(s: string): boolean }) => void) | undefined;
+
+  const cfg = overrides?.configuration ?? {};
+  const api = {
+    commands: {
+      registerCommand: (id: string) => {
+        registeredCommands.push(id);
+        return new FakeDisposable();
+      },
+      executeCommand: async () => undefined,
+    },
+    workspace: {
+      workspaceFolders: overrides?.workspaceFolders,
+      isTrusted: true,
+      getConfiguration: () => ({
+        get: (key: string, dflt?: unknown) => (key in cfg ? cfg[key] : dflt),
+      }),
+      getWorkspaceFolder: () => undefined,
+      createFileSystemWatcher: (glob: string) => {
+        const disposable = new FakeDisposable();
+        createdWatchers.push({ glob, disposable });
+        return disposable;
+      },
+      onDidChangeConfiguration: (listener: (e: { affectsConfiguration(s: string): boolean }) => void) => {
+        configChangeListener = listener;
+        return new FakeDisposable();
+      },
+      registerTextDocumentContentProvider: (scheme: string) => {
+        registeredSchemes.push(scheme);
+        return new FakeDisposable();
+      },
+      openTextDocument: async () => ({}),
+    },
+    window: {
+      activeTextEditor: undefined,
+      createOutputChannel: () => {
+        const channel = Object.assign(new FakeDisposable(), {
+          name: "mdsmith",
+          append() {},
+          appendLine() {},
+          clear() {},
+          show() {},
+          hide() {},
+        });
+        createdChannels.push(channel);
+        return channel;
+      },
+      showErrorMessage: async (msg: string) => {
+        errorMessages.push(msg);
+        return overrides?.errorMessageChoice;
+      },
+      showWarningMessage: async () => undefined,
+      showInformationMessage: async () => undefined,
+      showInputBox: async () => undefined,
+      showQuickPick: async () => undefined,
+      showTextDocument: async () => ({}),
+    },
+    languages: {
+      getDiagnostics: () => [],
+      setTextDocumentLanguage: async (doc: unknown) => doc,
+    },
+    env: { openExternal: async () => true },
+    Uri: {
+      file: (p: string) => ({ fsPath: p, scheme: "file", toString: () => p }),
+      parse: (s: string) => ({ toString: () => s }),
+    },
+    ViewColumn: { Beside: 2 },
+    MarkdownString: class {},
+  };
+  return {
+    api: api as unknown as VscodeApi,
+    registeredCommands,
+    registeredSchemes,
+    createdWatchers,
+    createdChannels,
+    errorMessages,
+    fireConfigChange: (affects: boolean) =>
+      configChangeListener?.({ affectsConfiguration: () => affects }),
+  };
+}
+
+// makeContext builds a fake ExtensionContext exposing only the
+// subscriptions array and extensionPath the Wiring class uses.
+function makeContext(): { subscriptions: Array<{ dispose(): void }>; extensionPath: string } {
+  return { subscriptions: [], extensionPath: "/ext" };
+}
+
+// makeWiring constructs a Wiring with a fake api and a createClient
+// factory that hands back FakeClient instances, returning the latest
+// one for inspection. resolveBinary is stubbed so no real binary lookup
+// runs.
+function makeWiring(opts?: Parameters<typeof makeFakeApi>[0] & { startRejection?: Error }) {
+  const fake = makeFakeApi(opts);
+  const clients: FakeClient[] = [];
+  const wiring = new Wiring({
+    api: fake.api,
+    createClient: (_id, _name, _server, clientOptions) => {
+      const client = new FakeClient(clientOptions as ClientOptionsCapture);
+      if (opts?.startRejection) client.startRejection = opts.startRejection;
+      clients.push(client);
+      return client as unknown as ClientLike;
+    },
+    resolveBinary: () => "/abs/mdsmith",
+    findBinaryCandidates: () => [],
+  });
+  return { wiring, fake, clients, lastClient: () => clients[clients.length - 1] };
+}
+
+describe("Wiring.registerPaletteCommands", () => {
+  test("registers every contributed mdsmith command id exactly once", async () => {
+    // The command IDs are the extension's public surface (package.json
+    // contributes.commands plus the two programmatic commands). Pin the
+    // full set so a dropped or renamed registration fails loudly.
+    const { wiring, fake } = makeWiring();
+    await wiring.activate(makeContext());
+    const expected = [
+      "mdsmith.restartServer",
+      "mdsmith.showOutput",
+      "mdsmith.init",
+      "mdsmith.mergeDriver.install",
+      "mdsmith.fixWorkspace",
+      "mdsmith.kinds.resolve",
+      "mdsmith.kinds.why",
+      "mdsmith.openRuleDoc",
+    ];
+    for (const id of expected) {
+      expect(fake.registeredCommands).toContain(id);
+    }
+    // Each id is registered exactly once — no duplicate handlers.
+    for (const id of expected) {
+      expect(fake.registeredCommands.filter((c) => c === id)).toHaveLength(1);
+    }
+  });
+
+  test("registers the kinds and rule virtual-document schemes", async () => {
+    const { wiring, fake } = makeWiring();
+    await wiring.activate(makeContext());
+    expect(fake.registeredSchemes).toContain("mdsmith-kinds");
+    expect(fake.registeredSchemes).toContain("mdsmith-rule");
+  });
+});
+
+describe("Wiring config watcher", () => {
+  test("creates the .mdsmith.yml watcher on activate", async () => {
+    const { wiring, fake } = makeWiring();
+    await wiring.activate(makeContext());
+    expect(fake.createdWatchers).toHaveLength(1);
+    expect(fake.createdWatchers[0].glob).toBe("**/.mdsmith.yml");
+  });
+
+  test("disposes the previous watcher before creating a new one on restart", async () => {
+    // Each server start installs a fresh watcher; the prior one must be
+    // disposed first or VS Code accumulates watchers and double-fires
+    // change events. Restart goes through the same startServer path.
+    const { wiring, fake } = makeWiring();
+    const ctx = makeContext();
+    await wiring.activate(ctx);
+    await wiring.restartServer(ctx);
+    expect(fake.createdWatchers).toHaveLength(2);
+    // The first watcher is disposed; the second stays live.
+    expect(fake.createdWatchers[0].disposable.disposed).toBe(1);
+    expect(fake.createdWatchers[1].disposable.disposed).toBe(0);
+  });
+
+  test("disposes the watcher on deactivate", async () => {
+    const { wiring, fake } = makeWiring();
+    const ctx = makeContext();
+    await wiring.activate(ctx);
+    await wiring.deactivate();
+    expect(fake.createdWatchers[0].disposable.disposed).toBe(1);
+  });
+});
+
+describe("Wiring LSP client lifecycle", () => {
+  test("constructs a client and starts it on activate", async () => {
+    const { wiring, lastClient } = makeWiring();
+    await wiring.activate(makeContext());
+    expect(lastClient()).toBeDefined();
+    expect(lastClient().started).toBe(1);
+    expect(lastClient().isRunning()).toBe(true);
+  });
+
+  test("installs the MdsmithErrorHandler and the hover middleware", async () => {
+    // The client must run with our custom restart policy (so a rebuild
+    // loop doesn't permanently disable the server) and the hover-link
+    // rewrite middleware (so rule-doc links open offline).
+    const { wiring, lastClient } = makeWiring();
+    await wiring.activate(makeContext());
+    const opts = lastClient().clientOptions;
+    expect(opts.errorHandler).toBeDefined();
+    expect(typeof opts.errorHandler?.closed).toBe("function");
+    expect(opts.middleware?.provideHover).toBeDefined();
+  });
+
+  test("restartServer stops the old client and starts a fresh one", async () => {
+    const { wiring, clients } = makeWiring();
+    const ctx = makeContext();
+    await wiring.activate(ctx);
+    const first = clients[0];
+    await wiring.restartServer(ctx);
+    expect(first.stopped).toBe(1);
+    expect(clients).toHaveLength(2);
+    expect(clients[1].started).toBe(1);
+    expect(clients[1].isRunning()).toBe(true);
+  });
+
+  test("deactivate stops the running client and disposes the output channel", async () => {
+    const { wiring, fake, lastClient } = makeWiring();
+    await wiring.activate(makeContext());
+    await wiring.deactivate();
+    expect(lastClient().stopped).toBe(1);
+    expect(fake.createdChannels[0].disposed).toBe(1);
+  });
+
+  test("a start() rejection surfaces an error, clears the client, and disposes the watcher", async () => {
+    // When the binary cannot spawn, start() rejects. The extension must
+    // not throw out of activate(); it surfaces an actionable error,
+    // drops the client reference, and tears the watcher down so the next
+    // restart installs a clean one.
+    const { wiring, fake, lastClient } = makeWiring({
+      startRejection: new Error("spawn /abs/mdsmith ENOENT"),
+    });
+    const ctx = makeContext();
+    await wiring.activate(ctx);
+    expect(fake.errorMessages.length).toBeGreaterThan(0);
+    expect(fake.errorMessages[0]).toContain("Failed to start mdsmith Language Server");
+    // The watcher created for this attempt is disposed after the failure.
+    expect(fake.createdWatchers[0].disposable.disposed).toBe(1);
+    // A subsequent deactivate must be a no-op on the cleared client
+    // (stop() is never called a second time on the failed client).
+    await wiring.deactivate();
+    expect(lastClient().stopped).toBe(0);
+  });
+
+  test("the superseded notification flips the error handler to no-restart", async () => {
+    // When the server announces a newer instance took over, the close
+    // that follows must NOT restart — otherwise the orphaned host
+    // respawns a server the newer one supersedes again.
+    const { wiring, lastClient } = makeWiring();
+    await wiring.activate(makeContext());
+    const client = lastClient();
+    expect(client.supersededHandler).toBeDefined();
+    client.supersededHandler!();
+    const decision = client.clientOptions.errorHandler!.closed();
+    // CloseAction.DoNotRestart === 1.
+    expect(decision.action).toBe(1);
+  });
+
+  test("forwards an mdsmith.* config change to the running client", async () => {
+    // Toggling e.g. mdsmith.previewFix must nudge the server to re-pull
+    // config. The change is forwarded only when it touches mdsmith.* and
+    // only while the client is running.
+    const { wiring, fake, lastClient } = makeWiring();
+    await wiring.activate(makeContext());
+    const client = lastClient();
+    expect(client.isRunning()).toBe(true);
+    fake.fireConfigChange(true);
+    expect(client.notifications).toBe(1);
+    // An unrelated change does not nudge the server.
+    fake.fireConfigChange(false);
+    expect(client.notifications).toBe(1);
   });
 });
