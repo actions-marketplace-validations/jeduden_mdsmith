@@ -296,8 +296,8 @@ func (r *Rule) generateBody(
 	rendered := make([]string, 0, len(outputs))
 	for _, output := range outputs {
 		alt := fmt.Sprintf("%s output: %s", recipeName, output)
-		rendered = append(rendered,
-			strings.NewReplacer("{alt}", alt, "{output}", output).Replace(tmpl))
+		body := strings.NewReplacer("{output}", output, "{alt}", alt).Replace(tmpl)
+		rendered = append(rendered, body)
 	}
 	body := strings.Join(rendered, "\n")
 
@@ -369,11 +369,11 @@ func validatePathEntry(p string, allowGlob bool) string {
 	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") {
 		return "must be a relative path"
 	}
-	if !allowGlob && strings.ContainsAny(p, "*?[") {
+	if !allowGlob && strings.ContainsAny(p, "*?[{") {
 		return "must not contain glob characters"
 	}
 	cleaned := path.Clean(p)
-	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+	if cleaned == ".." || cleaned == "." || strings.HasPrefix(cleaned, "../") {
 		return `must not contain ".." path components`
 	}
 	if underMdsmithDir(cleaned) {

@@ -439,7 +439,7 @@ func piToLocate(pi *piparser.ProcessingInstruction, source []byte, lines [][]byt
 		if key := enclosingListKey(lines, line); key != "" {
 			res.DirectiveArg = key
 			res.DirectiveValue = item
-			if pi.Name == "build" && key == "inputs" {
+			if pi.Name == "build" && key == "inputs" && !isGlobPattern(item) {
 				res.DirectiveTargetFile = item
 			}
 		}
@@ -483,6 +483,9 @@ var piArgRE = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$`
 // piListItemRE matches a YAML list item line (`  - value`). The value
 // keeps its quote characters; the caller strips them.
 var piListItemRE = regexp.MustCompile(`^\s*-\s+(.*?)\s*$`)
+
+// isGlobPattern reports whether p contains doublestar glob metacharacters.
+func isGlobPattern(p string) bool { return strings.ContainsAny(p, "*?[{") }
 
 // headingOnLine returns the heading whose first source line equals
 // line, or nil.
