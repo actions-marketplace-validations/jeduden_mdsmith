@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -202,4 +203,48 @@ func TestDiscoverSchemas_RejectsEmptyFile(t *testing.T) {
 	_, err := discoverSchemas(dir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "foo.yaml")
+}
+
+// TestDiscoverSchemas_RejectsSymlink pins the symlink guard: a
+// symlinked entry under `.mdsmith/schemas/` is a config error rather
+// than being silently followed off the workspace.
+func TestDiscoverSchemas_RejectsSymlink(t *testing.T) {
+	dir := mkSchemaDir(t)
+	target := filepath.Join(dir, "target.yaml")
+	require.NoError(t, os.WriteFile(target, []byte("filename: \"a.md\"\n"), 0o644))
+	require.NoError(t, os.Symlink(target,
+		filepath.Join(dir, ".mdsmith", "schemas", "link.yaml")))
+
+	_, err := discoverSchemas(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+	assert.Contains(t, err.Error(), "link.yaml")
+}
+
+// TestDiscoverSchemas_ReadDirError pins the non-IsNotExist ReadDir
+// error branch: `.mdsmith/schemas` existing as a regular file rather
+// than a directory is surfaced, not treated as "no schemas".
+func TestDiscoverSchemas_ReadDirError(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".mdsmith"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, ".mdsmith", "schemas"), []byte("not a dir\n"), 0o644))
+
+	_, err := discoverSchemas(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading")
+}
+
+// TestDiscoverSchemas_RejectsOversizeFile pins parseSchemaFile's read
+// guard: a schema file above the 1 MB config cap errors with the path
+// instead of being read whole.
+func TestDiscoverSchemas_RejectsOversizeFile(t *testing.T) {
+	dir := mkSchemaDir(t)
+	body := "filename: \"" + strings.Repeat("a", int(maxConfigBytes)) + "\"\n"
+	writeSchema(t, dir, "big.yaml", body)
+
+	_, err := discoverSchemas(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "big.yaml")
+	assert.Contains(t, err.Error(), "too large")
 }

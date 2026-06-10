@@ -223,6 +223,26 @@ kinds:
 			"not just call it inline")
 }
 
+// TestLoad_SchemaFileErrorAborts pins loadFromBytes' error wrap: a
+// broken `.mdsmith/schemas/` entry (here a bad basename) fails the
+// whole Load under the "loading schema files" prefix rather than
+// being skipped.
+func TestLoad_SchemaFileErrorAborts(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(dir, ".mdsmith", "schemas"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, ".mdsmith", "schemas", "BAD.yaml"),
+		[]byte("filename: \"a.md\"\n"), 0o644))
+	cfgPath := filepath.Join(dir, ".mdsmith.yml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("rules: {}\n"), 0o644))
+
+	_, err := Load(cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading schema files")
+	assert.Contains(t, err.Error(), "BAD.yaml")
+}
+
 // TestLoad_NamedSchemaPlusInlineSchemaErrors pins task 5: a kind that
 // sets a named `schema:` and `rules.required-structure.inline-schema:`
 // is a dual-source conflict, quoting "pick one source".

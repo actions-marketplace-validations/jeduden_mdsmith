@@ -85,3 +85,69 @@ func TestKindSchemaRef_MapAccessorOnZero(t *testing.T) {
 	var ref KindSchemaRef
 	assert.Empty(t, ref.Map())
 }
+
+// TestKindSchemaRef_NullNodeDirect drives UnmarshalYAML with an
+// explicit !!null scalar node. yaml.v3 skips custom unmarshalers for
+// null values during a regular decode, so this branch is only
+// reachable by direct invocation — the test pins the method's
+// contract for callers that feed nodes straight in.
+func TestKindSchemaRef_NullNodeDirect(t *testing.T) {
+	node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
+	var ref KindSchemaRef
+	require.NoError(t, ref.UnmarshalYAML(node))
+	assert.Empty(t, ref.Name)
+	assert.Empty(t, ref.Map())
+}
+
+// TestKindSchemaRef_ScalarDecodeError covers the scalar arm whose
+// Decode fails: a !!binary scalar with invalid base64 cannot decode
+// into a string, and the error carries the schema: prefix.
+func TestKindSchemaRef_ScalarDecodeError(t *testing.T) {
+	_, err := decodeSchemaRef(t, `!!binary "not-base64!"`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "schema")
+}
+
+// TestKindSchemaRef_MappingDecodeError covers the mapping arm whose
+// Decode fails: yaml.v3 rejects a mapping with duplicate keys.
+func TestKindSchemaRef_MappingDecodeError(t *testing.T) {
+	_, err := decodeSchemaRef(t, `{a: 1, a: 2}`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "schema")
+}
+
+// TestInlineSchema pins the exported constructor for out-of-package
+// callers: the body lands in Map(), with no name and no source path.
+func TestInlineSchema(t *testing.T) {
+	m := map[string]any{"closed": true}
+	ref := InlineSchema(m)
+	assert.Empty(t, ref.Name)
+	assert.Empty(t, ref.SourcePath)
+	assert.Equal(t, m, ref.Map())
+}
+
+// TestInlineSchemaWithSource pins the exported resolved-ref
+// constructor: name, body, and source path are all carried.
+func TestInlineSchemaWithSource(t *testing.T) {
+	m := map[string]any{"filename": "a.md"}
+	ref := InlineSchemaWithSource("rfc-v1", m, ".mdsmith/schemas/rfc-v1.yaml")
+	assert.Equal(t, "rfc-v1", ref.Name)
+	assert.Equal(t, ".mdsmith/schemas/rfc-v1.yaml", ref.SourcePath)
+	assert.Equal(t, m, ref.Map())
+}
+
+// TestNodeKindName covers every yaml.Kind the error renderer names,
+// plus the zero-kind fallback.
+func TestNodeKindName(t *testing.T) {
+	cases := map[yaml.Kind]string{
+		yaml.SequenceNode: "sequence",
+		yaml.MappingNode:  "mapping",
+		yaml.ScalarNode:   "scalar",
+		yaml.AliasNode:    "alias",
+		yaml.DocumentNode: "document",
+		yaml.Kind(0):      "value",
+	}
+	for kind, want := range cases {
+		assert.Equal(t, want, nodeKindName(kind))
+	}
+}
