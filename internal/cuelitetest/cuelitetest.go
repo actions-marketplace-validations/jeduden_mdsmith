@@ -36,6 +36,7 @@ import (
 	"unicode/utf8"
 
 	"cuelang.org/go/cue"
+	"cuelang.org/go/cue/ast"
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/cue/errors"
 	cuejson "cuelang.org/go/encoding/json"
@@ -138,10 +139,17 @@ func sortedPaths(paths [][]string) [][]string {
 }
 
 // validatePaths builds a StageValidate Outcome from a set of rejecting
-// field paths, sorted deterministically so the two engines compare leaf
-// for leaf regardless of the order each surfaced them.
+// field paths, sorted deterministically and de-duplicated so the two engines
+// compare on the SET of rejecting leaves regardless of order or multiplicity.
+// CUE emits a disjunction conflict once per failed branch (so `"x" | "y"`
+// rejected yields the same path several times), while the in-house engine
+// reports each failing leaf once; both arms reject the same leaf, so the
+// harness compares the leaf SET. The MDS020 diagnostic path already
+// de-duplicates per field (dedupedCUEErrorDiags), so this matches the
+// behavior consumers actually observe.
 func validatePaths(paths [][]string) Outcome {
 	slices.SortFunc(paths, slices.Compare[[]string])
+	paths = slices.CompactFunc(paths, slices.Equal[[]string])
 	return Outcome{Stage: StageValidate, Paths: paths}
 }
 
@@ -222,46 +230,83 @@ func oracleValidate(leaves []errors.Error) Outcome {
 	}
 	paths := make([][]string, len(leaves))
 	for i, leaf := range leaves {
-		paths[i] = leaf.Path()
+		paths[i] = normalizePath(leaf.Path())
 	}
 	return validatePaths(paths)
 }
 
-// oracleData lifts the data document into ctx the same way cuelite's
-// CompileJSON does — strict JSON extraction plus a built-value bottom
-// check, not CompileBytes — so the oracle rejects non-JSON data and
-// duplicate keys exactly where the cuelite path does. It returns the
-// build error so OraclePath branches on it rather than on a sentinel
-// bottom value. It takes []byte so callers convert once: the benchmark
-// hoists the conversion out of its timed loop, keeping both arms
-// symmetric.
+// normalizePath strips the quote-wrapping CUE applies to a path segment that
+// is not a bare identifier (a numeric-looking key "0" comes back as `"0"`),
+// so the oracle compares the RAW field key — the same unquoted key the
+// in-house engine carries and that MDS020 indexes docFM with. Without this,
+// the two arms diverge on the rendering of a quote-needing key even though
+// they reject the same field.
+func normalizePath(segs []string) []string {
+	if segs == nil {
+		return nil
+	}
+	out := make([]string, len(segs))
+	for i, s := range segs {
+		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+			if unq, err := strconv.Unquote(s); err == nil {
+				out[i] = unq
+				continue
+			}
+		}
+		out[i] = s
+	}
+	return out
+}
+
+// oracleData lifts the data document into ctx through CUE's own strict-JSON
+// path — an independent duplicate-key scan, then cuejson.Extract plus a
+// built-value bottom check — so the oracle rejects non-JSON data and
+// duplicate keys exactly where the in-house engine does. It returns the lift
+// error so OraclePath branches on it rather than on a sentinel bottom value,
+// and takes []byte so the benchmark hoists the conversion out of its timed
+// loop, keeping both arms symmetric.
 //
 // The duplicate-key rejection is an INDEPENDENT reimplementation of
-// cuelite's rule (rawDuplicateKeys), not a call into it: the harness's
-// value is that two separate implementations of the same contract agree.
-// CUE's JSON lift would silently unify same-named object keys into a
-// phantom merged object (a mergeable duplicate compiles clean), so
-// without this check the oracle would accept a document the cuelite arm
-// rejects at StageCompileData — a phantom divergence. Both arms
-// therefore reject any duplicate key here, before the lift.
+// cuelite's rule (rawDuplicateKeys), not a call into it: the harness's value
+// is that two separate implementations of the same contract agree. CUE's
+// JSON lift would silently unify same-named object keys into a phantom
+// merged object, so without this check the oracle would accept a document
+// the in-house arm rejects at StageCompileData — a phantom divergence.
+//
+// The post-flip in-house lifter accepts a lone-surrogate escape ("\ud800")
+// as a U+FFFD string, where this CUE lift rejects it; that deliberate
+// divergence (plan 238) is kept out of the differential corpus and pinned by
+// the cuelite package's own unit tests instead, so this oracle stays a
+// faithful direct-CUE check on every corpus row.
 func oracleData(ctx *cue.Context, data []byte) (cue.Value, error) {
 	if err := rawDuplicateKeys(data); err != nil {
 		return cue.Value{}, err
 	}
-	expr, err := cuejson.Extract("", data)
+	expr, err := extractJSONSafely(data)
 	if err != nil {
 		return cue.Value{}, err
 	}
-	// BuildExpr can still bottom on a grammar-valid string that is not a
-	// valid Unicode value — a lone-surrogate escape such as "\ud800"
-	// passes the duplicate scan and Extract but builds to ⊥. Surface it as
-	// the data-compile error so the oracle, like cuelite's buildJSON,
-	// classifies it at StageCompileData rather than accepting a phantom.
 	val := ctx.BuildExpr(expr)
 	if err := val.Err(); err != nil {
 		return cue.Value{}, err
 	}
 	return val, nil
+}
+
+// extractJSONSafely wraps cuejson.Extract with a panic recovery: cuelang's
+// JSON-via-expression parser panics (rather than erroring) on some malformed
+// inputs (e.g. "0..."), which would crash the differential run instead of
+// recording a data-compile rejection. Recovering converts the panic to the
+// data-compile error the in-house arm also produces for malformed data, so
+// the two arms agree on rejection rather than the oracle aborting.
+func extractJSONSafely(data []byte) (expr ast.Expr, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			expr = nil
+			err = fmt.Errorf("cuejson.Extract panicked: %v", r)
+		}
+	}()
+	return cuejson.Extract("", data)
 }
 
 // rawDuplicateKeys rejects the first object key repeated within one

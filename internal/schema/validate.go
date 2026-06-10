@@ -2,16 +2,13 @@ package schema
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
-	"cuelang.org/go/cue"
-	"cuelang.org/go/cue/cuecontext"
-	"cuelang.org/go/cue/errors"
+	"github.com/jeduden/mdsmith/cue/cuelite"
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/yamlutil"
 	"github.com/jeduden/mdsmith/pkg/goldmark/ast"
@@ -132,19 +129,19 @@ func validateFrontmatterDiags(
 		return nil
 	}
 	anchor := nonBodyDiagLine(f)
-	// Route the schema-side CompileString through RunCache.CompiledCUE
-	// when one is in scope so N host files sharing a schema compile its
-	// CUE source exactly once per Run. The wrapper carries the
-	// *cue.Context the value was compiled against; the document
-	// front-matter CompileBytes below must reuse that context because
-	// cue.Value cannot cross contexts.
+	// Route the schema-side compile through RunCache.CompiledCUE when one
+	// is in scope so N host files sharing a schema compile its CUE source
+	// exactly once per Run. The cached cuelite.Value is immutable and
+	// context-free, so the per-file Unify below — which lifts the document's
+	// front matter directly via CompileMap and meets it with the shared
+	// schema — reads the cached value without mutating it, safe under -race
+	// regardless of operand order.
 	var cache *lint.RunCache
 	if f != nil {
 		cache = f.RunCache
 	}
 	compiled := CachedCompile(cache, expr)
 	schemaVal := compiled.Value
-	ctx := compiled.Ctx
 	if err := compiled.Err(); err != nil {
 		return []lint.Diagnostic{
 			compileFailureDiag(sch, "schema", "valid schema CUE", err).
@@ -153,19 +150,24 @@ func validateFrontmatterDiags(
 	if docFM == nil {
 		docFM = map[string]any{}
 	}
-	data, err := json.Marshal(docFM)
-	if err != nil {
+	// A front-matter value the in-house lifter cannot represent (a value type
+	// no YAML/JSON decoder produces, e.g. a channel) is a data-shape failure,
+	// not a schema-constraint violation. Surface it as the dedicated
+	// front-matter diagnostic so the reader sees the shape problem rather than
+	// a confusing per-field constraint message. The JSON round-trip is gone
+	// (plan 218), so this replaces the former json.Marshal failure branch.
+	if liftErr := cuelite.LiftMap(docFM).Err(); liftErr != nil {
 		return []lint.Diagnostic{
-			compileFailureDiag(sch, "front matter", "JSON-marshalable front matter", err).
+			compileFailureDiag(sch, "front matter", "representable front-matter values", liftErr).
 				Emit(mkDiag, f.Path, anchor)}
 	}
-	// CompileBytes parses the JSON the marshal above produced, which is
-	// always valid CUE, so it cannot error here. A bottom value would
-	// still surface through the Unify + Validate path below, so there is
-	// no separate (untestable) compile-failure branch for it.
-	dataVal := ctx.CompileBytes(data)
-	merged := schemaVal.Unify(dataVal)
-	verr := merged.Validate(cue.Concrete(true))
+	// Validate the front-matter map DIRECTLY against the compiled schema,
+	// with no json.Marshal → CompileJSON round-trip (plan 218 hot path).
+	// CompileMap lifts the map and unifies it with the cached schema; the
+	// context-free Value is shared safely across parallel workers with no
+	// per-file recompile and no mutation.
+	merged := schemaVal.CompileMap(docFM)
+	verr := merged.Validate()
 	if verr == nil {
 		// Skip the docFrontmatterKeyLines YAML re-parse when there
 		// is nothing for the deprecation walker to do — the common
@@ -176,12 +178,12 @@ func validateFrontmatterDiags(
 		return validateDeprecatedFieldsWithLines(
 			f, sch, docFM, docFrontmatterKeyLines(f), mkDiag)
 	}
-	// errors.Errors returns a non-empty list for any non-nil CUE
-	// validation error, so there is no separate (untestable) "valid CUE"
-	// fallback; the per-error diagnostics below cover every reachable
-	// validation failure.
+	// cuelite.Errors returns a non-empty list for any non-nil validation
+	// error (the documented Validate invariant), so there is no separate
+	// (untestable) "valid CUE" fallback; the per-error diagnostics below
+	// cover every reachable validation failure.
 	keyLines := docFrontmatterKeyLines(f)
-	out := dedupedCUEErrorDiags(f, sch, docFM, errors.Errors(verr), keyLines, mkDiag)
+	out := dedupedCUEErrorDiags(f, sch, docFM, cuelite.Errors(verr), keyLines, mkDiag)
 	return append(out, validateDeprecatedFieldsWithLines(f, sch, docFM, keyLines, mkDiag)...)
 }
 
@@ -192,7 +194,7 @@ func validateFrontmatterDiags(
 // contains the same delimiter a flat string key would have used.
 func dedupedCUEErrorDiags(
 	f *lint.File, sch *Schema, docFM map[string]any,
-	cueErrs []errors.Error, keyLines map[string]int, mkDiag MakeDiag,
+	cueErrs []*cuelite.PathError, keyLines map[string]int, mkDiag MakeDiag,
 ) []lint.Diagnostic {
 	type dedupKey struct{ field, actual, expected string }
 	seen := make(map[dedupKey]bool, len(cueErrs))
@@ -467,7 +469,7 @@ func parseFMBlockKeyLines(fm []byte) map[string]int {
 // resolution) is the natural follow-up if nested frontmatter
 // constraints land later.
 func schemaDiagFromCUEError(
-	sch *Schema, docFM map[string]any, ce errors.Error,
+	sch *Schema, docFM map[string]any, ce *cuelite.PathError,
 ) SchemaDiagnostic {
 	path := ce.Path()
 	field := "front matter"
@@ -1682,24 +1684,16 @@ func ValidateFrontmatter(sch *Schema, fm map[string]any) error {
 	if strings.TrimSpace(expr) == "" {
 		return nil
 	}
-	ctx := cuecontext.New()
-	schemaVal := ctx.CompileString(expr)
-	if err := schemaVal.Err(); err != nil {
+	schemaVal, err := cuelite.Compile(expr)
+	if err != nil {
 		return fmt.Errorf("invalid CUE schema: %w", err)
 	}
 	if fm == nil {
 		fm = map[string]any{}
 	}
-	data, err := json.Marshal(fm)
-	if err != nil {
-		return fmt.Errorf("serialize front matter: %w", err)
-	}
-	dataVal := ctx.CompileBytes(data)
-	if err := dataVal.Err(); err != nil {
-		return fmt.Errorf("compile front matter: %w", err)
-	}
-	merged := schemaVal.Unify(dataVal)
-	if err := merged.Validate(cue.Concrete(true)); err != nil {
+	// Validate the front-matter map directly against the schema, no JSON
+	// round-trip (plan 218).
+	if err := schemaVal.CompileMap(fm).Validate(); err != nil {
 		return err
 	}
 	return nil
@@ -1713,9 +1707,7 @@ func ValidateFrontmatterSyntax(sch *Schema) error {
 	if strings.TrimSpace(expr) == "" {
 		return nil
 	}
-	ctx := cuecontext.New()
-	v := ctx.CompileString(expr)
-	if err := v.Err(); err != nil {
+	if _, err := cuelite.Compile(expr); err != nil {
 		return fmt.Errorf("invalid schema frontmatter CUE: %w", err)
 	}
 	return nil

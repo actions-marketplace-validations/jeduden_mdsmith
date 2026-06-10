@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"cuelang.org/go/cue"
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/jeduden/mdsmith/internal/bytelimit"
 	"github.com/jeduden/mdsmith/internal/fieldinterp"
@@ -2345,21 +2344,10 @@ func validateFrontMatterCUE(schema string, fm map[string]any) error {
 		fm = map[string]any{}
 	}
 
-	data, err := json.Marshal(fm)
-	if err != nil {
-		return fmt.Errorf("serialize front matter: %w", err)
-	}
-
-	// The data value must come from the same cue.Context as the
-	// schema value — cue values cannot cross contexts. The cached
-	// wrapper exposes its Context for exactly this case.
-	// CompileBytes of json.Marshal output is always valid CUE, so
-	// any error on dataVal would also surface through merged.Validate
-	// below; the previous explicit check carried no testable path.
-	dataVal := compiled.Ctx.CompileBytes(data)
-
-	merged := compiled.Value.Unify(dataVal)
-	if err := merged.Validate(cue.Concrete(true)); err != nil {
+	// Validate the front-matter map directly against the cached schema, no
+	// JSON marshal round-trip (plan 218). The context-free schema Value is
+	// shared safely with no per-file recompile.
+	if err := compiled.Value.CompileMap(fm).Validate(); err != nil {
 		return err
 	}
 

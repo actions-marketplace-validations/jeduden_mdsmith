@@ -280,6 +280,26 @@ func TestSortedPaths(t *testing.T) {
 	assert.Equal(t, [][]string{{"b"}, {"a"}}, in, "the input is left untouched")
 }
 
+// TestNormalizePath pins normalizePath directly: a nil input stays nil, a
+// quote-wrapped segment (a numeric-looking key CUE re-quotes) is unquoted to
+// its raw key, and a bare segment passes through. A segment that is not a
+// valid quoted string is left as-is.
+func TestNormalizePath(t *testing.T) {
+	assert.Nil(t, normalizePath(nil), "a nil path stays nil")
+	got := normalizePath([]string{`"0"`, "title", `"a b"`, `"unterminated`})
+	assert.Equal(t, []string{"0", "title", "a b", `"unterminated`}, got)
+}
+
+// TestExtractJSONSafely_panicRecovered pins that extractJSONSafely converts a
+// cuejson.Extract panic into a data-compile error rather than crashing the
+// differential run. The input "0..." makes cuelang's JSON-via-expression
+// parser panic.
+func TestExtractJSONSafely_panicRecovered(t *testing.T) {
+	_, err := extractJSONSafely([]byte(`0...`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "panicked")
+}
+
 func TestCompare(t *testing.T) {
 	t.Run("agreement records no failure", func(t *testing.T) {
 		r := &recorder{}
@@ -336,12 +356,12 @@ func corpus() []Case {
 		// the cuelite arm rejects it at StageCompileData — a phantom
 		// divergence. Both arms must reject it at the data stage.
 		{Name: "mergeable duplicate key reject", Schema: `{a: {b: int, c: int}}`, Data: `{"a":{"b":1},"a":{"c":2}}`},
-		// A lone-surrogate escape is grammar-valid, duplicate-free strict
-		// JSON that passes the scanner and cuejson.Extract but builds to a
-		// bottom ("invalid string: unmatched surrogate pair"). Both arms must
-		// surface that bottom as a data-stage compile error (StageCompileData)
-		// rather than one arm accepting a phantom value.
-		{Name: "lone-surrogate value reject", Schema: `{a: string, b: int}`, Data: `{"a": "\ud800", "b": "x"}`},
+		// A type-mismatched scalar at a named field: a string where the schema
+		// wants int. Both arms reject at the field path. (The former
+		// lone-surrogate-value row tested CUE's surrogate rejection, which the
+		// flip deliberately changed to acceptance — that divergence is pinned by
+		// the cuelite package's own unit tests, not this faithful-CUE corpus.)
+		{Name: "string-where-int reject", Schema: `{a: string, b: int}`, Data: `{"a": "ok", "b": "x"}`},
 		// 1e999 is valid JSON but overflows float64; without dec.UseNumber()
 		// in both walkers, json.Decoder.Token errors on it mid-scan and the
 		// mergeable duplicate "a" beside it slips past BOTH arms into a
@@ -360,26 +380,62 @@ func corpus() []Case {
 		// so both arms defer to Extract's "after top-level value" error and
 		// resolve at StageCompileData rather than fabricating a duplicate "a".
 		{Name: "trailing top-level value reject", Schema: `{x: int}`, Data: `{"x":1} {"a":1,"a":2}`},
-		// Two distinct invalid-byte raw keys both decode to U+FFFD; without a
-		// utf8.Valid pre-check in both walkers, one arm fabricates a duplicate
-		// while the other defers to Extract — a divergence. Both arms must
-		// defer such input to Extract.
-		{Name: "invalid-UTF-8 keys defer", Schema: `{a: _}`, Data: "{\"a\xff\":1,\"a\xfe\":2}"},
-		// Two distinct lone-surrogate escaped keys decode to the same U+FFFD;
-		// both walkers must skip dup tracking for U+FFFD keys, so neither
-		// fabricates a duplicate. (The build then rejects the surrogate via
-		// the val.Err() guard, so both arms resolve at StageCompileData.)
-		{Name: "lone-surrogate keys not duplicates", Schema: `{a: _}`, Data: `{"\ud800":1,"\udc00":2}`},
+		// A deeply nested array-element object with a duplicate key: both the
+		// in-house scanner and the oracle's independent walk descend through the
+		// array levels and reject the duplicate at the data stage. (The former
+		// invalid-UTF-8 and lone-surrogate-key rows tested CUE's surrogate/UTF-8
+		// rejection at the build, a deliberate post-flip divergence pinned by the
+		// cuelite unit tests rather than this faithful-CUE corpus.)
+		{Name: "deep array-element duplicate reject", Schema: `{a: _}`, Data: `{"a":[[{"k":1,"k":2}]]}`},
 		// A string VALUE that equals its own key. The seenKey parity guard
 		// must not misread the value as a key; deleting it fabricates a
 		// duplicate in the cuelite arm and the two arms diverge.
 		{Name: "value equal to own key ok", Schema: `{a: string}`, Data: `{"a":"a"}`},
 		// A string value that equals a LATER sibling key.
 		{Name: "value equal to sibling key ok", Schema: `{x: string, y: int}`, Data: `{"x":"y","y":1}`},
-		// A U+FFFD key is skipped for dup tracking, but its VALUE subtree must
-		// still be walked in BOTH arms: a real duplicate nested under a
-		// lone-surrogate key is caught at the data stage. An arm that skipped
-		// the whole subtree after a lossy key would accept this and diverge.
-		{Name: "duplicate nested under a lossy key reject", Schema: `{a: _}`, Data: `{"\ud800":{"a":1,"a":2}}`},
+		// A lone-surrogate-escape key is rejected at the data stage in BOTH arms:
+		// the in-house scanner rejects the escape (restored, plan 238) and CUE's
+		// BuildExpr rejects the unmatched surrogate pair. Either way the document
+		// resolves at StageCompileData, so the two arms agree.
+		{Name: "lone-surrogate escape key reject", Schema: `{a: _}`, Data: `{"\ud800":{"a":1,"a":2}}`},
+		// P0 semantics divergences (plan 238) — each was a round-1 minimized
+		// input where the in-house engine disagreed with CUE before the engine
+		// alignment commit. Pinned here so a regression in any aligned rule fails
+		// the CI-visible differential run, not just the local fuzzer.
+		//
+		// Disjunction defaults: two * marks are ambiguous (non-concrete), so a
+		// required default is unsatisfied — both arms reject at the field path.
+		{Name: "p0 multiple marks reject", Schema: `{a: *string | *""}`, Data: `{}`},
+		// Equal concrete disjuncts collapse to the single value — accepted.
+		{Name: "p0 equal disjuncts accept", Schema: `{a: "x" | "x"}`, Data: `{}`},
+		// A disjunction whose branches are all bottom (0&1, 1&0) is an empty
+		// disjunction — both arms reject at schema compile.
+		{Name: "p0 all-bottom disjunction reject", Schema: `{x: 0&1 | 1&0}`, Data: `{"x":0}`},
+		// The default of a meet is the meet of the defaults: *1 and *2 conflict,
+		// leaving no concrete default — both arms reject the absent field.
+		{Name: "p0 meet of defaults conflicts", Schema: `{x: (*1 | int) & (*2 | int)}`, Data: `{}`},
+		// A parenthesized nested default carries up the flatten — accepted.
+		{Name: "p0 nested default carries", Schema: `{x: (*1 | 2) | 3}`, Data: `{}`},
+		// An empty numeric bound interval reduces to bottom at schema compile.
+		{Name: "p0 empty bound reject", Schema: `{x: >=10 & <=5}`, Data: `{"x":7}`},
+		// Relational == compares numbers across kinds (2 == 2.0 is true).
+		{Name: "p0 numeric cross-kind compare", Schema: `{x: 2 == 2.0}`, Data: `{"x":true}`},
+		// A float64 lifts to a float leaf: float accepts 2.0, int rejects it.
+		{Name: "p0 float accepts float", Schema: `{x: float}`, Data: `{"x": 2.0}`},
+		{Name: "p0 int rejects float", Schema: `{x: int}`, Data: `{"x": 2.0}`},
+		// A thunk nested in a list element is forced against its sibling scope.
+		{
+			Name:   "p0 list-element thunk",
+			Schema: `{mech: string, xs: [mech != ""]}`, Data: `{"mech": "p", "xs": [true]}`,
+		},
+		// A thunk nested in a disjunction branch resolves against the scope.
+		{
+			Name:   "p0 disjunction-branch thunk",
+			Schema: `{m: string, x: (m == "a") | "z"}`, Data: `{"m": "a", "x": true}`,
+		},
+		// (An int/float literal outside the int64/float64 subset is a strict-
+		// subset divergence — the in-house engine rejects at schema compile while
+		// CUE accepts — so it is NOT a corpus agreement row. It is seeded directly
+		// into FuzzValidate, where the strict-subset hatch covers it.)
 	}
 }

@@ -148,6 +148,32 @@ func TestValidateFrontmatterDiags_EmptyConstraintsReturnsNil(t *testing.T) {
 	assert.Nil(t, diags)
 }
 
+// TestValidateFrontmatterDiags_ClosedExtraField covers the
+// schemaDiagFromCUEError extra-field branch: a closed schema (the
+// FrontmatterCUE wraps the map in close({...})) rejects a key the document
+// adds that the schema does not declare, rendering an "extra field"
+// diagnostic. The single declared key is present, so only the undeclared
+// key fails, exercising the not-declared-in-schema rendering.
+func TestValidateFrontmatterDiags_ClosedExtraField(t *testing.T) {
+	sch := &Schema{
+		Source:      "kind closed",
+		Frontmatter: map[string]string{"id": `int`},
+	}
+	f, err := lint.NewFileFromSource("doc.md", []byte("# T\n"), true)
+	require.NoError(t, err)
+	diags := ValidateFrontmatterDiags(
+		f, sch, map[string]any{"id": 1, "stray": "x"}, makeDiagForTest)
+	require.NotEmpty(t, diags)
+	var foundStray bool
+	for _, d := range diags {
+		if strings.Contains(d.Message, "stray") &&
+			strings.Contains(d.Message, "not declared in schema") {
+			foundStray = true
+		}
+	}
+	assert.True(t, foundStray, "an undeclared key must render a not-declared diagnostic: %+v", diags)
+}
+
 // TestValidateFrontmatterDiags_InvalidCUESchemaCarriesRef
 // covers the schemaVal.Err() != nil branch: a malformed
 // CUE expression in the schema's Frontmatter map produces
@@ -197,12 +223,11 @@ func TestNonBodyDiagLine_StrippedAndUnstripped(t *testing.T) {
 	assert.Equal(t, 1, NonBodyDiagLine(unstripped))
 }
 
-// TestValidateFrontmatterDiags_JSONMarshalFailureCarriesRef
-// regresses the json.Marshal early-return path. A channel
-// value in docFM is non-marshalable, so the validator falls
-// through to the JSON-marshalable-front-matter compile
-// failure diagnostic.
-func TestValidateFrontmatterDiags_JSONMarshalFailureCarriesRef(t *testing.T) {
+// TestValidateFrontmatterDiags_UnrepresentableValueCarriesRef regresses the
+// lift-failure early-return path. A channel value in docFM is not a
+// representable front-matter value, so the validator emits the dedicated
+// front-matter shape diagnostic (the JSON round-trip is gone — plan 218).
+func TestValidateFrontmatterDiags_UnrepresentableValueCarriesRef(t *testing.T) {
 	sch := &Schema{
 		Source: "kind broken",
 		Frontmatter: map[string]string{
@@ -214,7 +239,7 @@ func TestValidateFrontmatterDiags_JSONMarshalFailureCarriesRef(t *testing.T) {
 	docFM := map[string]any{"data": make(chan int)}
 	diags := ValidateFrontmatterDiags(f, sch, docFM, makeDiagForTest)
 	require.Len(t, diags, 1)
-	assert.Contains(t, diags[0].Message, "JSON-marshalable")
+	assert.Contains(t, diags[0].Message, "representable front-matter values")
 	require.Len(t, diags[0].RelatedLocations, 1)
 	assert.Equal(t, "kind broken", diags[0].RelatedLocations[0].Message)
 }
