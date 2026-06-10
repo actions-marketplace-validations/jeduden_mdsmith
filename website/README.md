@@ -190,7 +190,11 @@ settings.
 ## Design system origin
 
 The CSS in `static/css/` is the Claude Design export for the
-project. See:
+project. The contributor reference for the system's rules —
+color roles, type, spacing and shadow tiers, component policy,
+iconography — is
+[`docs/development/design-system.md`](../docs/development/design-system.md).
+See:
 
 - `static/css/colors_and_type.css` — tokens, base typography
 - `static/css/app.css` — component styles (class-based, no
