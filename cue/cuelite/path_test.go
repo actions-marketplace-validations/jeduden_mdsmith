@@ -147,6 +147,11 @@ func TestParsePath_accepted(t *testing.T) {
 		// after CR is stripped the body is `\#n`, the level-1 escape for a real
 		// newline. Both arms agree (round-5 CR-family probe).
 		{"multiline raw backslash-CR before hash introducer", "#\"\"\"\n  \\\r#n\n  \"\"\"#", []string{"\n"}},
+		// CR-near-close accept (round 6): a CR that does NOT complete an earlier
+		// `"""`+'#' run leaves the close where the raw scan found it, so a CR
+		// right after the close is trailing whitespace the literal accepts and the
+		// value is unchanged.
+		{"multiline CR after close", "\"\"\"\na\n\"\"\"\r", []string{"a"}},
 		// Escaped-newline line continuation. CUE's scanner accepts a raw '\'+CR
 		// as a literal backslash, and stripCR then fuses '\#' with the following
 		// newline into literal.Unquote's escapedNewline — eliding the newline and
@@ -298,6 +303,20 @@ func TestParsePath_rejected(t *testing.T) {
 		// An escaped newline followed by a line that does NOT carry the indent
 		// prefix is CUE's skipWhitespaceAfterNewline error → empty → rejected.
 		{"multiline escaped newline bad next indent", "#\"\"\"\n  a\\\r#\nx\n  \"\"\"#"},
+		// CR-near-close family (round 6): the scanner closes the token on RAW
+		// bytes (consumeStringClose does not strip CR), so a CR breaking a
+		// `"""`+`#` run lets the token run on to a LATER close — but the
+		// CR-stripped token CUE then hands to literal.Unquote re-finds the close
+		// at the now-fused EARLIER `"""`+'#' run, whose content/closing-line then
+		// decode to "". The in-house parser had found the close once, on raw
+		// bytes, and accepted a non-empty body. Probe the neighborhood: a bare
+		// CR before the hash run at level 1, content before it, a CR inside the
+		// closing quote-run at level 0 (`""`+CR+`"`), and the same with a
+		// trailing dotted selector.
+		{"multiline CR fuses earlier close level1", "#\"\"\"\n\"\"\"\r#\n\"\"\"#"},
+		{"multiline CR fuses earlier close level1 then dot", "#\"\"\"\n\"\"\"\r#\n\"\"\"#.x"},
+		{"multiline CR fuses earlier close content before", "#\"\"\"\nq\"\"\"\r#z\n\"\"\"#"},
+		{"multiline CR inside closing quote-run level0", "\"\"\"\n\"\"\r\"\n\"\"\""},
 		// Mirror rows that the corpus pins but the unit table had not (item 5).
 		{"block comment separator", "a/*c*/.b"},
 		{"vertical tab separator", "a\v.b"},

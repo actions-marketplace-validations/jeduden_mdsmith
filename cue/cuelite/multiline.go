@@ -103,6 +103,25 @@ func unquoteMultiline(token string, hashes int) string {
 		return ""
 	}
 	token = stripCR(token)
+	// CUE's scanner finds the token END on RAW bytes (consumeStringClose does
+	// not strip CR), so a CR breaking a `"""`+'#' run lets the raw token run on
+	// to a LATER close — exactly what parseMultilineSegment's raw
+	// multilineCloseIndex computed. But the literal CUE then hands to
+	// literal.Unquote is the CR-STRIPPED token, and literal.Unquote re-finds the
+	// close at the FIRST `"""`+'#' run in that stripped form, which the CR fusion
+	// may move earlier. So re-locate the close on the stripped token and trim the
+	// token there for value assembly: when no CR moved it, this is the same end
+	// parseMultilineSegment already found (a no-op); when a CR fused an earlier
+	// `"""`+'#' run, the value is computed against that earlier close — matching
+	// cue.ParsePath, which decodes the now-shorter content/closing-line to "".
+	closeLen := hashes + 3
+	openerLen := hashes + 3
+	closeDelim := `"""` + strings.Repeat("#", hashes)
+	// The raw scan matched a CR-free `"""`+'#' run (a CR inside the run would have
+	// broken the match), and a CR-free run survives stripCR unchanged, so a close
+	// always remains here: rel is never negative.
+	rel := multilineCloseIndex(token[openerLen:], hashes, closeDelim)
+	token = token[:openerLen+rel+closeLen]
 	ws, contentStart, ok := multilineWhitespace(token, hashes)
 	if !ok {
 		// Opener not followed by a newline, or the closing line carries
@@ -110,11 +129,10 @@ func unquoteMultiline(token string, hashes int) string {
 		return ""
 	}
 	// The content region is everything from the first content byte up to (but
-	// excluding) the closing delimiter; the multilineCloseIndex scan guarantees
-	// the delimiter sits at the very end of the token, so trimming its length
-	// leaves exactly the content lines plus the final newline and the closing
-	// line's indentation.
-	closeLen := hashes + 3
+	// excluding) the closing delimiter; the re-located close above guarantees the
+	// delimiter sits at the very end of the (possibly trimmed) token, so trimming
+	// its length leaves exactly the content lines plus the final newline and the
+	// closing line's indentation.
 	content := token[contentStart : len(token)-closeLen]
 	decoded, decodeOK := decodeMultilineBody(content, ws, hashes)
 	if !decodeOK {

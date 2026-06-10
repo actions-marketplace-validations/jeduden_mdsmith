@@ -524,6 +524,29 @@ func pathCorpus() []PathCase {
 		{Name: "multiline escaped newline bad next indent rejected", Expr: "#\"\"\"\n  a\\\r#\nx\n  \"\"\"#"},
 		{Name: "multiline raw truncated escape rejected", Expr: "#\"\"\"\na\\#"},
 		{Name: "raw-string trailing escape introducer rejected", Expr: "#\"a\\#"},
+		// CR-near-close family (round 6): the scanner finds the token END on RAW
+		// bytes (consumeStringClose never strips CR), so a CR breaking a
+		// `"""`+'#' run lets the raw token run on to a LATER close. But the
+		// literal CUE then hands to literal.Unquote is CR-STRIPPED, and Unquote
+		// re-finds the close at the now-fused EARLIER `"""`+'#' run, whose shorter
+		// content/closing-line decode to "" — rejected. The in-house parser had
+		// located the close once, on raw bytes, and accepted the longer body. The
+		// fix re-locates the close on the stripped token before value assembly.
+		// Probe the neighborhood: a bare CR before the hash run at level 1, the
+		// same with content before it and a trailing dotted selector, and a CR
+		// inside the closing quote-run at level 0 (`""`+CR+`"`).
+		{Name: "multiline CR fuses earlier close rejected", Expr: "#\"\"\"\n\"\"\"\r#\n\"\"\"#"},
+		{Name: "multiline CR fuses earlier close then dot rejected", Expr: "#\"\"\"\n\"\"\"\r#\n\"\"\"#.x"},
+		{Name: "multiline CR fuses earlier close content before rejected", Expr: "#\"\"\"\nq\"\"\"\r#z\n\"\"\"#"},
+		{Name: "multiline CR inside closing quote-run rejected", Expr: "\"\"\"\n\"\"\r\"\n\"\"\""},
+		// A CR that does NOT complete the EARLIER `"""`+'#' run leaves the close
+		// where the raw scan found it (the re-located close is the same byte, so
+		// value assembly is unchanged): a CR right after the close is trailing
+		// whitespace the literal accepts, while a level-1 `"""`+CR+`##` run has
+		// too many hashes to fuse the level-1 `"""`+'#' close, so it stays content
+		// (rejected here for the non-whitespace closing line, as the oracle does).
+		{Name: "multiline CR after close accepted", Expr: "\"\"\"\na\n\"\"\"\r"},
+		{Name: "multiline CR with too-many hashes stays content rejected", Expr: "#\"\"\"\n\"\"\"\r##x\n\"\"\"#"},
 		// Raw-string surrogate pairing. At hash level N BOTH halves must carry
 		// the '\#u…' introducer: a \#u high + \#u low pair combines into one
 		// astral rune (accepted), while a \#u high followed by a PLAIN \u low
