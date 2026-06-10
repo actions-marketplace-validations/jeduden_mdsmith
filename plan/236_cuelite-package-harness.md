@@ -116,6 +116,25 @@ its field path printed exactly once. The `PathError` type exports
 outside the package builds one. The rest of the façade arrives in
 the per-surface phases.
 
+- **The benchmark is gated, not just recorded.** `TestFactorGate`
+  in `internal/cuelitetest` computes the cuelite/cue ns-per-op
+  RATIO for the hot (`BenchmarkValidate`) and cold
+  (`BenchmarkCompileValidate`) paths — minimum of five fixed-loop
+  runs after a discarded warmup, so the ratio cancels runner noise
+  the way it cancels runner speed (the
+  [benchcheck](../internal/release/benchcheck.go) philosophy) — and
+  FAILS when either exceeds its interim budget: `HotFactorBudget`
+  2.5x, `ColdFactorBudget` 2.0x. The hot budget is looser because
+  the CUE-backed arm's cost is N-dependent (one compiled document
+  accumulates in the long-lived schema context per iteration), so
+  it measures ~1.9x against the cold path's stable ~1.4x. The
+  `cuelite-bench` CI job runs the gate as an ordinary `go test` and
+  the gate appends a factor table to `GITHUB_STEP_SUMMARY`. This
+  makes plan 218's "the schema validate path does not regress"
+  acceptance criterion enforceable today; plan 240's flip is
+  expected to tighten both budgets to <= 1.0x (in-house must not be
+  slower than the CUE oracle it replaces).
+
 ## See also
 
 - [Plan 218 — in-house CUE-subset engine](218_wasm-size-reduction.md)
