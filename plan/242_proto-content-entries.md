@@ -74,7 +74,7 @@ in proto bodies as a directive row.
 2. [x] Teach the legacy MDS020 proto parser to skip
    `<?content?>` rows (no body-sync interpretation, no
    diagnostic).
-3. [ ] Wire extraction: a proto-based kind with `<?content?>`
+3. [x] Wire extraction: a proto-based kind with `<?content?>`
    entries projects body content identically to the
    equivalent inline schema. Differential test: one schema
    expressed both ways, byte-identical extract output
@@ -95,7 +95,7 @@ in proto bodies as a directive row.
 - [x] A proto.md section body may contain `<?content?>`
   directive rows; each declares one content entry with the
   inline keys (`kind`, `projection`, `required`, `bind`).
-- [ ] `mdsmith extract` on a proto-based kind with declared
+- [x] `mdsmith extract` on a proto-based kind with declared
   content projects the same tree as the equivalent inline
   schema.
 - [x] MDS020 (legacy path) neither flags nor body-syncs a
