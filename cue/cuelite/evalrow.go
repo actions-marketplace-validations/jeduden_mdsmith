@@ -479,10 +479,27 @@ func evalRowBinary(n *ast.BinaryExpr, scope *rowScope) (*engineValue, error) {
 // list × int (CUE itself rejects list multiplication in favour of
 // list.Repeat) — is rejected as out-of-subset, the cross-engine fuzzer's
 // strict-subset hatch keying on the wording.
+// maxRepeatCount and maxRepeatBytes bound string repetition: counts must
+// stay int-safe on 32-bit targets, and the rendered output of a catalog row
+// has no business approaching megabytes. Oversized repetitions reject with
+// the out-of-subset wording so the differential hatch covers them.
+const (
+	maxRepeatCount = 1 << 20
+	maxRepeatBytes = 1 << 20
+)
+
 func evalRowMul(l, r *engineValue) (*engineValue, error) {
 	if s, count, ok := stringRepeatOperands(l, r); ok {
 		if count < 0 {
 			return nil, fmt.Errorf("cuelite: invalid operation: cannot repeat a string a negative number of times")
+		}
+		// Bound the count in int64 space before narrowing: int(count) would
+		// truncate on 32-bit targets (wasm), and an unbounded count is a
+		// memory-amplification hazard regardless of platform. maxRepeatCount
+		// also caps the OUTPUT size so a small string cannot expand without
+		// limit.
+		if count > maxRepeatCount || int64(len(s))*count > maxRepeatBytes {
+			return nil, fmt.Errorf("cuelite: unsupported operation: string repetition count too large")
 		}
 		return &engineValue{kind: kString, str: strings.Repeat(s, int(count))}, nil
 	}

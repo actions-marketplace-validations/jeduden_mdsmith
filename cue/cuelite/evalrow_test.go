@@ -574,3 +574,21 @@ func TestRender_NonIdentifierKeyOnlyViaFM(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v", got)
 }
+
+// TestEvalRowMul_repeatBounds pins the int64-space repetition bounds: a
+// count wider than the cap (which would also truncate on 32-bit targets)
+// and an output larger than the byte cap both reject as out-of-subset
+// instead of allocating or wrapping.
+func TestEvalRowMul_repeatBounds(t *testing.T) {
+	tpl, err := CompileRow(`"x" * 9223372036854775806`)
+	require.NoError(t, err)
+	_, rerr := tpl.Render(map[string]any{})
+	require.Error(t, rerr)
+	assert.Contains(t, rerr.Error(), "repetition count too large")
+
+	tpl2, err := CompileRow(`"xxxxxxxxxxxxxxxx" * 1048575`)
+	require.NoError(t, err)
+	_, rerr2 := tpl2.Render(map[string]any{})
+	require.Error(t, rerr2)
+	assert.Contains(t, rerr2.Error(), "repetition count too large")
+}
