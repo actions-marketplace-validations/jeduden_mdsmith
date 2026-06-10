@@ -39,30 +39,35 @@ above the `sonnet` band.
 1. Replace the SYNTAX FRONTEND. After the phase-2/3 flips the only
    remaining non-test `cuelang.org/...` use is the parser and AST:
    `compile.go` imports `cue/parser`, `cue/ast`, `cue/literal`, and
-   `cue/token`; `eval.go` imports `cue/ast` and `cue/token`. The
-   evaluator already walks an in-house value model, so this task swaps
-   the AST it walks. Write a hand-rolled CUE-SUBSET parser (the
-   front-matter/row-expr grammar only: structs, fields, lists, the
+   `cue/token`; `eval.go` imports `cue/ast` and `cue/token`; and
+   `evalrow.go` (the surface-C row evaluator, plan 239) imports all
+   four. The evaluator already walks an in-house value model, so this
+   task swaps the AST it walks. Write a hand-rolled CUE-SUBSET parser
+   (the front-matter/row-expr grammar only: structs, fields, lists, the
    bounds and disjunction operators, comparisons, the single `if`/`for`
-   comprehensions, calls, string/number/bool/null literals with CUE
-   underscore and escape rules) producing an in-house syntax tree, then
-   re-point `compileExpr`/`evalExpr` at it. `literal.Unquote` and the
-   `token` constants are replaced by the new parser's own lexer. This
-   is the last and largest CUE dependency to remove; it is the bulk of
-   the phase.
+   comprehensions, the row-expr `\(…)` interpolation across the plain,
+   raw, and multiline dialects, the `+`/`*` operators, calls, and
+   string/number/bool/null literals with CUE underscore and escape
+   rules) producing an in-house syntax tree, then re-point
+   `compileExpr`/`evalExpr` and `parseRowExpr`/`evalRow` at it.
+   `literal.Unquote`, `literal.ParseQuotes`, and the `token` constants
+   are replaced by the new parser's own lexer. This is the last and
+   largest CUE dependency to remove; it is the bulk of the phase.
 2. Delete the CUE delegation from `cue/cuelite` and remove
    `cuelang.org/go` from `go.mod` and `go.sum`. Confirm no
    non-test file imports `cuelang.org/...`.
 3. Delete `internal/cuelitetest` (or port its corpus to pure
-   in-house self-tests with no oracle). Its non-test file
-   `cuelitetest.go` imports `cuelang.org/go` for the direct-CUE
-   oracle path, so it must go before `cuelang.org/go` can leave
-   `go.mod`. Once every surface is flipped, the in-house path and
-   the oracle are no longer two implementations to diff — the
-   oracle's whole purpose ends — so the harness is removed rather
-   than kept. Its oracle-backed test files
-   (`cuelitetest_test.go`, `fuzz_validate_test.go`,
-   `bench_test.go`, `factor_gate_test.go`) go with it.
+   in-house self-tests with no oracle). Its non-test files
+   `cuelitetest.go` (the schema/data oracle) and `expr.go` (the
+   surface-C row-expr oracle plan 239 added) import `cuelang.org/go`
+   for the direct-CUE oracle path, so they must go before
+   `cuelang.org/go` can leave `go.mod`. Once every surface is flipped,
+   the in-house path and the oracle are no longer two implementations
+   to diff — the oracle's whole purpose ends — so the harness is
+   removed rather than kept. Its oracle-backed test files
+   (`cuelitetest_test.go`, `fuzz_validate_test.go`, `bench_test.go`,
+   `factor_gate_test.go`, and the surface-C `expr_test.go` /
+   `expr_unit_test.go`) go with it.
 4. Migrate or delete the remaining TEST-ONLY `cuelang.org/...`
    imports — `go.mod` removal needs the build graph clean of CUE
    in test files too, not only non-test files. The current set is:

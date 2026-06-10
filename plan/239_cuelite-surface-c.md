@@ -174,6 +174,79 @@ corpus uses are wired; `len` covers string and list operands.
   contains the `concrete string` substring the catalog
   `TestRowExpr_PerEntryRenderError` pins.
 
+### Review round 1: row-evaluator semantics corrected to CUE
+
+The round-1 review probed every row construct against the CUE oracle
+(v0.16.1) and corrected the divergences the first cut carried:
+
+- **Interpolation dialects.** `evalRowInterpolation` now ports CUE's
+  `compileInterpolation`: `literal.ParseQuotes` reads the outer quote
+  dialect once and `QuoteInfo.Unquote` decodes each fragment, so the
+  plain, raw (`#"…"#`), and multiline (`"""…"""`) string dialects all
+  render correctly — the prior fragment arithmetic fit only the
+  double-quote form and silently corrupted the others. A bytes
+  interpolation (`'…'`) produces CUE bytes, not a row string, and is
+  rejected loudly as out-of-subset. The `Unquote` error is never
+  discarded.
+- **`*` repetition.** `evalRowMul` implements CUE's string×int
+  repetition in either operand order (`"ab" * 3`, `3 * "ab"`); a
+  negative count, a float count, int×int, and list×int reject as
+  out-of-subset. The CI `FuzzExpr` crasher (`"" * 0`, empty scope) is a
+  committed seed.
+- **Equality.** `rowEqual` matches CUE's two rules: a top-level scalar
+  pair is numeric-aware (`2 == 2.0` true) while a list or struct
+  compares structurally with kind-strict element equality
+  (`concreteValueEqual`): `{k:1} == {k:1}` true, `[2] == [2.0]` false.
+- **`len`.** `len(string)` is a BYTE count, not a rune count, matching
+  CUE (`len("café")` is 5). `len(struct)` stays a loud out-of-subset
+  rejection.
+- **Quoted selectors.** `fm."my-key"` and `fm."?"` resolve the quoted
+  string member instead of the schema path's `"?"` fallback.
+- **Big-int / float arithmetic policy.** int+int `+` is overflow-checked
+  (an int64 overflow is out-of-subset, consistent with the big-literal
+  policy); float `+` (any float operand) is rejected loudly — the
+  float64 engine would render `0.1 + 0.2` as noise where CUE keeps a
+  decimal, and the real corpus never adds floats. Display-interpolation
+  of a float VALUE is unaffected.
+
+### Binding contract (newRowScope)
+
+The scope binding now matches the CUE oracle exactly and is documented
+on `newRowScope` and in the `cuetemplate` package doc:
+
+- A key binds as a BARE identifier only when it is a CUE-safe identifier
+  (`^[A-Za-z][A-Za-z0-9_]*$`) that is not reserved. Reserved are `fm`,
+  the `strings` builtin namespace, the CUE keywords, and the two
+  scaffolding field names. A `_`-prefixed (hidden) key, a non-identifier
+  key, a keyword, and `strings`/`fm` get NO bare alias.
+- The whole map binds under `fm`, minus a literal `fm` key and the
+  scaffolding keys (the `fm` binding always wins). A `_`-prefixed member
+  is reachable via a string INDEX (`fm["_key"]`) but not a bare SELECTOR
+  (`fm._key`), as CUE hides `_`-prefixed fields from selection.
+
+The differential ORACLE was fixed to implement the SAME contract. The
+leaky `_strings_used` sink is gone. A two-pass compile adds the
+`strings` import only when the expression uses it, so no extra name
+exists to reference. The oracle also drops the same `fm` and
+scaffolding keys the in-house arm does.
+
+### Hatch redesign (divergence-scoped)
+
+The former float hatch was scope-scoped. It masked any string diff when
+the scope held a fractional number. Two signature-matched classes in
+`HatchedDivergence` replace it:
+
+- **float-display**: both arms accept and the only differences are
+  numeric substrings whose parsed values are equal-ish — the float64
+  vs decimal rendering divergence, and nothing else.
+- **unsupported-construct**: the in-house arm rejects with the engine's
+  "unsupported" wording while CUE accepts. It covers for…if combined
+  clauses, `for i, x in`, len(struct), struct literals in exprs, big
+  ints, bytes interpolation, and float arithmetic — every such
+  construct is seeded so the class stays pinned. It never masks an
+  accept-vs-accept string diff or an in-house-accepts/oracle-rejects
+  mismatch.
+
 ### Differential finding
 
 The differential arm caught a real int/float divergence. A JSON
