@@ -112,11 +112,11 @@ On `mdsmith fix`, `<?toc?>` rebuilds a heading table of contents,
 `<?include?>` splices in another file. A Git merge driver resolves
 conflicts inside those blocks.
 
-**[Progressive disclosure for AI agents](../guides/progressive-disclosure.md).**
-A `<?catalog?>` projects each doc's one-line `summary` front
-matter field into `CLAUDE.md`, so an agent reads a few thousand
-tokens of metadata up front and opens only the files a task
-touches. This repository's own `CLAUDE.md` is the live example.
+**[Agent-ready docs index](progressive-disclosure.md).**
+A `<?catalog?>` in `CLAUDE.md` keeps one `summary` line per
+tracked doc, so an agent reads a few thousand tokens of metadata
+up front and opens only the files a task touches. mdsmith's own
+[`CLAUDE.md`](../../CLAUDE.md) is the live example.
 
 **[Build artifacts in sync](build-artifacts.md).**
 The `<?build?>` directive declares an artifact and a recipe;
