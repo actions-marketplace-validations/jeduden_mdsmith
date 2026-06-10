@@ -306,17 +306,24 @@ func TestParsePath_rejected(t *testing.T) {
 		// CR-near-close family (round 6): the scanner closes the token on RAW
 		// bytes (consumeStringClose does not strip CR), so a CR breaking a
 		// `"""`+`#` run lets the token run on to a LATER close — but the
-		// CR-stripped token CUE then hands to literal.Unquote re-finds the close
-		// at the now-fused EARLIER `"""`+'#' run, whose content/closing-line then
-		// decode to "". The in-house parser had found the close once, on raw
-		// bytes, and accepted a non-empty body. Probe the neighborhood: a bare
-		// CR before the hash run at level 1, content before it, a CR inside the
-		// closing quote-run at level 0 (`""`+CR+`"`), and the same with a
-		// trailing dotted selector.
+		// CR-stripped token CUE then hands to literal.Unquote decodes forward and
+		// TERMINATES at the FIRST `"""`+'#' run, accepting it only when that run is
+		// the whole remaining tail (else unquoteChar's `len(s) != ln` errSyntax).
+		// A CR that fuses an EARLIER close is fatal: Unquote hits it with bytes
+		// still after it and decodes to "". The in-house parser had found the
+		// close once, on raw bytes, and accepted a non-empty body. Probe the
+		// neighborhood: a bare CR before the hash run at level 1, content before
+		// it, a CR inside the closing quote-run at level 0 (`""`+CR+`"`), and the
+		// same with a trailing dotted selector.
 		{"multiline CR fuses earlier close level1", "#\"\"\"\n\"\"\"\r#\n\"\"\"#"},
 		{"multiline CR fuses earlier close level1 then dot", "#\"\"\"\n\"\"\"\r#\n\"\"\"#.x"},
 		{"multiline CR fuses earlier close content before", "#\"\"\"\nq\"\"\"\r#z\n\"\"\"#"},
 		{"multiline CR inside closing quote-run level0", "\"\"\"\n\"\"\r\"\n\"\"\""},
+		// Second round-6 shape (fuzz-minimized #"""\n0\n"""\r#"""#): the fused
+		// earlier `"""`+'#' run sits at the end of a real content line, so
+		// literal.Unquote terminates there with the trailing `"""#` still
+		// following (its `len(s) != ln` errSyntax) and decodes to "".
+		{"multiline CR fuses earlier close after content line", "#\"\"\"\n0\n\"\"\"\r#\"\"\"#"},
 		// Mirror rows that the corpus pins but the unit table had not (item 5).
 		{"block comment separator", "a/*c*/.b"},
 		{"vertical tab separator", "a\v.b"},

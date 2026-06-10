@@ -528,17 +528,22 @@ func pathCorpus() []PathCase {
 		// bytes (consumeStringClose never strips CR), so a CR breaking a
 		// `"""`+'#' run lets the raw token run on to a LATER close. But the
 		// literal CUE then hands to literal.Unquote is CR-STRIPPED, and Unquote
-		// re-finds the close at the now-fused EARLIER `"""`+'#' run, whose shorter
-		// content/closing-line decode to "" — rejected. The in-house parser had
-		// located the close once, on raw bytes, and accepted the longer body. The
-		// fix re-locates the close on the stripped token before value assembly.
+		// decodes forward and TERMINATES at the FIRST `"""`+'#' run — accepting it
+		// only when that run is the whole remaining tail (unquoteChar's
+		// `len(s) != ln` → errSyntax otherwise). A CR that fuses an EARLIER close
+		// is therefore fatal: Unquote hits it with bytes still following and
+		// yields "" — rejected. The in-house parser had located the close once, on
+		// raw bytes, and accepted the longer body; the fix re-finds the first close
+		// on the stripped token and rejects when stripCR moved it off the raw end.
 		// Probe the neighborhood: a bare CR before the hash run at level 1, the
-		// same with content before it and a trailing dotted selector, and a CR
-		// inside the closing quote-run at level 0 (`""`+CR+`"`).
+		// same with content before it and a trailing dotted selector, a CR inside
+		// the closing quote-run at level 0 (`""`+CR+`"`), and the fuzz-minimized
+		// shape where the fused close ends a real content line.
 		{Name: "multiline CR fuses earlier close rejected", Expr: "#\"\"\"\n\"\"\"\r#\n\"\"\"#"},
 		{Name: "multiline CR fuses earlier close then dot rejected", Expr: "#\"\"\"\n\"\"\"\r#\n\"\"\"#.x"},
 		{Name: "multiline CR fuses earlier close content before rejected", Expr: "#\"\"\"\nq\"\"\"\r#z\n\"\"\"#"},
 		{Name: "multiline CR inside closing quote-run rejected", Expr: "\"\"\"\n\"\"\r\"\n\"\"\""},
+		{Name: "multiline CR fuses earlier close after content line rejected", Expr: "#\"\"\"\n0\n\"\"\"\r#\"\"\"#"},
 		// A CR that does NOT complete the EARLIER `"""`+'#' run leaves the close
 		// where the raw scan found it (the re-located close is the same byte, so
 		// value assembly is unchanged): a CR right after the close is trailing
