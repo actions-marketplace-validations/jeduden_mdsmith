@@ -50,27 +50,61 @@ flips.
 
 ## Deviations
 
-- **`Path` type and API already existed from phase-0 branch.** The
-  `path.go` file with `Path`, `Segments()`, `MakePath()`, and the
-  CUE-delegating `ParsePath()` was pre-populated, along with
-  `path_test.go`. The plan tasks 1–3 were collapsed: the CUE-backed
-  delegation was found already in place, so the migration (task 2)
-  and the in-house flip (task 3) were applied as one pass.
-- **The `len(sels) == 0` dead branch was removed during the flip.**
-  In the CUE-backed version, `cue.ParsePath("")` is the only input
-  producing zero selectors without an error; the explicit empty-string
-  guard catches it first, leaving the branch unreachable. The in-house
-  parser builds segments directly and never needs this check, so it
-  was dropped to keep 100 % statement coverage.
-- **Harness adds `PathCase`, `PathOutcome`, `PathPath`, and helpers as
-  a separate file** (`internal/cuelitetest/path.go`), not by extending
-  the existing `Case`/`Outcome` types. The plan note says to extend
-  the types, but after reading the harness code, adding a separate
-  `PathCase`/`PathOutcome` is cleaner and avoids making the schema/data
-  `Case` carry an optional path field that is irrelevant to most tests.
-- **`safeUnquoted` defers panic recovery to the oracle arm** rather
-  than being called directly from a unit test, because the non-panic
-  path is fully covered by the accepted cases in the path corpus run.
+- **Tasks 1–3 were collapsed; the adopt-then-flip cadence was NOT
+  demonstrated.** No CUE-delegating intermediate `ParsePath` was ever
+  committed: `fieldinterp` moved onto `cuelite.ParsePath` and that
+  `ParsePath` was written in-house in a single pass. The two-step
+  "adopt the façade green, then flip the implementation" cadence this
+  plan set out to prove was therefore skipped. The substitute safety is
+  the differential harness plus `FuzzParsePath` in
+  `internal/cuelitetest`, which compares the in-house parser against the
+  CUE-backed oracle on every input — both a corpus run (one case per
+  divergence class) and a fuzz run (`go test -fuzz=FuzzParsePath`) with
+  zero divergences.
+- **First in-house cut diverged systematically from CUE; corrected in
+  review round 1.** The committed parser (`cac2a7d`) used an ASCII-only
+  ident class and `strconv.Unquote`, validated only against a curated
+  28-case corpus chosen to avoid known divergences. Fuzzing against
+  `cue.ParsePath` found systematic disagreement. The realignment:
+  - identifiers accept Unicode letters/digits and `$` (CUE's class), not
+    just `[a-zA-Z]`;
+  - `true`/`false`/`null` are rejected as the leading selector,
+    `if`/`for`/`let`/`in` are ordinary identifiers;
+  - a CUE-compatible unquoter (`cue/cuelite/unquote.go`) replaces
+    `strconv.Unquote`: it accepts `\/` and `\uXXXX`/`\UXXXXXXXX`, rejects
+    Go-only `\xNN`/octal `\NNN` and raw NUL/newline/CR in quotes;
+  - whitespace (space/tab/CR) and trailing newlines/line-comments around
+    tokens are tolerated, matching `cue.ParsePath`.
+- **Behavior change vs the old CUE-backed `fieldinterp`.** The previous
+  `fieldinterp` called `cue.ParsePath` then `Selector.Unquoted()`
+  unguarded, so an index/definition/hidden selector (`{123}`, `a[0]`,
+  `#foo`) **panicked**. The string-label-only `cuelite.ParsePath` now
+  rejects those with a clear kind-naming error, which
+  `ParseCUEPath` maps to "no path" — a graceful diagnostic in place of a
+  panic. For every string-label path the two agree (verified by the
+  harness), so the realignment is parity-preserving where it mattered.
+- **`cuelite.ParsePath` is string-label-only by design.** CUE accepts
+  index/definition/hidden selectors as valid paths; `cuelite.Path` is
+  `[]string`-backed and the phase-2 consumers (`fieldinterp`, `query`)
+  need only string labels, so `ParsePath` documents and rejects the
+  non-string kinds rather than representing them.
+- **The `len(segs) == 0` dead branch in `ParseCUEPath` was removed.**
+  `cuelite.ParsePath` never returns a nil error with zero segments (it
+  rejects the empty and whitespace-only expression), so the guard was
+  unreachable. (The earlier plan text claimed this was already done
+  during the flip — it was not; it is removed now.)
+- **`ParsePath` returns a plain error, not a `*PathError`.** A
+  path-expression syntax error has no data-tree field path to tag, so a
+  `*PathError` with a nil path would add nothing; `PathError` stays the
+  type for per-leaf validation failures only.
+- **Harness adds `PathCase`/`PathOutcome` in a separate file**
+  (`internal/cuelitetest/path.go`), not by extending the existing
+  `Case`/`Outcome` types, so the schema/data `Case` does not carry a
+  path field irrelevant to most tests. The oracle classifies each CUE
+  selector by `LabelType` (string label → segment; index/definition/
+  hidden → the documented rejection) and wraps `cue.ParsePath` in a
+  panic guard, because `cue.ParsePath("a...")` nil-derefs inside
+  cuelang v0.16.1.
 
 ## Implementation notes
 
