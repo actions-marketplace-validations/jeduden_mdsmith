@@ -196,7 +196,11 @@ func (p *projector) projectContent(
 		case schema.ContentKindCodeBlock:
 			p.setKey(obj, nextKey(base), p.codeBody(cm.Node))
 		case schema.ContentKindList:
-			p.setKey(obj, nextKey(base), p.listItems(cm.Node))
+			if cm.Entry.Projection == schema.ProjectionTree {
+				p.setKey(obj, nextKey(base), p.listTree(cm.Node))
+			} else {
+				p.setKey(obj, nextKey(base), p.listItems(cm.Node))
+			}
 		case schema.ContentKindTable:
 			p.setKey(obj, nextKey(base), p.tableRows(cm.Node))
 		case schema.ContentKindParagraph:
