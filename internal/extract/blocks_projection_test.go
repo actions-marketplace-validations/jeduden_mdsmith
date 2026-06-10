@@ -111,6 +111,64 @@ func TestExtract_ScopeBlocksKeyCollidesWithBoundEntry(t *testing.T) {
 	assert.Contains(t, diags[0].Message, "blocks")
 }
 
+// schemaBlocksDefault builds a schema with a single declared section
+// plus a schema-level `projection: blocks` default.
+func schemaBlocksDefault(declared string) *schema.Schema {
+	return &schema.Schema{
+		RootLevel:  2,
+		Projection: schema.ProjectionBlocks,
+		Sections: []schema.Scope{
+			{Heading: declared, Matcher: &schema.Matcher{Regex: declared}},
+		},
+	}
+}
+
+// TestExtract_SchemaBlocksProjectsUnlisted is the plan-246 acceptance
+// criterion: a schema-level `projection: blocks` projects an unlisted
+// section under its slug, with its heading text preserved and its body
+// as blocks — no section of a matched document is dropped.
+func TestExtract_SchemaBlocksProjectsUnlisted(t *testing.T) {
+	body := "## Goal\n\ndeclared body\n\n## Background\n\nbackground body\n"
+	got, diags := run(t, body, schemaBlocksDefault("Goal"), nil)
+	require.Empty(t, diags)
+	root := got.(map[string]any)
+	// Declared section: keyed object, now also carrying blocks.
+	goal := root["goal"].(map[string]any)
+	assert.Equal(t, []any{
+		map[string]any{"block": "paragraph", "text": "declared body"},
+	}, goal["blocks"])
+	// Unlisted section: keyed by slug, heading text preserved.
+	bg := root["background"].(map[string]any)
+	assert.Equal(t, "Background", bg["heading"])
+	assert.Equal(t, []any{
+		map[string]any{"block": "paragraph", "text": "background body"},
+	}, bg["blocks"])
+}
+
+// A declared scope under a schema-level blocks default has no
+// `heading` key (its slug already names it); only unlisted scopes
+// carry the `heading` text field.
+func TestExtract_SchemaBlocksDeclaredHasNoHeadingKey(t *testing.T) {
+	body := "## Goal\n\nx\n"
+	got, diags := run(t, body, schemaBlocksDefault("Goal"), nil)
+	require.Empty(t, diags)
+	goal := got.(map[string]any)["goal"].(map[string]any)
+	assert.NotContains(t, goal, "heading")
+}
+
+// Two unlisted sections whose headings slugify to the same key
+// project as an array under that key (repeating matches -> array).
+func TestExtract_SchemaBlocksRepeatingUnlistedArray(t *testing.T) {
+	body := "## Goal\n\nx\n\n## Note\n\nfirst\n\n## Note\n\nsecond\n"
+	got, diags := run(t, body, schemaBlocksDefault("Goal"), nil)
+	require.Empty(t, diags)
+	arr, ok := got.(map[string]any)["note"].([]any)
+	require.True(t, ok, "repeated unlisted slug must project as an array")
+	require.Len(t, arr, 2)
+	assert.Equal(t, "first", arr[0].(map[string]any)["blocks"].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, "second", arr[1].(map[string]any)["blocks"].([]any)[0].(map[string]any)["text"])
+}
+
 // An empty blocks-projected section emits an empty `blocks` array
 // (not nil): the body slice is empty but non-nil, so the key appears.
 func TestExtract_ScopeBlocksEmptyBody(t *testing.T) {
@@ -127,4 +185,29 @@ func TestExtract_ScopeBlocksEmptyBody(t *testing.T) {
 	require.Empty(t, diags)
 	notes := got.(map[string]any)["notes"].(map[string]any)
 	assert.Equal(t, []any{}, notes["blocks"])
+}
+
+// Schema-level blocks + plan 243's H1 title: a single switch yields
+// the whole document as data — the H1 under `title`, every section
+// (declared and unlisted) under its slug with `blocks`.
+func TestExtract_SchemaBlocksWithH1Title(t *testing.T) {
+	body := "# Doc Title\n\n## Goal\n\ng\n\n## Extra\n\ne\n"
+	got, diags := run(t, body, schemaBlocksDefault("Goal"), nil)
+	require.Empty(t, diags)
+	root := got.(map[string]any)
+	assert.Equal(t, "Doc Title", root["title"])
+	assert.Contains(t, root["goal"].(map[string]any), "blocks")
+	extra := root["extra"].(map[string]any)
+	assert.Equal(t, "Extra", extra["heading"])
+	assert.Contains(t, extra, "blocks")
+}
+
+// An unlisted heading whose slug collides with a declared scope's key
+// is reported (the declared `goal`, then a second unlisted `## Goal`
+// that the open schema tolerates but cannot key without colliding).
+func TestExtract_SchemaBlocksUnlistedCollidesWithDeclared(t *testing.T) {
+	body := "## Goal\n\nfirst\n\n## Goal\n\nsecond\n"
+	_, diags := run(t, body, schemaBlocksDefault("Goal"), nil)
+	require.NotEmpty(t, diags)
+	assert.Contains(t, diags[0].Message, "goal")
 }

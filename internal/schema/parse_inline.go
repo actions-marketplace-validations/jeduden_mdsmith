@@ -61,6 +61,9 @@ func ParseInline(raw map[string]any, source string) (*Schema, error) {
 	if err := parseInlineIndex(raw, sch); err != nil {
 		return nil, err
 	}
+	if err := parseInlineProjection(raw, sch); err != nil {
+		return nil, err
+	}
 
 	// schema-level `closed:` only makes sense when the schema also
 	// declares a non-empty `sections:` list — strictness has no
@@ -90,6 +93,7 @@ var inlineTopKeys = map[string]bool{
 	"cross-references": true,
 	"acronyms":         true,
 	"index":            true,
+	"projection":       true,
 }
 
 var validIndexIncludes = map[string]bool{
@@ -212,6 +216,29 @@ func parseInlineRootClosed(raw map[string]any, sch *Schema) error {
 		return fmt.Errorf("schema.closed must be a boolean, got %T", v)
 	}
 	sch.Closed = b
+	return nil
+}
+
+// parseInlineProjection reads the optional schema-level `projection:`
+// key. The only legal value is `blocks` — it makes the whole-body
+// block projection the default for every matched section, wildcard and
+// unlisted sections included (plan 246). Any other value is rejected
+// with a pointer to the one accepted mode.
+func parseInlineProjection(raw map[string]any, sch *Schema) error {
+	v, ok := raw["projection"]
+	if !ok {
+		return nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("schema.projection must be a string, got %T", v)
+	}
+	if s != ProjectionBlocks {
+		return fmt.Errorf(
+			"schema.projection: the only schema-level projection is "+
+				"`blocks`, not %q", s)
+	}
+	sch.Projection = s
 	return nil
 }
 

@@ -578,6 +578,28 @@ func TestParseInline_ProjectionOnUnlistedRejected(t *testing.T) {
 		"projection is not allowed on kind: unlisted")
 }
 
+// TestParseInline_SchemaProjectionBlocks accepts a schema-level
+// `projection: blocks` and records it on the Schema (plan 246).
+func TestParseInline_SchemaProjectionBlocks(t *testing.T) {
+	sch, err := ParseInline(map[string]any{
+		"projection": "blocks",
+		"sections":   []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.NoError(t, err)
+	assert.Equal(t, ProjectionBlocks, sch.Projection)
+}
+
+// TestParseInline_SchemaProjectionUnknownRejected rejects a
+// schema-level projection value other than `blocks`.
+func TestParseInline_SchemaProjectionUnknownRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"projection": "tree",
+		"sections":   []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocks")
+}
+
 // TestParseInline_ScopeProjectionBlocks accepts `projection: blocks`
 // on a scope and records it on the Scope (plan 246).
 func TestParseInline_ScopeProjectionBlocks(t *testing.T) {

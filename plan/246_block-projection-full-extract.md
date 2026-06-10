@@ -107,7 +107,7 @@ contract instead of prose.
 2. [x] Accept `projection: blocks` on a scope; the `blocks` key
    joins the default-key set (`bind:`-renamable, collision-
    checked against declared content entries).
-3. Accept schema-level `projection: blocks`; project wildcard
+3. [x] Accept schema-level `projection: blocks`; project wildcard
    and unlisted scopes under their slug with a `heading` text
    field; repeating matches project as arrays.
 4. Write the `#Block` / `#Span` CUE definitions; add the

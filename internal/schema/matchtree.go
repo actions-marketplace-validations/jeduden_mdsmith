@@ -79,6 +79,13 @@ type ScopeMatch struct {
 	// no-heading section (content before the first child heading).
 	Preamble bool
 
+	// Unlisted reports whether this match is a synthetic one for a
+	// heading no declared scope claimed, added only under a
+	// schema-level `projection: blocks`. Scope is nil for these; the
+	// projector keys them by the slug of Heading.Text and adds a
+	// `heading` text field. Plan 246.
+	Unlisted bool
+
 	// Heading is the document heading that matched. Zero-valued for
 	// the preamble and the synthetic root.
 	Heading DocHeading
@@ -147,7 +154,39 @@ func BuildMatchTree(f *lint.File, sch *Schema, docFM map[string]any) *MatchTree 
 		f, sch.Sections, heads, rootLevel, 1, len(f.Lines)+1,
 		claimed, blocks, docFM, blocksDefault, mt.Root,
 	)
+	if blocksDefault {
+		collectUnlistedBlockMatches(
+			heads, rootLevel, len(f.Lines)+1, claimed, blocks, mt.Root)
+	}
 	return mt
+}
+
+// collectUnlistedBlockMatches appends a synthetic ScopeMatch for every
+// root-level heading no declared scope claimed, so a schema-level
+// `projection: blocks` projects the sections the structural walker
+// skips (wildcard slots, unlisted, and closed-overflow headings).
+// Each synthetic match carries the heading (for its slug key and a
+// `heading` text field), ProjectsBlocks, and the section's whole body
+// — deeper sub-headings included, which the block walker nests as
+// `section` blocks rather than separate top-level keys. A conformant
+// document nests deeper headings under a root-level one, so capturing
+// each unclaimed root heading's body reaches every section. Plan 246.
+func collectUnlistedBlockMatches(
+	heads []DocHeading, rootLevel, docEnd int,
+	claimed map[int]bool, blocks []contentBlock, parent *ScopeMatch,
+) {
+	for i, dh := range heads {
+		if claimed[i] || dh.Level != rootLevel {
+			continue
+		}
+		end := contentScopeEndLine(heads, i, dh.Level, docEnd)
+		parent.Children = append(parent.Children, &ScopeMatch{
+			Heading:        dh,
+			Unlisted:       true,
+			ProjectsBlocks: true,
+			Body:           bodyBlocksInRange(blocks, dh.Line+1, end),
+		})
+	}
 }
 
 // anyScopeProjectsBlocks reports whether any scope in the tree sets a

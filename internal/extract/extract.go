@@ -138,6 +138,21 @@ func (p *projector) projectChildren(
 			i++
 			continue
 		}
+		if sm.Unlisted {
+			// Unlisted matches (schema-level `projection: blocks` only)
+			// have a nil Scope, so they group by heading slug rather
+			// than scope pointer. Hand the whole contiguous run to
+			// projectUnlisted, which groups same-slug headings into
+			// arrays. collectUnlistedBlockMatches appends them after
+			// the declared matches, so the run reaches the end.
+			j := i + 1
+			for j < len(children) && children[j].Unlisted {
+				j++
+			}
+			p.projectUnlisted(children[i:j], obj)
+			i = j
+			continue
+		}
 		j := i + 1
 		for j < len(children) && children[j].Scope == sm.Scope {
 			j++
@@ -165,6 +180,50 @@ func (p *projector) projectChildren(
 		}
 		p.setKey(obj, key, p.projectScopeObject(group[0]))
 	}
+}
+
+// projectUnlisted projects a run of unlisted (synthetic) scope matches
+// under a schema-level `projection: blocks`. Each projects as a
+// `{heading, blocks}` object keyed by the slug of its heading text.
+// Headings whose slugs collide project as an array under that key, so
+// a section heading that repeats (`## Note`, `## Note`) survives
+// without a collision diagnostic. Plan 246.
+func (p *projector) projectUnlisted(
+	group []*schema.ScopeMatch, obj map[string]any,
+) {
+	// Group by slug in first-seen order so the array elements keep
+	// document order.
+	bySlug := map[string][]*schema.ScopeMatch{}
+	var order []string
+	for _, sm := range group {
+		key := mdtext.Slugify(sm.Heading.Text)
+		if _, seen := bySlug[key]; !seen {
+			order = append(order, key)
+		}
+		bySlug[key] = append(bySlug[key], sm)
+	}
+	for _, key := range order {
+		ms := bySlug[key]
+		if len(ms) == 1 {
+			p.setKey(obj, key, p.projectUnlistedObject(ms[0]))
+			continue
+		}
+		arr := make([]any, 0, len(ms))
+		for _, sm := range ms {
+			arr = append(arr, p.projectUnlistedObject(sm))
+		}
+		p.setKey(obj, key, arr)
+	}
+}
+
+// projectUnlistedObject builds the object for one unlisted section: a
+// `heading` text field (preserving the original heading text the slug
+// key flattens) plus the body `blocks` list. projectScopeObject adds
+// the `blocks` key from sm.Body.
+func (p *projector) projectUnlistedObject(sm *schema.ScopeMatch) map[string]any {
+	obj := p.projectScopeObject(sm)
+	p.setKey(obj, "heading", sm.Heading.Text)
+	return obj
 }
 
 // hoistGroup merges every element of group directly into obj
