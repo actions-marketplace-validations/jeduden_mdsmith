@@ -113,10 +113,26 @@ type rowScope struct {
 	vars map[string]*engineValue
 }
 
-// newRowScope lifts a front-matter map into a rowScope. Each top-level key
-// binds both by its own name and (via the `fm` struct) under `fm.<key>` /
-// `fm["<key>"]`. A front-matter value type the lifter does not support yields
-// an error rather than a silent skip.
+// newRowScope lifts a front-matter map into a rowScope, binding the names a row
+// expression resolves to MATCH the direct-CUE oracle exactly. The contract is:
+//
+//   - A key binds as a BARE identifier iff it is a CUE-safe identifier
+//     (^[A-Za-z][A-Za-z0-9_]*$) AND is not reserved. The reserved names are the
+//     `fm` binding itself, the `strings` builtin namespace, and every CUE
+//     keyword: a key colliding with one has no bare alias (bare `strings` is the
+//     builtin, bare `for` is the keyword), exactly as the oracle's buildSource
+//     omitted those aliases. A `_`-prefixed (hidden) key and a non-identifier
+//     key (`my-key`, `2x`) likewise get no bare alias.
+//   - The whole map binds under `fm` as a struct containing every key EXCEPT a
+//     literal key named `fm` (the `fm` binding always wins, so `fm["fm"]` does
+//     not reach the data — the oracle drops it too).
+//   - In the `fm` struct a `_`-prefixed key is reachable via a string INDEX
+//     (`fm["_key"]`) but NOT via a bare SELECTOR (`fm._key`): CUE hides
+//     `_`-prefixed fields from selection but not from indexing. evalRowSelector
+//     enforces the selector half.
+//
+// A front-matter value type the lifter does not support yields an error rather
+// than a silent skip.
 func newRowScope(scope map[string]any) (*rowScope, error) {
 	vars := make(map[string]*engineValue, len(scope)+1)
 	fmStruct := &engineValue{kind: kStruct}
@@ -136,11 +152,17 @@ func newRowScope(scope map[string]any) (*rowScope, error) {
 		if err := checkFinite(ev); err != nil {
 			return nil, fmt.Errorf("encoding frontmatter: field %q: %w", k, err)
 		}
-		vars[k] = ev
-		fmStruct.fields = append(fmStruct.fields, field{name: k, val: ev})
+		// A literal `fm` key and the scaffolding field names are dropped from the
+		// data struct: the `fm` binding always wins and the oracle filters the
+		// scaffolding out of its emitted data, so the data struct never carries
+		// those members.
+		if !rowDropped[k] {
+			fmStruct.fields = append(fmStruct.fields, field{name: k, val: ev})
+		}
+		if bindsAsBareIdent(k) {
+			vars[k] = ev
+		}
 	}
-	// The `fm` binding always wins for the bare `fm` identifier, even when a
-	// front-matter key is literally named `fm` — `fm["fm"]` reaches the data.
 	vars[fmField] = fmStruct
 	return &rowScope{vars: vars}, nil
 }
@@ -149,6 +171,68 @@ func newRowScope(scope map[string]any) (*rowScope, error) {
 // index any key — including one that is not a valid identifier — as
 // `fm["my-key"]`.
 const fmField = "fm"
+
+// rowScaffoldOutField is the historical cuetemplate result-field name. It is
+// scaffolding in both differential arms: the oracle holds the row result in a
+// field of this name, so a front-matter key colliding with it must not shadow
+// the result. The in-house engine reserves it too, so the two arms agree that a
+// scope key named like the scaffolding is not addressable.
+const rowScaffoldOutField = "mdsmith_template_out"
+
+// rowReserved is the set of names a scope key must NOT bind to as a bare
+// identifier, mirroring the oracle's buildSource reserved set: the `fm` binding,
+// the `strings` builtin namespace, the CUE keywords, and the two scaffolding
+// field names (the in-house parse wrapper and the oracle result field). A key
+// colliding with one stays reachable through `fm` — except the scaffolding and
+// `fm` keys, which are dropped from the `fm` struct entirely (see newRowScope).
+var rowReserved = map[string]bool{
+	fmField: true, "strings": true,
+	"package": true, "import": true, "for": true, "in": true,
+	"if": true, "let": true, "true": true, "false": true, "null": true,
+	"_": true,
+	rowOutField: true, rowScaffoldOutField: true,
+}
+
+// rowDropped is the set of scope keys dropped from the `fm` struct entirely:
+// `fm` itself (the binding always wins) and the two scaffolding field names
+// (which the oracle filters out of its emitted data, so the in-house arm must
+// too). A dropped key is reachable through neither a bare alias nor `fm[...]`.
+var rowDropped = map[string]bool{
+	fmField: true, rowOutField: true, rowScaffoldOutField: true,
+}
+
+// bindsAsBareIdent reports whether a scope key binds as a bare identifier: it
+// must be a CUE-safe identifier (a letter or underscore start is the CUE rule,
+// but a `_`-prefixed name is a HIDDEN field with no bare binding, so the start
+// must be a letter) and must not be reserved.
+func bindsAsBareIdent(k string) bool {
+	if rowReserved[k] || !isBareIdentifier(k) {
+		return false
+	}
+	return true
+}
+
+// isBareIdentifier reports whether k matches ^[A-Za-z][A-Za-z0-9_]*$ — the
+// identifier shape the oracle aliased at top level. A leading digit, an
+// embedded hyphen, a leading underscore (hidden), or an empty string fails.
+func isBareIdentifier(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		c := k[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case (c >= '0' && c <= '9') || c == '_':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // checkFinite rejects a non-finite float (±Inf or NaN) anywhere in a lifted
 // front-matter value, descending nested structs and lists. Such a value has
@@ -475,6 +559,13 @@ func evalRowSelector(n *ast.SelectorExpr, scope *rowScope) (*engineValue, error)
 	if err != nil {
 		return nil, err
 	}
+	// A `_`-prefixed member is a CUE HIDDEN field: a bare selector cannot reach
+	// it (only a string index `fm["_key"]` can), so reject it as not-found,
+	// matching the oracle. The index path (evalRowIndex → selectField) does not
+	// apply this rule, so `fm["_key"]` still resolves.
+	if strings.HasPrefix(name, "_") {
+		return nil, fmt.Errorf("cuelite: field %q not found", name)
+	}
 	return selectField(base, name)
 }
 
@@ -585,7 +676,7 @@ func evalRowList(n *ast.ListLit, scope *rowScope) (*engineValue, error) {
 // idiom and the per-peer projection); any other clause is rejected.
 func evalRowComprehension(c *ast.Comprehension, scope *rowScope) ([]*engineValue, error) {
 	if len(c.Clauses) != 1 {
-		return nil, fmt.Errorf("cuelite: only a single-clause comprehension is supported")
+		return nil, fmt.Errorf("cuelite: unsupported multi-clause comprehension (only a single-clause comprehension is in the subset)")
 	}
 	// The CUE grammar requires a comprehension value to be a brace-delimited
 	// struct (`[for x in xs {…}]`), so the parser always yields a *ast.StructLit
@@ -630,7 +721,7 @@ func evalRowIfClause(clause *ast.IfClause, body *ast.StructLit, scope *rowScope)
 // row subset.
 func evalRowForClause(clause *ast.ForClause, body *ast.StructLit, scope *rowScope) ([]*engineValue, error) {
 	if clause.Key != nil {
-		return nil, fmt.Errorf("cuelite: for-comprehension key variable is not supported")
+		return nil, fmt.Errorf("cuelite: unsupported for-comprehension key variable (the two-variable for form is not in the subset)")
 	}
 	src, err := evalRow(clause.Source, scope)
 	if err != nil {

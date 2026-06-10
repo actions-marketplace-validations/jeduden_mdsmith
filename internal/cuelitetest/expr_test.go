@@ -1,8 +1,6 @@
 package cuelitetest
 
 import (
-	"bytes"
-	"encoding/json"
 	"slices"
 	"testing"
 )
@@ -230,6 +228,26 @@ func exprCorpus() []ExprCase {
 		{Name: "len of multibyte string", Expr: `"\(len(s))"`, ScopeJSON: `{"s":"café"}`},
 		{Name: "len of emoji string", Expr: `"\(len(s))"`, ScopeJSON: `{"s":"😀"}`},
 
+		// Scope binding contract (item 6): hidden keys, reserved names, the fm
+		// drop, and the selector-vs-index hidden-field rule.
+		{Name: "hidden key not bare addressable", Expr: `_key`, ScopeJSON: `{"_key":"hidden"}`},
+		{Name: "hidden key not via fm selector", Expr: `fm._key`, ScopeJSON: `{"_key":"hidden"}`},
+		{Name: "hidden key via fm index", Expr: `fm["_key"]`, ScopeJSON: `{"_key":"hidden"}`},
+		{Name: "strings key only via fm", Expr: `fm.strings`, ScopeJSON: `{"strings":"sv"}`},
+		{Name: "keyword key not bare", Expr: `for`, ScopeJSON: `{"for":"fv"}`},
+		{Name: "literal fm key dropped", Expr: `fm["fm"]`, ScopeJSON: `{"fm":"lit"}`},
+		{Name: "non-identifier key via fm", Expr: `fm["2x"]`, ScopeJSON: `{"2x":"v"}`},
+		{
+			Name:      "scaffolding key not bare",
+			Expr:      `mdsmith_template_out`,
+			ScopeJSON: `{"mdsmith_template_out":"x"}`,
+		},
+		{
+			Name:      "scaffolding key dropped from fm",
+			Expr:      `fm["mdsmith_template_out"]`,
+			ScopeJSON: `{"mdsmith_template_out":"x"}`,
+		},
+
 		// Result-shape and reference errors.
 		{Name: "non-string result", Expr: `42`, ScopeJSON: ``},
 		{Name: "missing reference", Expr: `"\(missing)"`, ScopeJSON: `{"id":"X"}`},
@@ -285,6 +303,30 @@ func FuzzExpr(f *testing.F) {
 		{"\"\"\"\n  a\\(id)b\n  \"\"\"", `{"id":"X"}`},
 		{`#"a\#(id)b"#`, `{"id":"X"}`},
 		{`'a\(id)b'`, `{"id":"X"}`},
+		// Float-display divergence (hatch class a): interpolating a fractional
+		// float value, the one display difference CUE and the float64 engine keep.
+		{`"\(x)"`, `{"x":1.50}`},
+		{`"\(x)"`, `{"x":2.0}`},
+		// Loud out-of-subset rejections (hatch class b): CUE accepts each, the
+		// in-house engine rejects with the "unsupported" wording. One seed per
+		// construct pins the class.
+		{`strings.Join([for x in xs if x != "b" {x}], ",")`, `{"xs":["a","b","c"]}`}, // for…if combined
+		{`strings.Join([for i, x in xs {"\(i):\(x)"}], ",")`, `{"xs":["a","b"]}`},    // for i, x in
+		{`"\({a:1}.a)"`, ``},                  // struct literal in expr
+		{`"\(0.1 + 0.2)"`, ``},                // float arithmetic
+		{`"\(x + 1)"`, `{"x":9223372036854775807}`}, // big-int overflow
+		{`"\(len(m))"`, `{"m":{"k":"v"}}`},    // len(struct)
+		{`'a\(id)b'`, `{"id":"X"}`},           // bytes interpolation
+		// Scope binding contract (item 6): hidden keys, reserved names, the fm
+		// drop — both arms must agree.
+		{`_key`, `{"_key":"hidden"}`},
+		{`fm._key`, `{"_key":"hidden"}`},
+		{`fm["_key"]`, `{"_key":"hidden"}`},
+		{`for`, `{"for":"fv"}`},
+		{`fm.strings`, `{"strings":"sv"}`},
+		{`fm["fm"]`, `{"fm":"lit"}`},
+		{`mdsmith_template_out`, `{"mdsmith_template_out":"x"}`},
+		{`"\(_strings_used)"`, `{}`},
 	} {
 		f.Add(seed.expr, seed.scope)
 	}
@@ -295,45 +337,18 @@ func FuzzExpr(f *testing.F) {
 		if inHouse.Equal(oracle) {
 			return
 		}
-		// Hatch — float interpolation rendering. CUE preserves a float's
-		// original literal form (`2.0`, `1.50`), which the in-house engine,
-		// holding only a float64, renders as the shortest round-tripping decimal.
-		// A row that interpolates a float thus diverges in display only — both
-		// arms accept, only the string differs. Front matter never interpolates a
-		// float in the real corpus (the documented plan-239 divergence), so the
-		// hatch is scoped to exactly that signature: both accept and the only
-		// difference is the result string while the scope carries a non-integer
-		// number. Any accept/reject mismatch, or a string mismatch on an
-		// integer/string/bool scope, still fails.
-		if inHouse.Accepted && oracle.Accepted && scopeHasFractionalNumber(scope) {
+		// Two documented, divergence-scoped tolerances replace the former
+		// scope-scoped float hatch: float-display (both accept, only numeric
+		// substrings differ and parse equal-ish) and unsupported-construct
+		// (in-house rejects with the "unsupported" wording while CUE accepts). Each
+		// is signature-matched to exactly its divergence, so neither masks an
+		// unrelated accept/reject mismatch or an accept-vs-accept string diff.
+		if HatchedDivergence(inHouse, oracle) {
 			return
 		}
 		t.Fatalf("divergence on expr=%q scope=%q: in-house %+v vs oracle %+v",
 			expr, scope, inHouse, oracle)
 	})
-}
-
-// scopeHasFractionalNumber reports whether the scope JSON carries a number
-// with a fractional part or exponent — the value class whose interpolation
-// rendering CUE and the in-house engine deliberately differ on. A pure-integer
-// scope never trips it, so the float hatch cannot mask an integer-rendering
-// regression.
-func scopeHasFractionalNumber(scope string) bool {
-	dec := json.NewDecoder(bytes.NewReader([]byte(scope)))
-	dec.UseNumber()
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return false
-		}
-		num, ok := tok.(json.Number)
-		if !ok {
-			continue
-		}
-		if _, err := num.Int64(); err != nil {
-			return true
-		}
-	}
 }
 
 // requireExprCorpusCoversReal is a sanity assertion the corpus test relies on:

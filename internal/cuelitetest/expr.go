@@ -27,8 +27,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
 	"cuelang.org/go/cue"
@@ -51,15 +54,21 @@ type ExprCase struct {
 // Accepted reports whether the expression produced a concrete string; when
 // true, Result holds that string. A rejection (a syntax error, a missing
 // reference, a non-string result, or an unsupported construct) sets Accepted
-// false and leaves Result empty. Comparing both fields ensures the two arms
-// agree on accept/reject AND on the exact string produced.
+// false and leaves Result empty, and Reason carries the rejection's error text
+// so the divergence-scoped hatch can signature-match the unsupported-construct
+// class. Comparing Accepted and Result ensures the two arms agree on
+// accept/reject AND on the exact string produced; Reason is diagnostic only and
+// is NOT part of Equal.
 type ExprOutcome struct {
 	Accepted bool
 	Result   string
+	Reason   string
 }
 
 // Equal reports whether two ExprOutcomes agree — the same accept/reject
-// decision and, when accepted, the same string result.
+// decision and, when accepted, the same string result. Reason is excluded: the
+// two arms produce different rejection wording (one is CUE's, one is the
+// in-house engine's), so comparing it would spuriously fail.
 func (o ExprOutcome) Equal(other ExprOutcome) bool {
 	if o.Accepted != other.Accepted {
 		return false
@@ -79,43 +88,72 @@ type ExprPath func(c ExprCase) ExprOutcome
 func CueLiteExprPath(c ExprCase) ExprOutcome {
 	scope, ok := decodeScope(c.ScopeJSON)
 	if !ok {
-		return ExprOutcome{}
+		return ExprOutcome{Reason: "scope is not a JSON object"}
 	}
 	tpl, err := cuelitepkg.CompileRow(c.Expr)
 	if err != nil {
-		return ExprOutcome{}
+		return ExprOutcome{Reason: err.Error()}
 	}
 	s, err := tpl.Render(scope)
 	if err != nil {
-		return ExprOutcome{}
+		return ExprOutcome{Reason: err.Error()}
 	}
 	return ExprOutcome{Accepted: true, Result: s}
 }
 
 // OracleExprPath evaluates an ExprCase directly through cuelang.org/go — the
-// oracle the in-house arm is measured against. It reconstructs the CUE source
-// the former cuetemplate emitted, so the comparison is against the exact
-// binding model and standard-library surface the row expression was authored
-// for: the front-matter map under `fm`, an identifier-safe alias per key, and
-// the `strings` package preimported.
+// oracle the in-house arm is measured against. It reconstructs the same binding
+// model the in-house engine documents: the front-matter map under `fm` (minus
+// the `fm` and scaffolding keys), an identifier-safe alias per non-reserved
+// key, and the `strings` package available as a builtin namespace.
+//
+// To avoid leaking an unreachable scaffolding name (the former `_strings_used`
+// sink was referenceable and so diverged from the in-house engine, which has no
+// such name), it makes the `strings` import LEAK-FREE by a two-pass compile: it
+// first compiles the body with NO import, and only when that fails — because the
+// expression references `strings`, which is then unresolved — recompiles WITH
+// the import (now used, so no unused-import error and no sink). An expression
+// that needs no `strings` never sees the import, so no extra name exists for a
+// row expression to reach.
 func OracleExprPath(c ExprCase) ExprOutcome {
 	scope, ok := decodeScope(c.ScopeJSON)
 	if !ok {
-		return ExprOutcome{}
+		return ExprOutcome{Reason: "scope is not a JSON object"}
 	}
 	// scope came from decodeScope, so every value is a JSON-decoded type that
-	// re-marshals cleanly; oracleSource therefore cannot fail here.
-	src := oracleSource(scope, c.Expr)
+	// re-marshals cleanly; oracleBody therefore cannot fail here.
+	body := oracleBody(scope, c.Expr)
 	ctx := cuecontext.New()
+	// Pass 1: no import. If the expression does not use strings this succeeds
+	// with the correct value and no leaky import name exists.
+	if s, accepted := oracleLookup(ctx, body); accepted {
+		return ExprOutcome{Accepted: true, Result: s}
+	}
+	// Pass 2: with the import. Adding the binding can only resolve a `strings`
+	// reference, never mask an unrelated error, so a pass-1 failure for any other
+	// reason still fails here.
+	if s, accepted := oracleLookup(ctx, oracleStringsImport+body); accepted {
+		return ExprOutcome{Accepted: true, Result: s}
+	}
+	return ExprOutcome{Reason: "oracle rejected"}
+}
+
+// oracleStringsImport is the import line prepended in the two-pass oracle's
+// second pass when the expression references the strings builtin.
+const oracleStringsImport = "import \"strings\"\n\n"
+
+// oracleLookup compiles src and reads the row result out of the out field,
+// reporting accepted=false on a compile error or a non-string result.
+func oracleLookup(ctx *cue.Context, src string) (string, bool) {
 	val := ctx.CompileString(src)
 	if val.Err() != nil {
-		return ExprOutcome{}
+		return "", false
 	}
 	s, err := val.LookupPath(cue.ParsePath(oracleOutField)).String()
 	if err != nil {
-		return ExprOutcome{}
+		return "", false
 	}
-	return ExprOutcome{Accepted: true, Result: s}
+	return s, true
 }
 
 // decodeScope parses the ScopeJSON into a front-matter map. An empty string is
@@ -168,13 +206,16 @@ var oracleReserved = map[string]bool{
 	oracleOutField: true, oracleFMField: true,
 }
 
-// oracleSource reconstructs the CUE source the former cuetemplate.buildSource
-// emitted: a `strings` import with a use sink, the front-matter map under
-// `fm`, one top-level alias per identifier-safe non-reserved key, and the
-// expression in the out field. Its scope always comes from decodeScope, so
-// every value re-marshals cleanly; a marshal failure cannot occur and the
-// error is dropped.
-func oracleSource(scope map[string]any, expr string) string {
+// oracleBody reconstructs the CUE body the row binding model documents — the
+// front-matter map under `fm`, one top-level alias per identifier-safe
+// non-reserved key, and the expression in the out field — WITHOUT the leaky
+// `_strings_used` sink the former source carried (OracleExprPath adds the
+// `strings` import in a separate, sink-free pass only when the expression needs
+// it). The `fm` and out-field keys are dropped from the emitted data, matching
+// the in-house engine's rowDropped set, so neither arm exposes a scaffolding
+// name. Its scope always comes from decodeScope, so every value re-marshals
+// cleanly; a marshal failure cannot occur and the error is dropped.
+func oracleBody(scope map[string]any, expr string) string {
 	emit := make(map[string]any, len(scope))
 	aliases := make([]string, 0, len(scope))
 	for k, v := range scope {
@@ -188,8 +229,7 @@ func oracleSource(scope map[string]any, expr string) string {
 	}
 	sort.Strings(aliases)
 	fmJSON, _ := json.Marshal(emit)
-	src := "import \"strings\"\n\n_strings_used: strings.Join([], \"\")\n"
-	src += oracleFMField + ": " + string(fmJSON) + "\n"
+	src := oracleFMField + ": " + string(fmJSON) + "\n"
 	for _, k := range aliases {
 		src += fmt.Sprintf("%s: %s.%s\n", k, oracleFMField, k)
 	}
@@ -220,6 +260,137 @@ func RunExpr(t testing.TB, cases []ExprCase) {
 	for _, c := range cases {
 		CompareExprOutcomes(t, CueLiteExprPath, OracleExprPath, c)
 	}
+}
+
+// HatchedDivergence reports whether a disagreement between the in-house arm and
+// the oracle falls in one of the two documented, divergence-scoped tolerance
+// classes — and is therefore not a bug. It is the replacement for the former
+// scope-scoped float hatch, which masked any string diff whenever the scope
+// carried a fractional number (and so could hide an unrelated regression). Each
+// class is signature-matched to exactly its divergence:
+//
+//   - float-display: BOTH arms accept and the only differences between the two
+//     result strings are numeric substrings whose parsed values are equal-ish.
+//     CUE preserves a float's literal form (`2.0`, `1.50`) while the float64
+//     engine renders the shortest round-tripping decimal, so a float VALUE
+//     interpolated into a cell differs in display only. A diff in any
+//     non-numeric byte still fails.
+//   - unsupported-construct: the in-house arm REJECTS with the engine's
+//     "unsupported" wording while the oracle ACCEPTS. This covers the
+//     constructs CUE admits but the row subset deliberately does not — for…if
+//     combined clauses, `for i, x in`, `let`, len(struct), struct literals in
+//     exprs, big ints, bytes interpolation, and float arithmetic. It is keyed
+//     on the error-text class, so it NEVER masks an accept-vs-accept string
+//     diff or an in-house-accepts/oracle-rejects mismatch.
+func HatchedDivergence(inHouse, oracle ExprOutcome) bool {
+	return floatDisplayDivergence(inHouse, oracle) ||
+		unsupportedConstructDivergence(inHouse, oracle)
+}
+
+// floatDisplayDivergence reports the float-display tolerance: both arms accept
+// and the two result strings differ only in numeric substrings whose parsed
+// values are equal-ish. A non-numeric difference, or either arm rejecting,
+// fails the predicate.
+func floatDisplayDivergence(inHouse, oracle ExprOutcome) bool {
+	if !inHouse.Accepted || !oracle.Accepted {
+		return false
+	}
+	return numericallyEquivalent(inHouse.Result, oracle.Result)
+}
+
+// unsupportedConstructDivergence reports the unsupported-construct tolerance:
+// the in-house arm rejected with the engine's "unsupported" wording while the
+// oracle accepted. An in-house rejection whose reason is NOT an unsupported
+// class (a genuine parse or reference error), or any case where the oracle also
+// rejected, fails the predicate — so an accept-vs-accept string diff is never
+// masked here.
+func unsupportedConstructDivergence(inHouse, oracle ExprOutcome) bool {
+	if inHouse.Accepted || !oracle.Accepted {
+		return false
+	}
+	return strings.Contains(inHouse.Reason, "unsupported")
+}
+
+// numericallyEquivalent reports whether a and b are identical once every
+// maximal numeric run (a CUE-shaped decimal: optional sign, digits, optional
+// fraction, optional exponent) is compared by parsed value rather than by
+// text. It walks both strings in lockstep: a non-numeric byte must match
+// exactly; a numeric run in BOTH positions must parse to equal-ish floats. Any
+// other shape mismatch returns false, so the float hatch tolerates only the
+// digit-rendering divergence and nothing else.
+func numericallyEquivalent(a, b string) bool {
+	for len(a) > 0 && len(b) > 0 {
+		na, ra := leadingNumber(a)
+		nb, rb := leadingNumber(b)
+		if na != "" && nb != "" {
+			fa, ea := strconv.ParseFloat(na, 64)
+			fb, eb := strconv.ParseFloat(nb, 64)
+			if ea != nil || eb != nil || !floatEqualish(fa, fb) {
+				return false
+			}
+			a, b = ra, rb
+			continue
+		}
+		if a[0] != b[0] {
+			return false
+		}
+		a, b = a[1:], b[1:]
+	}
+	return a == b
+}
+
+// leadingNumber splits off a maximal CUE-shaped numeric run at the start of s,
+// returning the run and the remainder. A leading byte that does not start a
+// number returns ("", s). The run is the lexical shape the float-display
+// divergence touches — a signless integer or decimal possibly carrying a
+// fraction or exponent — so a hyphen that is punctuation (`a-b`) is not eaten as
+// a sign.
+func leadingNumber(s string) (num, rest string) {
+	i := 0
+	if i < len(s) && (s[i] == '+' || s[i] == '-') && i+1 < len(s) && isDigit(s[i+1]) {
+		i++
+	}
+	start := i
+	for i < len(s) && isDigit(s[i]) {
+		i++
+	}
+	if i < len(s) && s[i] == '.' && i+1 < len(s) && isDigit(s[i+1]) {
+		i++
+		for i < len(s) && isDigit(s[i]) {
+			i++
+		}
+	}
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		j := i + 1
+		if j < len(s) && (s[j] == '+' || s[j] == '-') {
+			j++
+		}
+		if j < len(s) && isDigit(s[j]) {
+			i = j
+			for i < len(s) && isDigit(s[i]) {
+				i++
+			}
+		}
+	}
+	if i == start {
+		return "", s
+	}
+	return s[:i], s[i:]
+}
+
+// isDigit reports whether c is an ASCII digit.
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+// floatEqualish reports whether two float64 values are equal within a tight
+// relative tolerance, so the round-trip rendering difference (`1.50` vs `1.5`)
+// counts as equal while a genuine value difference does not.
+func floatEqualish(a, b float64) bool {
+	if a == b {
+		return true
+	}
+	diff := math.Abs(a - b)
+	scale := math.Max(math.Abs(a), math.Abs(b))
+	return diff <= 1e-9*scale
 }
 
 // sortedExprNames is a small helper the corpus test uses to assert no two

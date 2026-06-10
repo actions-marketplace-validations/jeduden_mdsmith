@@ -13,14 +13,23 @@
 // builtins strings.Join and len.
 //
 // Evaluation runs on the in-house cue/cuelite engine (plan 239),
-// not cuelang.org/go. Scope:
+// not cuelang.org/go. The binding contract — defined on
+// cuelite.newRowScope and pinned against the CUE oracle — is:
 //
-//   - Every frontmatter key binds by its bare name, so a row-expr
-//     can write `\(id)`.
+//   - A frontmatter key binds by its BARE name only when it is a
+//     CUE-safe identifier (^[A-Za-z][A-Za-z0-9_]*$) that is not
+//     reserved, so a row-expr can write `\(id)`. A `_`-prefixed
+//     (hidden) key, a non-identifier key (`my-key`, `2x`), a CUE
+//     keyword (`for`), and the `strings`/`fm` names get NO bare
+//     alias — matching CUE, where those names are the builtin, the
+//     keyword, or a hidden field.
 //   - The full frontmatter map also binds under the `fm` field,
-//     so a key whose name is not a valid CUE identifier is
-//     reachable as `fm["my-key"]`, and any key is reachable as
-//     `fm.id`.
+//     so a non-identifier key is reachable as `fm["my-key"]` and a
+//     plain key as `fm.id`. A `_`-prefixed key is reachable via a
+//     string INDEX (`fm["_key"]`) but not via a bare SELECTOR
+//     (`fm._key`), as CUE hides `_`-prefixed fields from selection.
+//     A key literally named `fm` (and the scaffolding field names)
+//     is dropped from the `fm` struct: the `fm` binding always wins.
 //   - `strings.Join` and `len` are builtins the evaluator
 //     provides; no preimport is needed. A frontmatter key named
 //     `strings` is reachable as `fm.strings` — the bare `strings`

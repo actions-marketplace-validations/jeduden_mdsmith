@@ -519,3 +519,58 @@ func TestRender_FloatDisplayInterpolationStillWorks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "w=1.5", got)
 }
+
+// --- item 6: scope binding contract (match the oracle exactly) ---
+
+func TestRender_HiddenKeyNotBareAddressable(t *testing.T) {
+	// A `_`-prefixed key is a CUE hidden field: not addressable as a bare
+	// identifier (the oracle reports "reference not found").
+	_, err := renderRow(t, `_key`, map[string]any{"_key": "hidden"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestRender_HiddenKeyNotSelectableViaFM(t *testing.T) {
+	// `fm._key` cannot reach a hidden field via a bare selector, matching CUE.
+	_, err := renderRow(t, `fm._key`, map[string]any{"_key": "hidden"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestRender_HiddenKeyReachableViaFMIndex(t *testing.T) {
+	// `fm["_key"]` DOES reach a hidden field via a string index, matching CUE.
+	got, err := renderRow(t, `fm["_key"]`, map[string]any{"_key": "hidden"})
+	require.NoError(t, err)
+	assert.Equal(t, "hidden", got)
+}
+
+func TestRender_StringsKeyDoesNotBindAsBareIdent(t *testing.T) {
+	// A key named `strings` is the builtin namespace as a bare identifier, not
+	// the data; the data value is reachable as `fm.strings`.
+	got, err := renderRow(t, `fm.strings`, map[string]any{"strings": "sv"})
+	require.NoError(t, err)
+	assert.Equal(t, "sv", got)
+}
+
+func TestRender_KeywordKeyNotBareAddressable(t *testing.T) {
+	// A key named `for` (a CUE keyword) has no bare alias; bare `for` is a
+	// reference-not-found, matching the oracle.
+	_, err := renderRow(t, `for`, map[string]any{"for": "fv"})
+	require.Error(t, err)
+}
+
+func TestRender_LiteralFMKeyDropped(t *testing.T) {
+	// A scope key literally named `fm` is dropped: the `fm` binding always wins,
+	// so `fm["fm"]` does not reach the literal key (the oracle drops it too).
+	_, err := renderRow(t, `fm["fm"]`, map[string]any{"fm": "lit"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestRender_NonIdentifierKeyOnlyViaFM(t *testing.T) {
+	// A non-identifier key (leading digit) has no bare alias; it is reachable
+	// only via fm index.
+	got, err := renderRow(t, `fm["2x"]`, map[string]any{"2x": "v"})
+	require.NoError(t, err)
+	assert.Equal(t, "v", got)
+}

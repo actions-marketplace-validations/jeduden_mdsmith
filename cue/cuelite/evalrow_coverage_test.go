@@ -461,3 +461,12 @@ func TestInterpFragment_UnquoteError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid interpolation")
 }
+
+// TestNewRowScope_EmptyKeyNotBare covers isBareIdentifier's empty-string
+// branch: a front-matter key that is the empty string binds nowhere as a bare
+// identifier (it is reachable only via fm[""]).
+func TestNewRowScope_EmptyKeyNotBare(t *testing.T) {
+	got, err := renderRow(t, `fm[""]`, map[string]any{"": "v"})
+	require.NoError(t, err)
+	assert.Equal(t, "v", got)
+}
