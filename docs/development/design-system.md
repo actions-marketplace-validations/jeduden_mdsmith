@@ -84,6 +84,10 @@ viewport.
   `--shadow-sm` resting cards, `--shadow-md` hover and
   dropdowns, `--shadow-lg` modals. No glow and no colored
   shadows.
+- `--shadow-float` (and `-sm` for inline doc screenshots)
+  is the one big-shadow moment: terminal mocks and product
+  screenshots floating on a `.shot-stage` cell, via `.shot`
+  on the window. Never on buttons, cards, or menus.
 
 ## Components
 

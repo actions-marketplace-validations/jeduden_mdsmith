@@ -586,12 +586,13 @@ main {
 
 /* ── Artifact frame — shared frame language ── */
 /* Every artifact (real capture or mockup, dark or light) floats on its
-   tile with this one shadow — variants must not override it. */
+   tile with this one shadow — variants must not override it. The value
+   is the design system's screenshot float tier (--shadow-float). */
 .artifact-frame {
   width: 100%;
   max-width: 440px;
   border-radius: 9px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.45), 0 1px 4px rgba(0,0,0,0.3);
+  box-shadow: var(--shadow-float);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1584,6 +1585,35 @@ a.install-label:hover { color: var(--forge-300); text-decoration: underline; }
   .bento-card.is-full, .bento-card.is-tall { grid-column: auto; grid-row: auto; }
 }
 
+/* ========== SCREENSHOT SHOWCASE ========== */
+
+/* A stage cell with a floating window/screenshot on it — the
+   feature-section motif from the design system. Put .shot-stage
+   on the cell, .shot on the window (composes with the terminal
+   mock as class="term shot"; works on plain <img> too). */
+.shot-stage {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  padding: 48px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+.shot-stage.is-glow::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: var(--grad-glow);
+  pointer-events: none;
+}
+.shot-stage.is-ember { background: var(--grad-ember); }
+.shot-stage > * { position: relative; }
+.shot {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  max-width: 100%;
+}
+.shot.is-sm { box-shadow: var(--shadow-float-sm); }
+.shot > img { display: block; width: 100%; border-radius: inherit; }
+
 /* ========== LOGOS STRIP ========== */
 
 .logos {
@@ -1638,7 +1668,9 @@ a.install-label:hover { color: var(--forge-300); text-decoration: underline; }
   border: 1px solid var(--steel-800);
   border-radius: var(--radius-md);
   overflow: hidden;
-  box-shadow: var(--shadow-lg);
+  /* Screenshot float tier — the hero demo is a product screenshot
+     on the hero stage, not UI chrome. */
+  box-shadow: var(--shadow-float);
 }
 .hero-demo-bar {
   height: 32px;
