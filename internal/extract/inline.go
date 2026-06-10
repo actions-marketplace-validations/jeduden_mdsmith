@@ -27,6 +27,20 @@ func (p *projector) inlineSpans(key string, n ast.Node) []any {
 	return p.walkInlineChildren(key, n)
 }
 
+// lenientInlineSpans walks a paragraph's inline children like
+// inlineSpans but in lenient mode: an image projects an `image` span
+// (url, title?, children) instead of a hard error. It backs the
+// `block-paragraphs: inline` option so a `blocks`-mode paragraph with
+// an image stays representable rather than aborting (plan 246). Raw
+// HTML and any other out-of-mapping node still error — those are not
+// representable as data. The lenient flag is scoped to this walk.
+func (p *projector) lenientInlineSpans(n ast.Node) []any {
+	p.lenientInline = true
+	spans := p.walkInlineChildren("blocks", n)
+	p.lenientInline = false
+	return spans
+}
+
 // walkInlineChildren maps every inline child of parent to a span
 // object and returns the ordered list. A child outside the mapping
 // table records a collision-style diagnostic and is skipped; because
@@ -127,6 +141,25 @@ func (p *projector) inlineSpan(key string, n ast.Node) map[string]any {
 	case *ast.Link:
 		span := map[string]any{
 			"span":     "link",
+			"url":      string(node.Destination),
+			"children": p.walkInlineChildren(key, node),
+		}
+		if len(node.Title) > 0 {
+			span["title"] = string(node.Title)
+		}
+		return span
+	case *ast.Image:
+		// Strict (plan 212) inline projection treats an image as a hard
+		// error. Block-mode inline (lenientInlineSpans) instead projects
+		// it as an `image` span so a `blocks`-mode paragraph with an
+		// image stays representable. The alt text rides in `children`,
+		// mirroring `link`. Plan 246.
+		if !p.lenientInline {
+			p.unsupportedInline(key, n)
+			return nil
+		}
+		span := map[string]any{
+			"span":     "image",
 			"url":      string(node.Destination),
 			"children": p.walkInlineChildren(key, node),
 		}

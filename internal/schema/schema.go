@@ -119,6 +119,13 @@ type Schema struct {
 	// per-scope `projection:` still overrides this default. Empty means
 	// the historical declared-entries-only projection. Plan 246.
 	Projection string
+
+	// BlockParagraphs is the schema-level default for paragraph-block
+	// rendering under `projection: blocks` (ProjectionInline or
+	// ProjectionText). A scope's own BlockParagraphs overrides it.
+	// Valid only alongside a schema-level `projection: blocks`. Plan
+	// 246.
+	BlockParagraphs string
 }
 
 // FieldMeta carries optional schema-side metadata for a single
@@ -263,6 +270,15 @@ type Scope struct {
 	// entries only). The parser rejects it on preamble, slot, and
 	// broad-match scopes, which the projector skips. Plan 246.
 	Projection string
+
+	// BlockParagraphs selects how paragraph blocks render inside this
+	// scope's `blocks` list: ProjectionInline emits each paragraph's
+	// typed inline-span list under an `inline` key, ProjectionText (or
+	// empty) emits flat `text`. Valid only alongside
+	// `projection: blocks`; the parser rejects it otherwise. Block-mode
+	// inline is lenient — an image projects an `image` span rather than
+	// aborting like plan 212's strict content-entry inline. Plan 246.
+	BlockParagraphs string
 }
 
 // Matcher describes how a Scope claims one or more consecutive

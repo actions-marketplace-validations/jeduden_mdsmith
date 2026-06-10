@@ -94,6 +94,7 @@ var inlineTopKeys = map[string]bool{
 	"acronyms":         true,
 	"index":            true,
 	"projection":       true,
+	"block-paragraphs": true,
 }
 
 var validIndexIncludes = map[string]bool{
@@ -220,25 +221,43 @@ func parseInlineRootClosed(raw map[string]any, sch *Schema) error {
 }
 
 // parseInlineProjection reads the optional schema-level `projection:`
-// key. The only legal value is `blocks` — it makes the whole-body
-// block projection the default for every matched section, wildcard and
-// unlisted sections included (plan 246). Any other value is rejected
-// with a pointer to the one accepted mode.
+// and `block-paragraphs:` keys. The only legal `projection:` value is
+// `blocks` — it makes the whole-body block projection the default for
+// every matched section, wildcard and unlisted sections included.
+// `block-paragraphs:` (`inline` / `text`) sets the schema-level
+// default for paragraph-block rendering and is valid only when the
+// schema also projects blocks. Plan 246.
 func parseInlineProjection(raw map[string]any, sch *Schema) error {
-	v, ok := raw["projection"]
+	if v, ok := raw["projection"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			return fmt.Errorf("schema.projection must be a string, got %T", v)
+		}
+		if s != ProjectionBlocks {
+			return fmt.Errorf(
+				"schema.projection: the only schema-level projection is "+
+					"`blocks`, not %q", s)
+		}
+		sch.Projection = s
+	}
+	v, ok := raw["block-paragraphs"]
 	if !ok {
 		return nil
 	}
 	s, ok := v.(string)
 	if !ok {
-		return fmt.Errorf("schema.projection must be a string, got %T", v)
+		return fmt.Errorf("schema.block-paragraphs must be a string, got %T", v)
 	}
-	if s != ProjectionBlocks {
+	if s != ProjectionInline && s != ProjectionText {
 		return fmt.Errorf(
-			"schema.projection: the only schema-level projection is "+
-				"`blocks`, not %q", s)
+			"schema.block-paragraphs: must be `inline` or `text`, not %q", s)
 	}
-	sch.Projection = s
+	if sch.Projection != ProjectionBlocks {
+		return fmt.Errorf(
+			"schema.block-paragraphs: only valid with a schema-level " +
+				"`projection: blocks`")
+	}
+	sch.BlockParagraphs = s
 	return nil
 }
 
@@ -379,7 +398,7 @@ func validateScopeShape(sc Scope, m map[string]any, path string) error {
 		// `projection:` is rejected for the same reason — a preamble
 		// has no scope object to carry a `blocks` key. Plan 246.
 		return rejectKeys(m, path, "preamble (`heading: null`)",
-			"sections", "bind", "projection")
+			"sections", "bind", "projection", "block-paragraphs")
 	}
 	// After applyScopeFields succeeds, either Preamble is true
 	// (handled above) or Matcher is set by setScopeHeading; a
@@ -398,7 +417,8 @@ func validateScopeShape(sc Scope, m map[string]any, path string) error {
 		// here would be unreachable. Schema-level `projection: blocks`
 		// covers slots instead (plan 246).
 		return rejectKeys(m, path, "slot (`regex: '.+', repeat: { min: 0 }`)",
-			"sections", "rules", "content", "closed", "bind", "projection")
+			"sections", "rules", "content", "closed", "bind", "projection",
+			"block-paragraphs")
 	}
 	// A non-slot broad matcher (`regex: '.+'` with a non-zero
 	// `min`) is also skipped by the projector. `bind:` and
@@ -406,7 +426,7 @@ func validateScopeShape(sc Scope, m map[string]any, path string) error {
 	// parse time rather than silently dropping at extract time (plans
 	// 167, 246).
 	if isBroadMatcher(sc.Matcher) {
-		for _, k := range []string{"bind", "projection"} {
+		for _, k := range []string{"bind", "projection", "block-paragraphs"} {
 			if _, ok := m[k]; ok {
 				return fmt.Errorf(
 					"%s: `%s:` is not allowed on a broad-match scope "+
@@ -415,6 +435,14 @@ func validateScopeShape(sc Scope, m map[string]any, path string) error {
 					path, k)
 			}
 		}
+	}
+	// `block-paragraphs:` only has an effect alongside
+	// `projection: blocks` — without the blocks list there are no
+	// paragraph blocks to render. Reject the orphan key at parse time.
+	if sc.BlockParagraphs != "" && sc.Projection != ProjectionBlocks {
+		return fmt.Errorf(
+			"%s.block-paragraphs: only valid with `projection: blocks` "+
+				"on the same scope", path)
 	}
 	return nil
 }
@@ -482,6 +510,8 @@ func applyScopeFields(m map[string]any, sc *Scope, path string) error {
 			err = setScopeBind(sc, vv, path)
 		case "projection":
 			err = setScopeProjection(sc, vv, path)
+		case "block-paragraphs":
+			err = setScopeBlockParagraphs(sc, vv, path)
 		default:
 			return fmt.Errorf("%s: unknown scope key %q", path, k)
 		}
@@ -525,6 +555,25 @@ func setScopeProjection(sc *Scope, v any, path string) error {
 				"go on a `content:` entry), not %q", path, s)
 	}
 	sc.Projection = s
+	return nil
+}
+
+// setScopeBlockParagraphs reads the optional scope-level
+// `block-paragraphs:` mode, which selects how paragraph blocks render
+// inside the scope's `blocks` list — `inline` (typed spans) or `text`
+// (flat, the default). It is only meaningful with
+// `projection: blocks`; validateScopeBlockParagraphs rejects it when
+// the scope does not project blocks. Plan 246.
+func setScopeBlockParagraphs(sc *Scope, v any, path string) error {
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("%s.block-paragraphs must be a string, got %T", path, v)
+	}
+	if s != ProjectionInline && s != ProjectionText {
+		return fmt.Errorf(
+			"%s.block-paragraphs: must be `inline` or `text`, not %q", path, s)
+	}
+	sc.BlockParagraphs = s
 	return nil
 }
 

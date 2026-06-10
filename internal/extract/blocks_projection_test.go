@@ -211,3 +211,120 @@ func TestExtract_SchemaBlocksUnlistedCollidesWithDeclared(t *testing.T) {
 	require.NotEmpty(t, diags)
 	assert.Contains(t, diags[0].Message, "goal")
 }
+
+// With the inline-paragraph option, a paragraph block carries `inline`
+// spans instead of flat `text`, so block mode does not force plain
+// text (plan 246 task 5; reuses plan 212's span shape).
+func TestExtract_ScopeBlocksInlineParagraphs(t *testing.T) {
+	sch := &schema.Schema{
+		RootLevel: 2,
+		Sections: []schema.Scope{{
+			Heading:         "Notes",
+			Matcher:         &schema.Matcher{Regex: "Notes"},
+			Projection:      schema.ProjectionBlocks,
+			BlockParagraphs: schema.ProjectionInline,
+		}},
+	}
+	got, diags := run(t, "## Notes\n\nMark*down*.\n", sch, nil)
+	require.Empty(t, diags)
+	blocks := got.(map[string]any)["notes"].(map[string]any)["blocks"].([]any)
+	require.Len(t, blocks, 1)
+	para := blocks[0].(map[string]any)
+	assert.Equal(t, "paragraph", para["block"])
+	assert.NotContains(t, para, "text")
+	assert.Equal(t, []any{
+		map[string]any{"span": "text", "value": "Mark"},
+		map[string]any{
+			"span": "emphasis", "level": 1,
+			"children": []any{map[string]any{"span": "text", "value": "down"}},
+		},
+		map[string]any{"span": "text", "value": "."},
+	}, para["inline"])
+}
+
+// An image inside a blocks-mode paragraph projects under the inline
+// option without a hard error (the acceptance criterion: extract does
+// not exit non-zero for representable content). The image projects as
+// an `image` span rather than aborting like plan 212's strict inline.
+func TestExtract_ScopeBlocksInlineParagraphImage(t *testing.T) {
+	sch := &schema.Schema{
+		RootLevel: 2,
+		Sections: []schema.Scope{{
+			Heading:         "Notes",
+			Matcher:         &schema.Matcher{Regex: "Notes"},
+			Projection:      schema.ProjectionBlocks,
+			BlockParagraphs: schema.ProjectionInline,
+		}},
+	}
+	got, diags := run(t, "## Notes\n\nSee ![alt](pic.png) here.\n", sch, nil)
+	require.Empty(t, diags, "an image must not abort blocks-mode inline projection")
+	blocks := got.(map[string]any)["notes"].(map[string]any)["blocks"].([]any)
+	require.Len(t, blocks, 1)
+	spans := blocks[0].(map[string]any)["inline"].([]any)
+	// text "See ", image span, text " here."
+	var sawImage bool
+	for _, s := range spans {
+		if s.(map[string]any)["span"] == "image" {
+			sawImage = true
+		}
+	}
+	assert.True(t, sawImage, "the image must project as an image span")
+}
+
+// The default (text) blocks projection still drops an image to plain
+// text without erroring — the defined fallback the acceptance
+// criterion allows.
+func TestExtract_ScopeBlocksTextParagraphImageFallback(t *testing.T) {
+	got, diags := run(t, "## Notes\n\nSee ![alt](pic.png) here.\n", blocksScope("Notes"), nil)
+	require.Empty(t, diags)
+	blocks := got.(map[string]any)["notes"].(map[string]any)["blocks"].([]any)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, map[string]any{
+		"block": "paragraph",
+		"text":  "See alt here.",
+	}, blocks[0])
+}
+
+// A schema-level `block-paragraphs: inline` applies to an unlisted
+// section (nil scope -> schema default): its paragraph blocks carry
+// inline spans.
+func TestExtract_SchemaBlockParagraphsInlineUnlisted(t *testing.T) {
+	sch := &schema.Schema{
+		RootLevel:       2,
+		Projection:      schema.ProjectionBlocks,
+		BlockParagraphs: schema.ProjectionInline,
+		Sections: []schema.Scope{
+			{Heading: "Goal", Matcher: &schema.Matcher{Regex: "Goal"}},
+		},
+	}
+	got, diags := run(t, "## Goal\n\nx\n\n## Extra\n\n`code` here\n", sch, nil)
+	require.Empty(t, diags)
+	extra := got.(map[string]any)["extra"].(map[string]any)
+	para := extra["blocks"].([]any)[0].(map[string]any)
+	assert.NotContains(t, para, "text")
+	spans := para["inline"].([]any)
+	assert.Equal(t, map[string]any{"span": "code", "value": "code"}, spans[0])
+}
+
+// The inline-paragraph choice propagates into nested `section` blocks:
+// a deeper heading's paragraph also renders inline.
+func TestExtract_BlockParagraphsInlineNestedSection(t *testing.T) {
+	sch := &schema.Schema{
+		RootLevel: 2,
+		Sections: []schema.Scope{{
+			Heading:         "Notes",
+			Matcher:         &schema.Matcher{Regex: "Notes"},
+			Projection:      schema.ProjectionBlocks,
+			BlockParagraphs: schema.ProjectionInline,
+		}},
+	}
+	got, diags := run(t, "## Notes\n\n### Sub\n\n`x` y\n", sch, nil)
+	require.Empty(t, diags)
+	blocks := got.(map[string]any)["notes"].(map[string]any)["blocks"].([]any)
+	require.Len(t, blocks, 1)
+	section := blocks[0].(map[string]any)
+	require.Equal(t, "section", section["block"])
+	para := section["blocks"].([]any)[0].(map[string]any)
+	assert.Contains(t, para, "inline")
+	assert.NotContains(t, para, "text")
+}

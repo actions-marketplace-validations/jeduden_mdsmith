@@ -98,10 +98,20 @@ func (p *projector) blockNode(n ast.Node) map[string]any {
 }
 
 // paragraphBlock projects a paragraph (or a loose list item's
-// TextBlock) as `{block: paragraph, text}`. The inline-span option
-// (`{block: paragraph, inline}`) is wired by task 5; the default is
-// plain text, matching the `text` content projection.
+// TextBlock). The default is flat `text`, matching the `text` content
+// projection. When the scope's `block-paragraphs` is `inline`
+// (p.blockInline), it projects the paragraph's typed inline-span list
+// under `inline` instead, so block mode does not force plain text.
+// Block-mode inline is lenient (lenientInlineSpans): an image projects
+// an `image` span rather than aborting, so representable content never
+// exits non-zero. Plan 246.
 func (p *projector) paragraphBlock(n ast.Node) map[string]any {
+	if p.blockInline {
+		return map[string]any{
+			"block":  "paragraph",
+			"inline": p.lenientInlineSpans(n),
+		}
+	}
 	return map[string]any{"block": "paragraph", "text": p.nodeText(n)}
 }
 

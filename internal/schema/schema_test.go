@@ -655,6 +655,72 @@ func TestParseInline_ScopeProjectionOnSlotRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "slot")
 }
 
+// TestParseInline_ScopeBlockParagraphsInline accepts
+// `block-paragraphs: inline` alongside `projection: blocks`.
+func TestParseInline_ScopeBlockParagraphsInline(t *testing.T) {
+	sch, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":          "Notes",
+			"projection":       "blocks",
+			"block-paragraphs": "inline",
+		}},
+	}, "kind x")
+	require.NoError(t, err)
+	assert.Equal(t, ProjectionInline, sch.Sections[0].BlockParagraphs)
+}
+
+// TestParseInline_ScopeBlockParagraphsWithoutBlocksRejected rejects
+// `block-paragraphs:` when the scope does not project blocks.
+func TestParseInline_ScopeBlockParagraphsWithoutBlocksRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":          "Notes",
+			"block-paragraphs": "inline",
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "projection: blocks")
+}
+
+// TestParseInline_ScopeBlockParagraphsUnknownRejected rejects a value
+// other than inline/text.
+func TestParseInline_ScopeBlockParagraphsUnknownRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":          "Notes",
+			"projection":       "blocks",
+			"block-paragraphs": "tree",
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inline")
+}
+
+// TestParseInline_SchemaBlockParagraphsInline accepts a schema-level
+// `block-paragraphs: inline` alongside a schema-level
+// `projection: blocks`.
+func TestParseInline_SchemaBlockParagraphsInline(t *testing.T) {
+	sch, err := ParseInline(map[string]any{
+		"projection":       "blocks",
+		"block-paragraphs": "inline",
+		"sections":         []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.NoError(t, err)
+	assert.Equal(t, ProjectionInline, sch.BlockParagraphs)
+}
+
+// TestParseInline_SchemaBlockParagraphsWithoutBlocksRejected rejects a
+// schema-level `block-paragraphs:` without a schema-level
+// `projection: blocks`.
+func TestParseInline_SchemaBlockParagraphsWithoutBlocksRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"block-paragraphs": "inline",
+		"sections":         []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "projection: blocks")
+}
+
 func TestParseInline_ContentUnknownKind(t *testing.T) {
 	_, err := ParseInline(map[string]any{
 		"sections": []any{map[string]any{

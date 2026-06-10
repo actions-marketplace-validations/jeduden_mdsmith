@@ -113,7 +113,7 @@ contract instead of prose.
 4. Write the `#Block` / `#Span` CUE definitions; add the
    differential test validating all extract fixtures against
    them.
-5. Offer a paragraph option for inline spans inside blocks
+5. [x] Offer a paragraph option for inline spans inside blocks
    (`{block: paragraph, inline: [...]}`) gated by the same
    entry-level choice as plan 212, so block mode does not
    force plain text.
