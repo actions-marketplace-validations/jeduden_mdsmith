@@ -467,27 +467,9 @@ field, keep it and let MDS020 enforce the match.
 
 When the schema roots at H2 (all inline schemas do),
 `mdsmith extract` emits the document H1's plain text
-under a reserved `title` key beside `frontmatter`.
-For the body-structured example above:
-
-```json
-{
-  "frontmatter": {
-    "title": "Product copy"
-  },
-  "title": "Product copy",
-  "lead": {
-    "text": "A lint-and-fix tool that keeps your Markdown consistent across every surface — READMEs, docs site, editor extensions."
-  },
-  "tagline": {
-    "text": "Mark down your ideas; smith them into shipping docs."
-  },
-  "vscode-description": {
-    "text": "Inline diagnostics, fix-on-save, and instant navigation for Markdown in VS Code."
-  }
-}
-```
-
+under a reserved `title` key beside `frontmatter` —
+the `"title": "Product copy"` line in the
+[worked example](#worked-example) output above.
 When there is no H1, the `title` key is omitted.
 When a scope bound to `title` (via slug or `bind:`)
 collides with the reserved key, `extract` reports
