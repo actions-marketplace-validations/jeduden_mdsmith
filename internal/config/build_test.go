@@ -76,6 +76,35 @@ func TestValidateBuildConfig_ValidCommand(t *testing.T) {
 	assert.NoError(t, ValidateBuildConfig(cfg))
 }
 
+func TestValidateBuildConfig_CollectivePlaceholdersAllowed(t *testing.T) {
+	// {outputs} and {inputs} are the collective argv placeholders; the
+	// build executor expands them from the directive's outputs:/inputs:
+	// lists, so a command may use them without declaring them as params.
+	cfg := &Config{
+		Build: BuildConfig{
+			Recipes: map[string]RecipeCfg{
+				"copy": {Command: "cp {inputs} {outputs}"},
+			},
+		},
+	}
+	assert.NoError(t, ValidateBuildConfig(cfg))
+}
+
+func TestValidateBuildConfig_EmbeddedCollectivePlaceholderRejected(t *testing.T) {
+	// A collective placeholder must stand alone as its own argv token;
+	// expanding a list inside a token fragment has no meaning.
+	cfg := &Config{
+		Build: BuildConfig{
+			Recipes: map[string]RecipeCfg{
+				"x": {Command: "tool -o{outputs}"},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outputs")
+}
+
 func TestValidateBuildConfig_UndeclaredPlaceholder(t *testing.T) {
 	cfg := &Config{
 		Build: BuildConfig{

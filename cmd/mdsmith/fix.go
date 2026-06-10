@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	flag "github.com/spf13/pflag"
 
@@ -46,8 +47,10 @@ func runFix(args []string) int {
 func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 	fs := flag.NewFlagSet("fix", flag.ContinueOnError)
 	var (
-		configPath, format, maxInputSize                                      string
+		configPath, format, maxInputSize, buildRecipe                         string
 		noColor, quiet, verbose, noGitignore, followSymlinks, explain, dryRun bool
+		noBuild, buildOnly, buildDryRun                                       bool
+		buildTimeout                                                          time.Duration
 	)
 
 	fs.StringVarP(&configPath, "config", "c", "", "Override config file path")
@@ -64,6 +67,11 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 	fs.BoolVar(&dryRun, "dry-run", false,
 		"Preview which files would change without writing; "+
 			"per-file output lists the rules that would fire and their counts")
+	fs.BoolVar(&noBuild, "no-build", false, "Run the lint-fix pass only; skip the build pass")
+	fs.BoolVar(&buildOnly, "build-only", false, "Run the build pass only; skip the lint-fix pass")
+	fs.StringVar(&buildRecipe, "build-recipe", "", "Only build <?build?> directives whose recipe matches NAME")
+	fs.BoolVar(&buildDryRun, "build-dry-run", false, "Enumerate build targets without running any recipe")
+	fs.DurationVar(&buildTimeout, "build-timeout", 30*time.Second, "Per-recipe timeout (e.g. 30s, 2m)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: mdsmith fix [flags] [files...]\n\n"+
@@ -86,6 +94,11 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 		verbose = false
 	}
 
+	if noBuild && buildOnly {
+		fmt.Fprintf(os.Stderr, "mdsmith: fix: --no-build and --build-only are mutually exclusive\n")
+		return fixCLIOpts{}, nil, false, 2
+	}
+
 	hasStdin, fileArgs := splitStdinArg(fs.Args())
 
 	return fixCLIOpts{
@@ -101,6 +114,13 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 		maxInputSize: maxInputSize,
 		explain:      explain,
 		dryRun:       dryRun,
+		build: buildPassOpts{
+			noBuild:   noBuild,
+			buildOnly: buildOnly,
+			recipe:    buildRecipe,
+			dryRun:    buildDryRun,
+			timeout:   buildTimeout,
+		},
 	}, fileArgs, hasStdin, -1
 }
 
@@ -118,6 +138,7 @@ type fixCLIOpts struct {
 	maxInputSize string
 	explain      bool
 	dryRun       bool
+	build        buildPassOpts
 }
 
 // fixFiles fixes lint issues in the given file paths.
@@ -157,15 +178,36 @@ func runFixThroughSession(
 	logger *vlog.Logger, files []string, maxBytes int64,
 ) int {
 	files = orderFilesLeavesFirst(files, rootDirFromConfig(cfgPath), maxBytes)
-	sess := sessionForCLI(cfg, cfgPath)
-	defer sess.Dispose()
-	fixResult := sess.FixPaths(files, mdsmith.BatchOptions{
-		Explain:       opts.explain,
-		MaxInputBytes: batchMaxBytes(maxBytes),
-		Logger:        logger,
-		DryRun:        opts.dryRun,
-	})
-	return reportFixResult(opts, fixResult, logger)
+
+	lintCode := 0
+	if !opts.build.buildOnly {
+		sess := sessionForCLI(cfg, cfgPath)
+		fixResult := sess.FixPaths(files, mdsmith.BatchOptions{
+			Explain:       opts.explain,
+			MaxInputBytes: batchMaxBytes(maxBytes),
+			Logger:        logger,
+			DryRun:        opts.dryRun,
+		})
+		lintCode = reportFixResult(opts, fixResult, logger)
+		sess.Dispose()
+	}
+
+	// Build pass runs after the lint-fix pass so a freshly-edited
+	// outputs: list is built with its new value. It is skipped on
+	// --no-build and on a lint --dry-run (a preview run must touch
+	// nothing). The build pass is CLI-only and never part of the
+	// in-process fix API.
+	buildCode := 0
+	if !opts.build.noBuild && !opts.dryRun {
+		bopts := opts.build
+		bopts.maxBytes = maxBytes
+		buildCode = runBuildPass(cfg, cfgPath, files, bopts, stderrBuildWriter)
+	}
+
+	if buildCode != 0 {
+		return buildCode
+	}
+	return lintCode
 }
 
 // orderFilesLeavesFirst reorders files so generated-section
