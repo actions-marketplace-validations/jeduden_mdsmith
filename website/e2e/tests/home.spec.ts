@@ -20,12 +20,15 @@ test.describe("homepage positioning", () => {
     );
   });
 
-  test("one-engine row links each product surface", async ({ page }) => {
+  test("runs-in row links each product surface", async ({ page }) => {
     await page.goto("/");
 
     const row = page.locator(".positioning-engine");
     await expect(row).toBeVisible();
-    await expect(row).toContainText("One engine");
+    // Label states the operational fact ("Runs in"), per the design
+    // system's voice rules; the one-engine argument belongs to the
+    // "Why mdsmith" lead and its pillar, not to a band-level label.
+    await expect(row).toContainText("Runs in");
 
     // Each surface chip is an audience path into the docs: the row
     // replaces the old prose sentence ("One rule engine powers the
@@ -48,6 +51,11 @@ test.describe("homepage positioning", () => {
     const lead = page.locator(".hero-lead");
     await expect(lead).toBeVisible();
     await expect(lead).toContainText("Markdown linter and formatter");
+    // The lead's job is category + promise; the concrete scope
+    // ("cross-file integrity", auto-fix, …) belongs solely to the
+    // positioning statement right below it. Guard against the copy
+    // drifting back into a feature enumeration that duplicates it.
+    await expect(lead).not.toContainText("cross-file integrity");
   });
 
   test("hero links markdownlint users to the migration guide", async ({
@@ -78,6 +86,37 @@ test.describe("homepage positioning", () => {
     expect(count).toBeGreaterThan(0);
     for (let i = 0; i < count; i++) {
       await expect(badges.nth(i)).toBeHidden();
+    }
+  });
+
+  test("feature-card icons render as cycling tinted tiles", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    // Lead cards carry the forge-gradient tile; the rest cycle the
+    // six --tint-* hues with no two adjacent tiles sharing a hue
+    // (the design-system rule for icon tiles).
+    const tiles = page.locator(".card-icon.icon-tile");
+    expect(await tiles.count()).toBeGreaterThan(5);
+    await expect(
+      page.locator(".card-body--lead .icon-tile.is-forge-grad").first(),
+    ).toBeVisible();
+
+    const grids = page.locator(".card-grid");
+    const gridCount = await grids.count();
+    for (let g = 0; g < gridCount; g++) {
+      const hues = await grids
+        .nth(g)
+        .locator(".card:not(.card--lead) .icon-tile")
+        .evaluateAll(els =>
+          els.map(el =>
+            Array.from(el.classList).find(c => c.startsWith("is-")),
+          ),
+        );
+      for (let i = 1; i < hues.length; i++) {
+        expect(hues[i]).not.toBe(hues[i - 1]);
+      }
     }
   });
 

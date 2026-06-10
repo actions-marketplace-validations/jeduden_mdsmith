@@ -19,6 +19,7 @@ row: "- [{title}]({filename})"
 - [Architecture audit log](architecture-audit.md)
 - [Architecture principles](architecture/index.md)
 - [Coverage Gate](coverage.md)
+- [Design system](design-system.md)
 - [File Placement](file-placement.md)
 - [High-Performance Go](high-performance-go.md)
 - [Merge Queue](merge-queue.md)

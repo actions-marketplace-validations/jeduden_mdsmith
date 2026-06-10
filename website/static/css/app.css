@@ -146,9 +146,7 @@ main {
   content: "";
   position: absolute;
   inset: 0;
-  background-image:
-    radial-gradient(circle at 80% 0%, rgba(217,101,29,0.06), transparent 40%),
-    radial-gradient(circle at 0% 100%, rgba(217,101,29,0.04), transparent 50%);
+  background-image: var(--grad-glow);
   pointer-events: none;
 }
 .hero-inner { position: relative; }
@@ -220,17 +218,19 @@ main {
 
 /* ========== POSITIONING BAND ========== */
 
-/* The band between the hero and "Why mdsmith": a one-sentence
-   scope statement (the content/_index.md body) set as display
-   type, then two labeled spec rows — "One engine" (the product
-   surfaces, from the homepage front matter) and "Available on"
-   (the publish channels, from logos-strip.html). The rows share
-   a label column, and the border that used to split .positioning
-   from .logos now closes the band at the bottom of .logos, so
-   the three lines read as one designed block instead of a stray
-   paragraph between two strips. */
+/* The strip between the hero and the "Available on" channels:
+   a one-sentence scope statement (the content/_index.md body)
+   set as display type, then a quiet "Runs in" row of surface
+   links from the homepage front matter. The statement carries
+   the concrete rule scope so the hero lead never has to (see
+   docs/brand/messaging.md). Per the design system, the surface
+   links are plain text links — capsules/pills are status-only,
+   never navigation — and the serif-italic accent stays
+   reserved for the hero, so the statement renders in plain
+   sans. */
 .positioning {
-  padding: 44px 0 0;
+  padding: 40px 0 32px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 /* Paragraph margin resets live with .hero-lead's (same
    rendered-Markdown wrapping). */
@@ -241,53 +241,38 @@ main {
   line-height: 1.5;
   letter-spacing: -0.015em;
   color: var(--fg);
-  margin-bottom: 26px;
+  margin-bottom: 18px;
 }
-/* Same serif-italic accent as the h1 and section titles. */
-.positioning-statement em {
-  font-family: var(--font-serif);
-  font-style: italic;
-  font-weight: 400;
-  color: var(--forge-600);
-}
-/* Shared two-part row: fixed label column + wrapping item flow.
-   .logos-strip (logos-strip.html) uses the same skeleton so the
-   "One engine" and "Available on" lines align into a spec sheet. */
-.positioning-engine,
-.logos-strip {
+.positioning-engine {
   display: flex;
-  align-items: center;
+  align-items: baseline;
+  gap: 16px;
 }
+/* One mono-label recipe for both band rows: the positioning
+   strip's "Runs in" and the logos strip's "Available on". */
 .positioning-label,
 .logos-label {
-  flex: 0 0 148px;
   font-family: var(--font-mono);
   font-size: 12px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--fg-subtle);
 }
+.positioning-label { flex-shrink: 0; }
 .positioning-surfaces {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px 20px;
 }
+/* Quiet navigation links: solid underline on hover (the global
+   `a:hover` rule), accent color on hover like .logos-item. */
 .positioning-surface {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 500;
-  padding: 5px 12px;
-  border-radius: 4px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-raised);
   color: var(--steel-700);
-  transition: border-color var(--dur-fast) var(--ease-out),
-              color var(--dur-fast) var(--ease-out);
 }
 .positioning-surface:hover {
-  border-color: var(--forge-500);
-  color: var(--forge-600);
-  text-decoration: none;
+  color: var(--accent);
 }
 
 /* ========== BUTTONS ========== */
@@ -469,23 +454,20 @@ main {
   position: relative;
 }
 
+/* The tile (.icon-tile + tint class, set by feature-grid.html)
+   supplies size, background, and glyph color; this class only
+   adds the card-local spacing. Glyphs keep their 18px/24px
+   attribute size inside the tile. */
 .card-icon {
-  display: flex;
-  align-items: center;
-  width: 32px;
-  height: 32px;
   margin-bottom: 16px;
-  flex-shrink: 0;
-  color: var(--steel-400);
   stroke-width: 1.5;
 }
 .card-body--lead .card-icon {
   width: 36px;
   height: 36px;
   margin-bottom: 20px;
-  color: var(--forge-600);
 }
-.card-icon svg { width: 100%; height: 100%; stroke-width: inherit; }
+.card-icon svg { stroke-width: inherit; }
 
 .card-title {
   font-size: 14.5px;
@@ -604,12 +586,13 @@ main {
 
 /* ── Artifact frame — shared frame language ── */
 /* Every artifact (real capture or mockup, dark or light) floats on its
-   tile with this one shadow — variants must not override it. */
+   tile with this one shadow — variants must not override it. The value
+   is the design system's screenshot float tier (--shadow-float). */
 .artifact-frame {
   width: 100%;
   max-width: 440px;
   border-radius: 9px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.45), 0 1px 4px rgba(0,0,0,0.3);
+  box-shadow: var(--shadow-float);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1528,24 +1511,125 @@ a.install-label:hover { color: var(--forge-300); text-decoration: underline; }
 .cmp-cell.no  { color: var(--fg-subtle); }
 .cmp-cell.partial { background: #FCEFD2; color: #7a4a07; }
 
+/* ========== ICON TILES ========== */
+
+/* Colored icon containers from the design system. The --tint-*
+   triads cycle across a grid (never two adjacent tiles in the
+   same hue); bare glyphs in prose and nav keep currentColor. */
+.icon-tile {
+  width: 32px; height: 32px;
+  flex: none;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.icon-tile.is-ember { background: var(--tint-ember-bg); color: var(--tint-ember-fg); border-color: var(--tint-ember-line); }
+.icon-tile.is-sky   { background: var(--tint-sky-bg);   color: var(--tint-sky-fg);   border-color: var(--tint-sky-line); }
+.icon-tile.is-moss  { background: var(--tint-moss-bg);  color: var(--tint-moss-fg);  border-color: var(--tint-moss-line); }
+.icon-tile.is-amber { background: var(--tint-amber-bg); color: var(--tint-amber-fg); border-color: var(--tint-amber-line); }
+.icon-tile.is-clay  { background: var(--tint-clay-bg);  color: var(--tint-clay-fg);  border-color: var(--tint-clay-line); }
+.icon-tile.is-slate { background: var(--tint-slate-bg); color: var(--tint-slate-fg); border-color: var(--tint-slate-line); }
+.icon-tile.is-forge-grad { background: var(--grad-forge); color: #fff; border-color: var(--forge-600); }
+
+/* ========== BENTO ========== */
+
+/* 6-col feature bento from the design system. Cells rest on
+   bg-raised + 1px border and lift to shadow-md on hover; at most
+   one is-glow and one is-dark cell per bento. */
+.bento {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 14px;
+}
+.bento-card {
+  grid-column: span 2;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  display: flex; flex-direction: column; gap: 10px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+}
+.bento-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+.bento-card.is-wide { grid-column: span 3; }
+.bento-card.is-hero { grid-column: span 4; }
+.bento-card.is-full { grid-column: span 6; }
+.bento-card.is-tall { grid-row: span 2; }
+.bento-card h3 { font-size: 16px; font-weight: 600; margin: 2px 0 0; letter-spacing: -0.01em; }
+.bento-card p { font-size: 13.5px; color: var(--fg-muted); line-height: 1.55; margin: 0; }
+.bento-card .rule-chip {
+  display: inline-flex; align-items: center;
+  font-family: var(--font-mono); font-size: 11px;
+  background: var(--steel-50); border: 1px solid var(--border-strong);
+  padding: 1px 6px; border-radius: 3px; color: var(--steel-700);
+  align-self: flex-start;
+}
+.bento-card.is-glow::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: var(--grad-glow);
+  pointer-events: none;
+}
+.bento-card.is-glow > * { position: relative; }
+.bento-card.is-dark { background: var(--grad-steel); border-color: var(--steel-800); color: var(--term-fg); }
+.bento-card.is-dark h3 { color: var(--canvas); }
+.bento-card.is-dark p { color: var(--steel-400); }
+.bento-card.is-dark .icon-tile { background: var(--steel-800); color: var(--forge-300); border-color: var(--steel-700); }
+
+@media (max-width: 880px) {
+  .bento { grid-template-columns: 1fr; }
+  .bento-card, .bento-card.is-wide, .bento-card.is-hero,
+  .bento-card.is-full, .bento-card.is-tall { grid-column: auto; grid-row: auto; }
+}
+
+/* ========== SCREENSHOT SHOWCASE ========== */
+
+/* A stage cell with a floating window/screenshot on it — the
+   feature-section motif from the design system. Put .shot-stage
+   on the cell, .shot on the window (composes with the terminal
+   mock as class="term shot"; works on plain <img> too). */
+.shot-stage {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  padding: 48px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+.shot-stage.is-glow::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: var(--grad-glow);
+  pointer-events: none;
+}
+.shot-stage.is-ember { background: var(--grad-ember); }
+.shot-stage > * { position: relative; }
+.shot {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  max-width: 100%;
+}
+.shot.is-sm { box-shadow: var(--shadow-float-sm); }
+.shot > img { display: block; width: 100%; border-radius: inherit; }
+
 /* ========== LOGOS STRIP ========== */
 
-/* Second spec row of the positioning band; the row skeleton and
-   label column are shared with .positioning-engine (see the
-   POSITIONING BAND section). Channel names stay plain muted text
-   so the linked surface chips above keep the visual priority. */
 .logos {
-  padding: 14px 0 44px;
+  padding: 40px 0;
   border-bottom: 1px solid var(--border-subtle);
 }
-.logos-items {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 26px;
+.logos-strip {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 32px;
+  filter: grayscale(1); opacity: 0.7;
 }
-.logos-item { font-family: var(--font-sans); font-size: 15px; font-weight: 500; color: var(--steel-600); letter-spacing: -0.01em; }
+/* .logos-label shares the mono-label recipe declared in the
+   POSITIONING BAND section. */
+.logos-item { font-family: var(--font-sans); font-size: 18px; font-weight: 600; color: var(--steel-700); letter-spacing: -0.01em; }
 .logos-item:hover { color: var(--accent); text-decoration: none; }
+.logos-strip:hover { filter: none; opacity: 1; }
 
 /* ========== FOOTER ========== */
 
@@ -1584,7 +1668,9 @@ a.install-label:hover { color: var(--forge-300); text-decoration: underline; }
   border: 1px solid var(--steel-800);
   border-radius: var(--radius-md);
   overflow: hidden;
-  box-shadow: var(--shadow-lg);
+  /* Screenshot float tier — reserved for screenshots, never UI
+     chrome (see docs/development/design-system.md). */
+  box-shadow: var(--shadow-float);
 }
 .hero-demo-bar {
   height: 32px;
@@ -1840,16 +1926,19 @@ a.rule-ref:hover code { text-decoration: underline; }
      both columns instead. */
   .footer-grid .footer-col:first-child { grid-column: 1 / -1; }
 
-  /* The 148px label column eats too much of a narrow viewport;
-     stack each spec-row label on its own line above its items. */
-  .positioning { padding: 32px 0 0; }
-  .positioning-statement { font-size: 18px; margin-bottom: 22px; }
-  .positioning-engine,
-  .logos-strip { flex-direction: column; align-items: flex-start; gap: 10px; }
-  .positioning-label,
-  .logos-label { flex-basis: auto; }
-  .logos { padding: 18px 0 32px; }
-  .logos-item { font-size: 14px; }
+  /* Stack the "Runs in" label on its own line above the
+     wrapping surface links. */
+  .positioning { padding: 28px 0 26px; }
+  .positioning-statement { font-size: 18px; margin-bottom: 18px; }
+  .positioning-engine { flex-direction: column; align-items: flex-start; gap: 10px; }
+
+  /* space-between + wrap scattered the channel names with ragged
+     gaps once they wrapped; switch to a left-aligned gap flow with
+     the label on its own line. */
+  .logos { padding: 28px 0; }
+  .logos-strip { justify-content: flex-start; gap: 12px 24px; }
+  .logos-label { flex-basis: 100%; }
+  .logos-item { font-size: 16px; }
 
   .pg { grid-template-columns: 1fr; height: auto; }
   .pg-pane + .pg-pane { border-left: 0; border-top: 1px solid var(--border); }

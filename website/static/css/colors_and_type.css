@@ -94,6 +94,19 @@
   --info-500:  #2563A8;
   --info-100:  #D9E6F5;
 
+  /* ----- Icon tints ----- */
+  /* bg/fg/line triads for colored icon tiles. Six hues, all
+     derived from forge + the diagnostic semantics (no new hue
+     families). Cycle them across a feature grid or bento; never
+     two adjacent tiles in the same hue. Tiles only — bare glyphs
+     in prose and nav still inherit currentColor. */
+  --tint-ember-bg:  var(--forge-50);   --tint-ember-fg:  var(--forge-600);  --tint-ember-line:  var(--forge-100);
+  --tint-sky-bg:    var(--info-100);   --tint-sky-fg:    var(--info-500);   --tint-sky-line:    #C2D5EC;
+  --tint-moss-bg:   var(--ok-100);     --tint-moss-fg:   #1F7549;           --tint-moss-line:   #C2E2D0;
+  --tint-amber-bg:  var(--warn-100);   --tint-amber-fg:  #9A6009;           --tint-amber-line:  #F2DFAE;
+  --tint-clay-bg:   var(--err-100);    --tint-clay-fg:   #AE3124;           --tint-clay-line:   #F0C4BD;
+  --tint-slate-bg:  var(--steel-100);  --tint-slate-fg:  var(--steel-600);  --tint-slate-line:  var(--steel-200);
+
   /* ----- Terminal palette ----- */
   --term-bg:        var(--steel-900);
   --term-fg:        #E6E1D6;
@@ -189,6 +202,33 @@
                0 6px 12px -4px rgba(15, 20, 25, 0.08);
   --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.7);
   --shadow-focus: 0 0 0 3px rgba(184, 79, 18, 0.30);
+
+  /* Float — the one big-shadow moment in the system. Reserved for
+     terminal mocks and product screenshots floating on a showcase
+     stage. Layered hairline + contact + key + ambient, all neutral
+     steel-tinted — still no glow, no colored shadows. The layers
+     are tighter and darker than the design export's first cut: the
+     site's stages clip at the tile edge (overflow: hidden) and sit
+     on warm tinted backgrounds, so the shadow must develop within
+     ~50px to stay visible. */
+  --shadow-float:    0 0 0 1px rgba(15, 20, 25, 0.06),
+                     0 1px 2px rgba(15, 20, 25, 0.10),
+                     0 10px 22px -4px rgba(15, 20, 25, 0.22),
+                     0 24px 48px -12px rgba(15, 20, 25, 0.25);
+  --shadow-float-sm: 0 0 0 1px rgba(15, 20, 25, 0.06),
+                     0 2px 6px rgba(15, 20, 25, 0.10),
+                     0 10px 24px -8px rgba(15, 20, 25, 0.22);
+
+  /* Gradients — warm only; the bluish-purple veto stands. Use for
+     hero glows, bento feature cells, dark panels, and gradient
+     icon tiles. Never behind body text on a light surface; max
+     one gradient surface per viewport. */
+  --grad-forge: linear-gradient(135deg, #ECA152 0%, #D9651D 55%, #B84F12 100%);
+  --grad-heat:  linear-gradient(90deg, #E58233 0%, #C3372C 100%);
+  --grad-ember: linear-gradient(165deg, #FDF3EA 0%, #FAE2CB 100%);
+  --grad-steel: linear-gradient(150deg, #2A323D 0%, #0F1419 80%);
+  --grad-glow:  radial-gradient(circle at 80% 0%, rgba(217, 101, 29, 0.06), transparent 40%),
+                radial-gradient(circle at 0% 100%, rgba(217, 101, 29, 0.04), transparent 50%);
 
   --ease-out:    cubic-bezier(0.2, 0.7, 0.2, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
