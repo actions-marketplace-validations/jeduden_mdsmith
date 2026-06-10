@@ -280,14 +280,40 @@ func (r *Rule) checkTokens(filePath, name string, tokens []string) []lint.Diagno
 				}
 			}
 		}
-		if fusedRe.MatchString(tok) {
-			fused := fusedRe.FindString(tok)
+		if fused := fusedRe.FindString(tok); fused != "" {
 			diags = append(diags, r.diag(filePath, lint.Error,
 				fmt.Sprintf("recipe %q: command contains fused placeholders %q — separate with a delimiter",
 					name, fused)))
+		} else {
+			diags = append(diags, r.checkReservedTokenShape(filePath, name, tok)...)
 		}
 	}
 	return diags
+}
+
+// checkReservedTokenShape reports an error when a reserved collective
+// placeholder ({outputs} or {inputs}) is embedded in a larger argv
+// token rather than standing alone — list-expanding a fragment of a
+// token has no well-defined semantics.
+func (r *Rule) checkReservedTokenShape(filePath, name, tok string) []lint.Diagnostic {
+	var diags []lint.Diagnostic
+	for _, m := range placeholderRe.FindAllStringSubmatch(tok, -1) {
+		if isReservedParamName(m[1]) && tok != m[0] {
+			diags = append(diags, r.diag(filePath, lint.Error,
+				fmt.Sprintf("recipe %q: reserved placeholder %q must be a standalone argv token, not embedded in %q",
+					name, m[0], tok)))
+		}
+	}
+	return diags
+}
+
+func isReservedParamName(name string) bool {
+	for _, r := range reservedParamNames {
+		if name == r {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Rule) checkUnusedParams(filePath, name string, rec recipe) []lint.Diagnostic {
