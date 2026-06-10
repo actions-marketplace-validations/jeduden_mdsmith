@@ -19,6 +19,18 @@ import (
 // quotes and applying CUE string escapes. This is the same shape
 // fieldinterp uses for map look-ups, so a Path from ParsePath feeds
 // directly into ResolvePath without any extra unquoting step.
+//
+// MakePath and ParsePath are deliberately ASYMMETRIC, mirroring
+// cue.MakePath/cue.ParsePath: MakePath accepts segments ParsePath could
+// never parse back — an empty segment, a "true"/"false"/"null" head, a
+// segment with embedded dots ("a.b"), or one needing quotes ("my-key") —
+// because programmatic construction from data keys (e.g. Fields()
+// iteration) must round-trip any map key, while ParsePath enforces the
+// narrower string-label-only EXPRESSION grammar. There is deliberately no
+// Path.String()/render method: PathError.Error()'s dot-join of segments is
+// LOSSY (["a.b"] and ["a","b"] both join to "a.b") and is display-only —
+// never parse it back. A future Path renderer must quote any segment that
+// is not a bare identifier.
 type Path struct {
 	segments []string
 }
@@ -36,7 +48,13 @@ func (p Path) Segments() []string {
 // migrate off cuelang.org/go.
 //
 // MakePath does not validate the segment values; each segment is stored
-// as-is. A zero-argument call returns a Path with nil segments.
+// as-is. A zero-argument call returns a Path with nil segments. By design
+// MakePath accepts segments ParsePath cannot parse — an empty segment, a
+// "true"/"false"/"null" head, a dotted key ("a.b"), or a key that would
+// need quoting ("my-key") — because it builds paths from arbitrary data
+// keys, not from the string-label EXPRESSION grammar ParsePath enforces.
+// Construct paths from map keys this way (e.g. over Fields() iteration);
+// never round-trip a data key through ParsePath.
 func MakePath(segments ...string) Path {
 	if len(segments) == 0 {
 		return Path{}
@@ -51,12 +69,13 @@ func MakePath(segments ...string) Path {
 //
 // # Grammar contract
 //
-// ParsePath accepts the STRING-LABEL SUBSET of CUE paths: a
-// dot-separated sequence of selectors, each either a bare identifier or a
-// double-quoted string, with optional surrounding whitespace. It matches
-// cuelang.org/go/cue.ParsePath for every input in that subset (verified
-// by the differential harness in internal/cuelitetest) and rejects the
-// CUE selectors that are NOT string labels.
+// ParsePath accepts the STRING-LABEL SUBSET of CUE paths: a HEAD selector
+// followed by zero or more dot- or bracket-selectors, with optional
+// surrounding whitespace. It matches cuelang.org/go/cue.ParsePath for every
+// input in that subset (verified by the differential harness in
+// internal/cuelitetest) and rejects the CUE selectors that are NOT string
+// labels. A leading UTF-8 BOM is skipped (offset 0 only); a BOM anywhere
+// else is rejected, matching CUE's "illegal byte order mark".
 //
 // Identifier selector. A bare identifier starts with a Unicode letter or
 // "$" and continues with Unicode letters, Unicode digits, "_", or "$" —
@@ -72,16 +91,36 @@ func MakePath(segments ...string) Path {
 // escape-decoded content. CUE string escapes are accepted —
 // \a \b \f \n \r \t \v \\ \" \/ \uXXXX \UXXXXXXXX — while the Go-only
 // \xNN and octal \NNN escapes, an unknown escape, a raw NUL or newline
-// inside the quotes, and an unterminated string are rejected. A quoted
-// segment whose decoded value is empty (`""`, or escapes that decode to
-// "") is rejected: an empty label is a surprising map key.
+// inside the quotes, and an unterminated string are rejected. A
+// high-surrogate \u/\U escape immediately followed by a low-surrogate
+// escape combines into one astral rune (CUE's UTF-16 rule); a lone
+// surrogate half is rejected. A quoted segment whose decoded value is empty
+// (`""`, or escapes that decode to "") is rejected: an empty label is a
+// surprising map key.
+//
+// Raw-string selector. A multi-hash raw string (#"..."#, ##"..."##, …) is a
+// CUE string label, accepted as the HEAD selector or as a bracket operand
+// but NOT after a dot (a.#"b"# rejects, matching CUE). Its delimiter is N
+// '#' + '"' … '"' + N '#'; inside it the escape introducer is '\' + N '#',
+// so a backslash not followed by N '#' is literal. A bare "#foo" (a '#' not
+// opening a raw string) is a definition selector, not a string label, and
+// is rejected.
+//
+// Bracket selector. A bracket string-index selector a["b"] (and a[#"b"#])
+// is a CUE string label, the same segment as the dotted form a."b". CUE
+// tolerates whitespace and a newline before the bracketed string but only
+// space/tab/CR — not a newline — before the closing "]". A numeric index
+// a[0] is an index selector, not a string label, and is rejected.
 //
 // Rejected non-string selectors. An index selector (a bare number such
 // as "123", or "a[0]"), a definition selector ("#foo"), and a hidden
 // selector ("_foo") are valid CUE paths but are NOT string labels, so the
 // string-label-only contract rejects them with an error naming the
-// selector kind. cuelite.Path is []string-backed by design; the phase-2
-// consumers (fieldinterp, query) need only string labels.
+// selector kind. The hidden-label rejection is PARITY with CUE, which
+// itself rejects "_foo" ("hidden label _foo not allowed"); the index- and
+// definition-label rejections are the deliberate narrowing to string labels
+// only. cuelite.Path is []string-backed by design; the phase-2 consumers
+// (fieldinterp, query) need only string labels.
 //
 // ParsePath returns a plain error (never a *PathError): a path-expression
 // syntax error has no data-tree field path to tag, so a *PathError with a
@@ -93,6 +132,14 @@ func ParsePath(expr string) (Path, error) {
 		// quoted label, an identifier, or even a comment — so reject it once
 		// up front rather than letting a replacement rune slip through.
 		return Path{}, fmt.Errorf("path expression is not valid UTF-8")
+	}
+	// CUE's scanner skips a UTF-8 BOM only at offset 0 and rejects one
+	// anywhere else (inside a quoted label, an identifier, or a comment) with
+	// "illegal byte order mark". Strip a leading BOM, then reject any
+	// remaining BOM up front rather than per-position.
+	expr = strings.TrimPrefix(expr, "\ufeff")
+	if strings.Contains(expr, "\ufeff") {
+		return Path{}, fmt.Errorf("path expression contains an illegal byte order mark")
 	}
 	if strings.IndexByte(expr, 0x00) >= 0 {
 		// A NUL byte is "illegal character NUL" to CUE wherever it appears —
@@ -120,96 +167,205 @@ func isPathSpace(r rune) bool {
 	return r == ' ' || r == '\t' || r == '\r'
 }
 
-// parsePathSegments splits expr into unquoted segment strings.
-// It is the scanner driving ParsePath. The two segment kinds are
-// idents and quoted strings; they alternate with '.' separators, with
-// optional space/tab/CR around each token and dot. A leading dot, a
-// trailing dot, an empty quoted value, a malformed quoted string, an
-// unexpected character, the literal true/false/null as the leading
-// selector, or a non-string selector (index/definition/hidden) each
-// return an error.
+// sepKind names what follows a completed segment: the path ends, a "."
+// dot-selector follows, or a "[" bracket string-index selector follows.
+type sepKind int
+
+const (
+	sepEnd     sepKind = iota // end of path (EOF or a trailing terminator)
+	sepDot                    // a "." introducing a dot-selector
+	sepBracket                // a "[" introducing a bracket string-index
+)
+
+// parsePathSegments splits expr into unquoted segment strings. It is the
+// scanner driving ParsePath. A path is a HEAD selector followed by zero or
+// more dot- or bracket-selectors:
 //
-//nolint:funlen // one linear scanner loop sharing position bookkeeping.
+//   - the head and a bracketed selector accept an identifier, a
+//     double-quoted string, OR a multi-hash raw string (#"..."#);
+//   - a dot-selector accepts only an identifier or a double-quoted string —
+//     a raw string after a dot is rejected, matching cue.ParsePath;
+//   - a "[" opens a bracket string-index selector ("a[\"b\"]"), whose
+//     operand must be a quoted or raw string (a bare number "a[0]" stays an
+//     index-label rejection), with newline tolerated before the operand but
+//     not before the closing "]".
+//
+// A leading dot, a trailing dot, an empty decoded value, a malformed quoted
+// string, an unexpected character, the literal true/false/null as the
+// leading selector, or a non-string selector (index/definition/hidden) each
+// return an error.
 func parsePathSegments(expr string) ([]string, error) {
 	segments := make([]string, 0, 4)
-	pos := 0
-	for {
-		// Expecting a segment (the start, or just after a '.'): leading and
-		// post-dot newlines are insignificant here, so skip them along with
-		// space/tab/CR.
-		pos = skipExprSpace(expr, pos)
-		if pos == len(expr) {
-			// Only whitespace followed a '.': a trailing dot.
-			return nil, fmt.Errorf("invalid path expression %q: trailing dot", expr)
-		}
-		r, _ := utf8.DecodeRuneInString(expr[pos:])
-		leading := len(segments) == 0
-		switch {
-		case r == '"':
-			seg, advance, err := parseQuotedSegment(expr, pos)
-			if err != nil {
-				return nil, fmt.Errorf("invalid path expression %q: %s", expr, err)
-			}
-			if seg == "" {
-				return nil, fmt.Errorf("invalid path expression %q: empty quoted segment", expr)
-			}
-			segments = append(segments, seg)
-			pos += advance
-		case isIdentStart(r):
-			seg, advance := parseIdentSegment(expr, pos)
-			if leading && isCUELiteral(seg) {
-				return nil, fmt.Errorf(
-					"invalid path expression %q: %q is a CUE literal, not a field name",
-					expr, seg)
-			}
-			segments = append(segments, seg)
-			pos += advance
-		default:
-			if kind := nonStringSelectorKind(r); kind != "" {
-				return nil, fmt.Errorf(
-					"invalid path expression %q: %s selectors are not supported; "+
-						"cuelite paths are the string-label subset of CUE paths",
-					expr, kind)
-			}
-			return nil, fmt.Errorf(
-				"invalid path expression %q: unexpected character %q at position %d",
-				expr, r, pos)
-		}
-
-		// After a segment, only space/tab/CR are insignificant — a newline
-		// or a "//" line comment here terminates the path expression (CUE's
-		// statement-newline rule), so a '.' after one is an error, while a
-		// terminator followed only by trailing whitespace/comments ends the
-		// path.
-		pos = skipPathSpace(expr, pos)
-		if pos == len(expr) {
-			break
-		}
-		if expr[pos] == '\n' || isLineComment(expr, pos) {
-			if rest := skipExprSpace(expr, pos); rest == len(expr) {
-				break // a terminator plus trailing filler: the path ends here.
-			}
-			return nil, fmt.Errorf(
-				"invalid path expression %q: unexpected content after newline at position %d",
-				expr, pos)
-		}
-		if expr[pos] == '[' {
-			// An index selector ("a[0]") follows a string label; name the
-			// kind so the rejection reads as a contract error, not a bare
-			// unexpected-character message.
-			return nil, fmt.Errorf(
-				"invalid path expression %q: index selectors are not supported; "+
-					"cuelite paths are the string-label subset of CUE paths",
-				expr)
-		}
-		if expr[pos] != '.' {
-			return nil, fmt.Errorf(
-				"invalid path expression %q: expected '.' or end, got %q at position %d",
-				expr, rune(expr[pos]), pos)
-		}
-		pos++ // consume '.'
+	// The head selector allows a raw string; a post-dot selector does not.
+	// consumeSegment skips leading filler (incl. newlines) itself.
+	seg, pos, err := consumeSegment(expr, 0, true)
+	if err != nil {
+		return nil, err
 	}
-	return segments, nil
+	segments = append(segments, seg)
+	for {
+		kind, after, err := consumeSeparator(expr, pos)
+		if err != nil {
+			return nil, err
+		}
+		switch kind {
+		case sepEnd:
+			return segments, nil
+		case sepDot:
+			seg, after, err = consumeSegment(expr, after, false)
+		case sepBracket:
+			seg, after, err = consumeBracketSegment(expr, after)
+		}
+		if err != nil {
+			return nil, err
+		}
+		segments = append(segments, seg)
+		pos = after
+	}
+}
+
+// consumeSegment reads one head- or dot-selector starting at pos, skipping
+// any leading filler (space/tab/CR, newline, and line comments — all
+// insignificant where a segment is expected). leading reports whether this
+// is the head selector, which is where true/false/null reject as CUE
+// literals and where a raw-string selector (#"...") is accepted; a post-dot
+// selector (leading=false) rejects a raw string, matching cue.ParsePath. It
+// returns the decoded segment and the position just past it.
+func consumeSegment(expr string, pos int, leading bool) (string, int, error) {
+	pos = skipExprSpace(expr, pos)
+	if pos == len(expr) {
+		// Only filler followed the start or a '.': an empty or trailing dot.
+		return "", 0, fmt.Errorf("invalid path expression %q: trailing dot", expr)
+	}
+	if leading && isRawStringStart(expr, pos) {
+		return consumeRawStringSegment(expr, pos)
+	}
+	r, _ := utf8.DecodeRuneInString(expr[pos:])
+	switch {
+	case r == '"':
+		return consumeQuotedSegment(expr, pos)
+	case isIdentStart(r):
+		seg, advance := parseIdentSegment(expr, pos)
+		if leading && isCUELiteral(seg) {
+			return "", 0, fmt.Errorf(
+				"invalid path expression %q: %q is a CUE literal, not a field name",
+				expr, seg)
+		}
+		return seg, pos + advance, nil
+	default:
+		return "", 0, unexpectedSegmentError(expr, r, pos)
+	}
+}
+
+// consumeBracketSegment reads the operand of a bracket string-index
+// selector starting at pos (just past the "["). CUE tolerates a newline
+// before the operand, so leading filler (incl. newlines and comments) is
+// skipped; the operand must be a quoted or raw string (a bare number, bool,
+// or ident is an index/non-string selector and rejects); then only
+// space/tab/CR — not a newline — may precede the closing "]". It returns
+// the decoded segment and the position just past the "]".
+func consumeBracketSegment(expr string, pos int) (string, int, error) {
+	pos = skipExprSpace(expr, pos)
+	var seg string
+	var err error
+	switch {
+	case pos < len(expr) && isRawStringStart(expr, pos):
+		seg, pos, err = consumeRawStringSegment(expr, pos)
+	case pos < len(expr) && expr[pos] == '"':
+		seg, pos, err = consumeQuotedSegment(expr, pos)
+	default:
+		// A bare number ("a[0]"), bool, ident, or "]" is an index or
+		// non-string bracket selector; name the kind so the rejection reads
+		// as a contract error.
+		return "", 0, fmt.Errorf(
+			"invalid path expression %q: index selectors are not supported; "+
+				"cuelite paths are the string-label subset of CUE paths",
+			expr)
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	pos = skipPathSpace(expr, pos) // no newline allowed before ']'
+	if pos == len(expr) || expr[pos] != ']' {
+		return "", 0, fmt.Errorf(
+			"invalid path expression %q: expected ']' to close bracket selector",
+			expr)
+	}
+	return seg, pos + 1, nil
+}
+
+// consumeQuotedSegment reads a double-quoted string segment at pos and
+// rejects an empty decoded value (an empty label is a surprising map key).
+func consumeQuotedSegment(expr string, pos int) (string, int, error) {
+	seg, advance, err := parseQuotedSegment(expr, pos)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid path expression %q: %s", expr, err)
+	}
+	if seg == "" {
+		return "", 0, fmt.Errorf("invalid path expression %q: empty quoted segment", expr)
+	}
+	return seg, pos + advance, nil
+}
+
+// consumeRawStringSegment reads a multi-hash raw-string label at pos
+// (expr[pos]=='#', a '"' follows the run of '#') and rejects an empty
+// decoded value, mirroring consumeQuotedSegment.
+func consumeRawStringSegment(expr string, pos int) (string, int, error) {
+	seg, advance, err := parseRawStringSegment(expr, pos)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid path expression %q: %s", expr, err)
+	}
+	if seg == "" {
+		return "", 0, fmt.Errorf("invalid path expression %q: empty raw-string segment", expr)
+	}
+	return seg, pos + advance, nil
+}
+
+// unexpectedSegmentError builds the rejection for a rune that cannot start a
+// segment: a non-string CUE selector (index/definition/hidden) names its
+// kind, anything else is a bare unexpected-character message.
+func unexpectedSegmentError(expr string, r rune, pos int) error {
+	if kind := nonStringSelectorKind(r); kind != "" {
+		return fmt.Errorf(
+			"invalid path expression %q: %s selectors are not supported; "+
+				"cuelite paths are the string-label subset of CUE paths",
+			expr, kind)
+	}
+	return fmt.Errorf(
+		"invalid path expression %q: unexpected character %q at position %d",
+		expr, r, pos)
+}
+
+// consumeSeparator scans what follows a completed segment at pos and
+// reports whether the path ends or a dot- or bracket-selector follows.
+// After a segment only space/tab/CR are insignificant — a newline or a
+// "//" line comment terminates the path expression (CUE's statement-newline
+// rule), so more content after one is an error while a terminator followed
+// only by trailing filler ends the path. The returned position is just past
+// the consumed "." or "[" (or unchanged at sepEnd).
+func consumeSeparator(expr string, pos int) (sepKind, int, error) {
+	pos = skipPathSpace(expr, pos)
+	if pos == len(expr) {
+		return sepEnd, pos, nil
+	}
+	if expr[pos] == '\n' || isLineComment(expr, pos) {
+		if rest := skipExprSpace(expr, pos); rest == len(expr) {
+			return sepEnd, rest, nil // terminator plus trailing filler
+		}
+		return sepEnd, pos, fmt.Errorf(
+			"invalid path expression %q: unexpected content after newline at position %d",
+			expr, pos)
+	}
+	switch expr[pos] {
+	case '.':
+		return sepDot, pos + 1, nil
+	case '[':
+		return sepBracket, pos + 1, nil
+	default:
+		return sepEnd, pos, fmt.Errorf(
+			"invalid path expression %q: expected '.' or end, got %q at position %d",
+			expr, rune(expr[pos]), pos)
+	}
 }
 
 // skipPathSpace advances pos past any run of intra-expression whitespace
@@ -374,4 +530,57 @@ func parseQuotedSegment(expr string, pos int) (string, int, error) {
 	}
 	return "", 0, fmt.Errorf(
 		"unterminated quoted segment starting at position %d", pos)
+}
+
+// isRawStringStart reports whether a CUE raw-string label begins at
+// expr[pos]: a run of one or more '#' immediately followed by a '"'. A '#'
+// NOT followed (after its hash run) by a '"' is a definition label, not a
+// raw string. The caller has already established expr[pos]=='#'-or-other;
+// this confirms the '#'…'"' shape.
+func isRawStringStart(expr string, pos int) bool {
+	if pos >= len(expr) || expr[pos] != '#' {
+		return false
+	}
+	i := pos
+	for i < len(expr) && expr[i] == '#' {
+		i++
+	}
+	return i < len(expr) && expr[i] == '"'
+}
+
+// parseRawStringSegment reads a multi-hash raw-string label starting at
+// expr[pos] (a run of N '#' then '"') and returns the decoded string, the
+// bytes consumed, and any error. A raw string is delimited by N '#' + '"'
+// … '"' + N '#'; inside it, the escape introducer is '\' + N '#', so at
+// level N a backslash NOT followed by exactly N '#' is a literal backslash,
+// and '\' + N '#' + c decodes the escape c exactly as a regular quoted
+// string would (\n \t \" \uXXXX …). This matches cue.ParsePath's raw-string
+// label handling. An unterminated string or an unknown escape is rejected.
+func parseRawStringSegment(expr string, pos int) (string, int, error) {
+	hashes := 0
+	for pos+hashes < len(expr) && expr[pos+hashes] == '#' {
+		hashes++
+	}
+	// expr[pos+hashes] is '"' (guaranteed by isRawStringStart).
+	bodyStart := pos + hashes + 1
+	// A run of THREE opening quotes (#"""…) opens a CUE MULTILINE raw string,
+	// not a single-line label; cue.ParsePath rejects one in a path with
+	// "expected newline after multiline quote", so reject it here too.
+	if strings.HasPrefix(expr[bodyStart:], `""`) {
+		return "", 0, fmt.Errorf(
+			"multiline raw-string label starting at position %d is not supported", pos)
+	}
+	closing := `"` + strings.Repeat("#", hashes)
+	rel := strings.Index(expr[bodyStart:], closing)
+	if rel < 0 {
+		return "", 0, fmt.Errorf(
+			"unterminated raw-string segment starting at position %d", pos)
+	}
+	body := expr[bodyStart : bodyStart+rel]
+	s, err := rawUnquote(body, hashes)
+	if err != nil {
+		return "", 0, err
+	}
+	end := bodyStart + rel + len(closing)
+	return s, end - pos, nil
 }
