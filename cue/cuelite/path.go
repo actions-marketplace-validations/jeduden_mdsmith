@@ -128,6 +128,8 @@ func isPathSpace(r rune) bool {
 // unexpected character, the literal true/false/null as the leading
 // selector, or a non-string selector (index/definition/hidden) each
 // return an error.
+//
+//nolint:funlen // one linear scanner loop sharing position bookkeeping.
 func parsePathSegments(expr string) ([]string, error) {
 	segments := make([]string, 0, 4)
 	pos := 0
