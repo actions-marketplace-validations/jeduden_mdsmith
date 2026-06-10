@@ -113,12 +113,19 @@ func measureArm(name string, lite, cue armTimer, budget float64) factorResult {
 
 // TestFactorGate is the CI factor gate: it measures the cuelite/cue
 // ns-per-op ratio for the hot (validate) and cold (compile-validate)
-// paths and fails when either exceeds its interim budget. It runs under
-// plain `go test` (no build tag) so every PR exercises it, and skips
-// under -short so `go test -short ./...` stays fast. It logs one
-// greppable line per arm and, when GITHUB_STEP_SUMMARY is set, appends a
-// markdown table so the factors show on the Actions run page.
+// paths and fails when either exceeds its interim budget. The ratio is
+// only meaningful on a quiet runner: inside the parallel `go test ./...`
+// job the packages contend for CPU and the allocation-heavier cuelite
+// arm degrades more than the oracle arm, inflating the factor (observed
+// 3.46x under contention vs ~2.0x quiet). So the gate runs only when
+// CUELITE_FACTOR_GATE=1, which the dedicated cuelite-bench CI job sets;
+// everywhere else it skips. It logs one greppable line per arm and, when
+// GITHUB_STEP_SUMMARY is set, appends a markdown table so the factors
+// show on the Actions run page.
 func TestFactorGate(t *testing.T) {
+	if os.Getenv("CUELITE_FACTOR_GATE") != "1" {
+		t.Skip("factor gate needs a quiet runner; set CUELITE_FACTOR_GATE=1 (the cuelite-bench CI job does)")
+	}
 	if testing.Short() {
 		t.Skip("factor gate measures benchmarks; skipped under -short")
 	}

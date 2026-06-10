@@ -128,8 +128,12 @@ the per-surface phases.
   the CUE-backed arm's cost is N-dependent (one compiled document
   accumulates in the long-lived schema context per iteration), so
   it measures ~1.9x against the cold path's stable ~1.4x. The
-  `cuelite-bench` CI job runs the gate as an ordinary `go test` and
-  the gate appends a factor table to `GITHUB_STEP_SUMMARY`. This
+  ratio is only meaningful on a quiet runner — under the parallel
+  `test` job's CPU contention the cuelite arm degrades more than
+  the oracle arm and the factor inflates (observed 3.46x) — so the
+  gate arms only when `CUELITE_FACTOR_GATE=1`, set by the dedicated
+  `cuelite-bench` CI job, and skips everywhere else. The gate
+  appends a factor table to `GITHUB_STEP_SUMMARY`. This
   makes plan 218's "the schema validate path does not regress"
   acceptance criterion enforceable today; plan 240's flip is
   expected to tighten both budgets to <= 1.0x (in-house must not be

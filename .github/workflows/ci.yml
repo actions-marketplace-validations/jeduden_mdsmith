@@ -312,7 +312,12 @@ jobs:
       # and writes a factor table to GITHUB_STEP_SUMMARY for the run page.
       # -v so the per-benchmark factor lines (t.Logf) land in the job
       # log on success, not only in the step summary.
+      # CUELITE_FACTOR_GATE=1 arms the gate: it skips everywhere else
+      # (notably the parallel `test` job) because the ratio is only
+      # meaningful on a quiet runner.
       - run: go test -v -run=TestFactorGate ./internal/cuelitetest/...
+        env:
+          CUELITE_FACTOR_GATE: "1"
 
   # Nested-module test job: pkg/goldmark/ has its own go.mod (plan
   # 197+198 fork), so the root `test` job's `go test ./...` does NOT
