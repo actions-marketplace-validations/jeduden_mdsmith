@@ -220,17 +220,16 @@ main {
 
 /* ========== POSITIONING BAND ========== */
 
-/* The band between the hero and "Why mdsmith": a one-sentence
-   scope statement (the content/_index.md body) set as display
-   type, then two labeled spec rows — "One engine" (the product
-   surfaces, from the homepage front matter) and "Available on"
-   (the publish channels, from logos-strip.html). The rows share
-   a label column, and the border that used to split .positioning
-   from .logos now closes the band at the bottom of .logos, so
-   the three lines read as one designed block instead of a stray
-   paragraph between two strips. */
+/* The strip between the hero and the "Available on" channels:
+   a one-sentence scope statement (the content/_index.md body)
+   set as display type, then the labeled "One engine" row of
+   surface links from the homepage front matter. The statement
+   carries the concrete rule scope so the hero lead never has
+   to (see docs/brand/messaging.md); the channels strip below
+   keeps its own classic logo-band treatment. */
 .positioning {
-  padding: 44px 0 0;
+  padding: 40px 0 32px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 /* Paragraph margin resets live with .hero-lead's (same
    rendered-Markdown wrapping). */
@@ -241,7 +240,7 @@ main {
   line-height: 1.5;
   letter-spacing: -0.015em;
   color: var(--fg);
-  margin-bottom: 26px;
+  margin-bottom: 22px;
 }
 /* Same serif-italic accent as the h1 and section titles. */
 .positioning-statement em {
@@ -250,17 +249,13 @@ main {
   font-weight: 400;
   color: var(--forge-600);
 }
-/* Shared two-part row: fixed label column + wrapping item flow.
-   .logos-strip (logos-strip.html) uses the same skeleton so the
-   "One engine" and "Available on" lines align into a spec sheet. */
-.positioning-engine,
-.logos-strip {
+.positioning-engine {
   display: flex;
   align-items: center;
+  gap: 16px;
 }
-.positioning-label,
-.logos-label {
-  flex: 0 0 148px;
+.positioning-label {
+  flex-shrink: 0;
   font-family: var(--font-mono);
   font-size: 12px;
   letter-spacing: 0.05em;
@@ -1530,22 +1525,19 @@ a.install-label:hover { color: var(--forge-300); text-decoration: underline; }
 
 /* ========== LOGOS STRIP ========== */
 
-/* Second spec row of the positioning band; the row skeleton and
-   label column are shared with .positioning-engine (see the
-   POSITIONING BAND section). Channel names stay plain muted text
-   so the linked surface chips above keep the visual priority. */
 .logos {
-  padding: 14px 0 44px;
+  padding: 40px 0;
   border-bottom: 1px solid var(--border-subtle);
 }
-.logos-items {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 26px;
+.logos-strip {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 32px;
+  filter: grayscale(1); opacity: 0.7;
 }
-.logos-item { font-family: var(--font-sans); font-size: 15px; font-weight: 500; color: var(--steel-600); letter-spacing: -0.01em; }
+.logos-label { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.05em; color: var(--fg-subtle); text-transform: uppercase; }
+.logos-item { font-family: var(--font-sans); font-size: 18px; font-weight: 600; color: var(--steel-700); letter-spacing: -0.01em; }
 .logos-item:hover { color: var(--accent); text-decoration: none; }
+.logos-strip:hover { filter: none; opacity: 1; }
 
 /* ========== FOOTER ========== */
 
@@ -1840,16 +1832,19 @@ a.rule-ref:hover code { text-decoration: underline; }
      both columns instead. */
   .footer-grid .footer-col:first-child { grid-column: 1 / -1; }
 
-  /* The 148px label column eats too much of a narrow viewport;
-     stack each spec-row label on its own line above its items. */
-  .positioning { padding: 32px 0 0; }
-  .positioning-statement { font-size: 18px; margin-bottom: 22px; }
-  .positioning-engine,
-  .logos-strip { flex-direction: column; align-items: flex-start; gap: 10px; }
-  .positioning-label,
-  .logos-label { flex-basis: auto; }
-  .logos { padding: 18px 0 32px; }
-  .logos-item { font-size: 14px; }
+  /* Stack the "One engine" label on its own line above the
+     wrapping chips. */
+  .positioning { padding: 28px 0 26px; }
+  .positioning-statement { font-size: 18px; margin-bottom: 18px; }
+  .positioning-engine { flex-direction: column; align-items: flex-start; gap: 10px; }
+
+  /* space-between + wrap scattered the channel names with ragged
+     gaps once they wrapped; switch to a left-aligned gap flow with
+     the label on its own line. */
+  .logos { padding: 28px 0; }
+  .logos-strip { justify-content: flex-start; gap: 12px 24px; }
+  .logos-label { flex-basis: 100%; }
+  .logos-item { font-size: 16px; }
 
   .pg { grid-template-columns: 1fr; height: auto; }
   .pg-pane + .pg-pane { border-left: 0; border-top: 1px solid var(--border); }
