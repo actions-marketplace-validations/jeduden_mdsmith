@@ -216,3 +216,57 @@ func TestEnclosingListKeyNoPrecedingKey(t *testing.T) {
 	}
 	assert.Empty(t, enclosingListKey(lines, 2))
 }
+
+func TestEnclosingListKey_MultipleListItemsThenKey(t *testing.T) {
+	t.Parallel()
+	lines := [][]byte{
+		[]byte("inputs:"),
+		[]byte("  - a.md"),
+		[]byte("  - b.md"),
+	}
+	got := enclosingListKey(lines, 3)
+	assert.Equal(t, "inputs", got)
+}
+
+func TestEnclosingListKey_EmptyLineSkipped(t *testing.T) {
+	t.Parallel()
+	lines := [][]byte{
+		[]byte("inputs:"),
+		[]byte(""),
+		[]byte("  - x"),
+	}
+	got := enclosingListKey(lines, 3)
+	assert.Equal(t, "inputs", got)
+}
+
+func TestEnclosingListKey_NonListNonKeyLine(t *testing.T) {
+	t.Parallel()
+	lines := [][]byte{
+		[]byte("some prose"),
+		[]byte("  - item"),
+	}
+	got := enclosingListKey(lines, 2)
+	assert.Empty(t, got)
+}
+
+// TestLocateBuildDirectiveInputsGlob: glob inputs must not set DirectiveTargetFile.
+func TestLocateBuildDirectiveInputsGlob(t *testing.T) {
+	t.Parallel()
+	src := "# T\n\n<?build\nrecipe: render\noutputs:\n  - \"out.png\"\ninputs:\n  - \"**/*.md\"\n?>\n<?/build?>\n"
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 8, 5)
+	assert.Equal(t, TokenDirectiveArg, res.Tag)
+	assert.Equal(t, "build", res.DirectiveName)
+	assert.Equal(t, "inputs", res.DirectiveArg)
+	assert.Empty(t, res.DirectiveTargetFile, "glob input must not set DirectiveTargetFile")
+}
+
+// TestLocateBuildDirectiveInputsLiteral: literal inputs set DirectiveTargetFile.
+func TestLocateBuildDirectiveInputsLiteral(t *testing.T) {
+	t.Parallel()
+	src := "# T\n\n<?build\nrecipe: render\noutputs:\n  - \"out.png\"\ninputs:\n  - \"src.svg\"\n?>\n<?/build?>\n"
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 8, 5)
+	assert.Equal(t, TokenDirectiveArg, res.Tag)
+	assert.Equal(t, "build", res.DirectiveName)
+	assert.Equal(t, "inputs", res.DirectiveArg)
+	assert.Equal(t, "src.svg", res.DirectiveTargetFile)
+}

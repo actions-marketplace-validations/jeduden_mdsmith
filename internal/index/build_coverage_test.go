@@ -173,3 +173,63 @@ func TestAbsToWorkspace_RelOutsideRoot(t *testing.T) {
 	got := absToWorkspace("/root", "/elsewhere/x.md")
 	assert.Equal(t, "/elsewhere/x.md", got)
 }
+
+// TestCollectDirectiveEdges_BuildInputs covers the DirectiveBuild
+// branches in collectDirectiveEdges:
+//   - a glob `inputs:` entry (d.IsUnresolved() == true) emits an
+//     EdgeBuild with Unresolved=true
+//   - a literal `inputs:` entry emits a resolved EdgeBuild with
+//     TargetFile set
+//   - an absolute path (ResolveRelTarget returns "") is skipped
+func TestCollectDirectiveEdges_BuildInputs(t *testing.T) {
+	t.Parallel()
+	// The build directive has three inputs (values must be quoted so
+	// the YAML parser surfaced them as strings via ValidateStringParams):
+	//   - "**/*.md"  → glob → unresolved edge
+	//   - "src.svg"  → literal path → resolved edge (target: dir/src.svg)
+	//   - "/abs.svg" → absolute → ResolveRelTarget returns "" → skipped
+	src := []byte(
+		"# T\n\n" +
+			"<?build\n" +
+			"recipe: render\n" +
+			"outputs:\n" +
+			"  - \"out.png\"\n" +
+			"inputs:\n" +
+			"  - \"**/*.md\"\n" +
+			"  - \"src.svg\"\n" +
+			"  - \"/abs.svg\"\n" +
+			"?>\n" +
+			"- [out.png](out.png)\n" +
+			"<?/build?>\n",
+	)
+	fe := buildFileEntry("dir/doc.md", src)
+	require.NotNil(t, fe)
+
+	// Collect only EdgeBuild edges.
+	var buildEdges []Edge
+	for _, e := range fe.Outgoing {
+		if e.Kind == EdgeBuild {
+			buildEdges = append(buildEdges, e)
+		}
+	}
+	// Expect exactly two build edges: the glob (unresolved) and the
+	// literal path (resolved). The absolute path is skipped.
+	require.Len(t, buildEdges, 2)
+
+	// Find the unresolved and resolved edges (order may vary).
+	var unresolved, resolved *Edge
+	for i := range buildEdges {
+		if buildEdges[i].Unresolved {
+			unresolved = &buildEdges[i]
+		} else {
+			resolved = &buildEdges[i]
+		}
+	}
+	require.NotNil(t, unresolved, "expected an unresolved build edge for the glob input")
+	assert.Equal(t, "dir/doc.md", unresolved.SourceFile)
+	assert.Empty(t, unresolved.TargetFile)
+
+	require.NotNil(t, resolved, "expected a resolved build edge for src.svg")
+	assert.Equal(t, "dir/doc.md", resolved.SourceFile)
+	assert.Equal(t, "dir/src.svg", resolved.TargetFile)
+}

@@ -699,7 +699,6 @@ func TestValidatePathEntry_UNC(t *testing.T) {
 }
 
 func TestValidatePathEntry_NTFSADS(t *testing.T) {
-	// foo:bar — NTFS alternate data stream syntax.
 	assert.NotEmpty(t, validatePathEntry("foo:bar", false))
 	assert.NotEmpty(t, validatePathEntry("dir/foo:bar.txt", false))
 }
@@ -714,7 +713,6 @@ func TestValidatePathEntry_ReservedDeviceNames(t *testing.T) {
 }
 
 func TestValidatePathEntry_ReservedDeviceNames_NotMatchedAsSubstring(t *testing.T) {
-	// CONSOLE / NULLABLE are not reserved device names.
 	for _, p := range []string{"CONSOLE.md", "NULLABLE", "COMPANY", "LPT10"} {
 		assert.Empty(t, validatePathEntry(p, false), "path %q should be accepted", p)
 	}
@@ -733,16 +731,13 @@ func TestValidatePathEntry_Tilde(t *testing.T) {
 }
 
 func TestValidatePathEntry_DotDot(t *testing.T) {
-	// A path that escapes root after Clean (or is "..") is rejected.
 	for _, p := range []string{"../out.png", "..", "a/../../b.png"} {
 		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected", p)
 	}
 }
 
 func TestValidatePathEntry_InteriorDotDotThatCleansInBounds(t *testing.T) {
-	// Per the plan's path-shape rule, the check is on the result of
-	// path.Clean: "a/../b.png" cleans to "b.png", which stays in-root,
-	// so it is accepted.
+	// "a/../b.png" cleans to "b.png" (stays in-root), so it is accepted.
 	assert.Empty(t, validatePathEntry("a/../b.png", false))
 }
 
@@ -753,14 +748,12 @@ func TestValidatePathEntry_UnderMdsmithDir(t *testing.T) {
 }
 
 func TestValidatePathEntry_OutputsRejectGlobChars(t *testing.T) {
-	// allowGlob=false: glob meta-characters are rejected.
 	for _, p := range []string{"out*.png", "out?.png", "out[1].png"} {
 		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected for outputs", p)
 	}
 }
 
 func TestValidatePathEntry_InputsAcceptGlobChars(t *testing.T) {
-	// allowGlob=true: doublestar globs are accepted.
 	for _, p := range []string{
 		"src/*.md", "**/*.md", "chapters/[0-9]*.md", "a?b.md", "{a,b}.md",
 	} {
