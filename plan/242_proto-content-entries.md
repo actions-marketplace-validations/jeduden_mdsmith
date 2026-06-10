@@ -1,7 +1,7 @@
 ---
 id: 242
 title: "proto.md schemas declare content entries via `<?content?>`"
-status: "🔳"
+status: "✅"
 summary: >-
   A `<?content?>` directive row in a proto.md section body
   declares the same content entry the inline `content:` list
@@ -79,12 +79,12 @@ in proto bodies as a directive row.
    equivalent inline schema. Differential test: one schema
    expressed both ways, byte-identical extract output
    (modulo root level).
-4. Document the directive in the
+4. [x] Document the directive in the
    [section-schema reference](../docs/reference/section-schema.md)
    proto.md section and in the
    [schemas guide](../docs/guides/schemas.md); update the
    inline-vs-proto capability table.
-5. Revisit the
+5. [x] Revisit the
    [extract guide](../docs/guides/extract-markdown-as-data.md)
    "Frontmatter `title` and the H1" section: the
    content-entries limit no longer applies; rewrite the
@@ -103,10 +103,10 @@ in proto bodies as a directive row.
 - [x] Invalid directives (unknown kind, `projection: inline`
   on a code-block, `bind: ""` on a content entry) fail at
   config load with the inline form's diagnostics.
-- [ ] Docs updated: section-schema reference, schemas guide
+- [x] Docs updated: section-schema reference, schemas guide
   capability table, extract guide trade-off paragraph.
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no issues
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no issues
 
 ## Out of scope
 

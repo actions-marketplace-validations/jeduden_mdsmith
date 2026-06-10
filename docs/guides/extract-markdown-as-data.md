@@ -519,14 +519,64 @@ H1 fails `mdsmith check`:
 docs/copy/product.md:4:1 MDS020 heading does not match frontmatter: expected "Product copy" (from title), got "Product page copy"
 ```
 
-Weigh two limits before switching to a proto.md.
-Every schema source on a file must declare the same
-root level, so an H1-rooted `proto.md` cannot
-compose with an H2-rooted inline schema on the same
-file. And a `proto.md` declares heading rows only,
-not `content:` entries, so the worked example's
-paragraph projections (`tagline.text`, …) drop out
-of the tree.
+The synced H1 also becomes data. `mdsmith extract`
+projects the H1 scope under a `title` key, with the
+captured heading text inside.
+
+The section paragraphs come back too. A
+`<?content?>` directive row in a `proto.md` section
+body declares the same content entry the inline
+`content:` list declares, so the worked example's
+sections keep their `text` projections instead of
+collapsing to empty objects:
+
+```markdown
+# {title}
+
+## Tagline
+
+<?content
+kind: paragraph
+?>
+
+## Lead
+
+<?content
+kind: paragraph
+?>
+```
+
+`mdsmith extract` then projects the H1 key, the
+synced heading text, and each section's paragraph:
+
+```json
+{
+  "frontmatter": {
+    "title": "Product copy"
+  },
+  "title": {
+    "lead": {
+      "text": "A lint-and-fix tool that keeps your Markdown consistent across every surface — READMEs, docs site, editor extensions."
+    },
+    "tagline": {
+      "text": "Mark down your ideas; smith them into shipping docs."
+    },
+    "title": "Product copy"
+  }
+}
+```
+
+One limit remains. Every schema source on a file
+must declare the same root level, so an H1-rooted
+`proto.md` cannot compose with an H2-rooted inline
+schema on the same file. The H1 sync and the body
+extraction must both live on the `proto.md`.
+
+mdsmith cannot project the H1 text without a
+frontmatter field behind it: a `{title}` row with
+no `title` field matches any heading, and `extract`
+skips wildcard scopes. Keep the `title` field when
+the kind syncs the H1.
 
 [mds004]: ../../internal/rules/MDS004-first-line-heading/README.md
 
