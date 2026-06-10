@@ -43,8 +43,15 @@ flips.
       `cuelang.org/go`.
 - [x] `cuelite.ParsePath` is in-house and the harness shows it
       matches CUE on the path corpus.
-- [x] `cue/cuelite` path code keeps 100 % statement and branch
-      coverage.
+- [x] `cue/cuelite` and `internal/cuelitetest` keep 100 %
+      STATEMENT coverage (`go tool cover -func`), and the path
+      parser is checked end-to-end by the differential corpus plus
+      `FuzzParsePath`. Branch coverage is reported by
+      `go tool gobco -branch`, not asserted at 100 %: as of round 3
+      `cue/cuelite` sits at 268/272 conditions, the four gaps being
+      pre-existing defensive conditions in `path.go`/`value.go`
+      outside the surface-D path code (the path-parser changes here
+      are fully branch-covered).
 - [x] All tests pass: `go test ./...`
 - [x] `go tool golangci-lint run` reports no issues.
 
@@ -58,9 +65,19 @@ flips.
   plan set out to prove was therefore skipped. The substitute safety is
   the differential harness plus `FuzzParsePath` in
   `internal/cuelitetest`, which compares the in-house parser against the
-  CUE-backed oracle on every input — both a corpus run (one case per
-  divergence class) and a fuzz run (`go test -fuzz=FuzzParsePath`) with
-  zero divergences.
+  CUE-backed oracle on every input — a corpus run (one case per divergence
+  class) and a fuzz run (`go test -fuzz=FuzzParsePath`). "Zero divergences"
+  is bounded by what the fuzzer reaches: its mutations are seeded from the
+  corpus, so it explores the byte-space AROUND known classes but does not
+  exhaustively reach every composition. Review round 3 found a class the
+  fuzzer had not reached — raw-string × surrogate-escape pairing, whose
+  inputs splice a hash-level escape introducer (`\#u`) onto a surrogate
+  pair (`#"\#uD800\#uDC00"#`). Three defects there were corrected: a
+  reachable out-of-bounds panic on a high half before the closing
+  delimiter, a valid `\#u`+`\#u` pair wrongly rejected, and an invalid
+  `\#u`+plain-`\u` pair wrongly accepted. Each is now pinned in BOTH the
+  corpus and the unit tables and seeded into `FuzzParsePath`, and a 300 s
+  deep fuzz run after the fix reported no further divergence.
 - **First in-house cut diverged systematically from CUE; corrected in
   review round 1.** The committed parser (`3969eed`) used an ASCII-only
   ident class and `strconv.Unquote`, validated only against a curated
