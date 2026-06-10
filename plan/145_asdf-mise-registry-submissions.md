@@ -64,16 +64,23 @@ on `asdf plugin add mdsmith`.
    [`asdf-vm/asdf-plugins`](https://github.com/asdf-vm/asdf-plugins)
    adding mdsmith so `asdf plugin add mdsmith`
    resolves without an explicit URL.
-4. File a PR to mise's curated registry,
-   [`jdx/mise`](https://github.com/jdx/mise)
-   `registry.toml`, adding a `[tools.mdsmith]` entry
-   on the `github:jeduden/mdsmith` backend (`ubi:` is
-   deprecated for new entries) with a `test` field.
-   The PR body must make a popularity/maintenance
-   case, since the registry is curated. Once merged,
-   the prefix-less `mise use mdsmith@latest` form
-   starts resolving on user CLIs without any code
-   change in this repo.
+4. File a PR to mise's curated registry: the
+   `registry/` directory in
+   [`jdx/mise`](https://github.com/jdx/mise), one
+   TOML file per tool. (The former root
+   `registry.toml` was split into per-tool files;
+   the separate `mise-plugins/registry` repo was
+   archived in Oct 2024.) Add
+   `registry/mdsmith.toml` with a `[tools.mdsmith]`
+   entry on the `github:jeduden/mdsmith` backend
+   (`ubi:` is rejected for new entries; `aqua:` is
+   preferred only for tools already in the aqua
+   registry) and the required `test` field. The PR
+   body must make a popularity/maintenance case,
+   since the registry is curated. Once merged, the
+   prefix-less `mise use mdsmith@latest` form starts
+   resolving on user CLIs without any code change in
+   this repo.
 5. Update
    [docs/guides/install.md](../docs/guides/install.md)
    to drop the "pending follow-up" badge from the
