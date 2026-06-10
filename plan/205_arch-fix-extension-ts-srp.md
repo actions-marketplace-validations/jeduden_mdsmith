@@ -1,7 +1,7 @@
 ---
 id: 205
 title: Move extension.ts concerns to wiring.ts
-status: "🔲"
+status: "🔳"
 summary: >-
   extension.ts is 509 lines and owns the LSP client
   lifecycle, config-file watcher, error handler, and
@@ -29,8 +29,9 @@ the wiring object, and hand control to
    `wiring.ts`.
 2. Move the `WorkspaceFileSystemWatcher`
    for `.mdsmith.yml` into `wiring.ts`.
-3. Move the `ErrorHandler` class into
-   `wiring.ts` or `commands/error-handler.ts`.
+3. ~~Move the `ErrorHandler` class into
+   `wiring.ts` or `commands/error-handler.ts`.~~ Done — moved to
+   `commands/error-handler.ts`.
 4. Move `registerPaletteCommands` and all
    `registerCommand` calls into `wiring.ts`.
 5. Reduce `extension.ts` to: import,

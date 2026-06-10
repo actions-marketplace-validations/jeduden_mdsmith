@@ -1,14 +1,8 @@
 import * as vscode from "vscode";
 import {
-  CloseAction,
-  CloseHandlerResult,
   DidChangeConfigurationNotification,
-  ErrorAction,
-  ErrorHandler,
-  ErrorHandlerResult,
   LanguageClient,
   LanguageClientOptions,
-  Message,
   ServerOptions,
   TransportKind
 } from "vscode-languageclient/node";
@@ -16,12 +10,11 @@ import {
 import {
   buildClientOptions,
   buildServerOptions,
-  decideClose,
   forwardMdsmithConfigChange,
   notifyConfigChangeToClient,
-  startupErrorMessage,
-  type RestartPolicyState
+  startupErrorMessage
 } from "./wiring";
+import { MdsmithErrorHandler } from "./commands/error-handler";
 import { findBinaryCandidates, resolveBinary } from "./binary";
 import { runFixWorkspace } from "./commands/fix-workspace";
 import { runInit } from "./commands/init";
@@ -124,7 +117,12 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
   // "Show Output" prompt instead of silently disabling the
   // extension. The mdsmith.restartServer command stays the
   // explicit manual recovery path either way.
-  const errorHandler = new MdsmithErrorHandler();
+  // The handler surfaces the recovery prompt via the injected callback
+  // once the restart-rate cap is exceeded; the decision logic itself
+  // lives in decideClose (wiring.ts).
+  const errorHandler = new MdsmithErrorHandler(() => {
+    void promptRestartAfterRepeatedFailures();
+  });
   clientOptions.errorHandler = errorHandler;
 
   // Rewrite the server's public-website rule-docs links (in hovers) so
@@ -243,63 +241,6 @@ function disposeConfigWatcher(): void {
 // commands is also reachable when the LSP client is not running.
 function showOutput(): void {
   getOutputChannel().show(true);
-}
-
-// MdsmithErrorHandler replaces vscode-languageclient's default
-// ErrorHandler. The default's "5 closes in 180 seconds → stop"
-// rule is hostile during local development (rebuild loops,
-// editor reloads, transient ENOENT while iterating on the
-// binary path) — once it trips, the only recovery is a window
-// reload. This handler:
-//
-//  - Always returns ErrorAction.Continue on RPC errors. Errors
-//    don't kill the process, so there's nothing useful to do
-//    on them other than keep going.
-//  - Allows up to maxRestarts close events per windowMs of
-//    wallclock time before falling back to DoNotRestart, which
-//    is significantly more permissive than the default.
-//  - On the falling-back path, surfaces a notification with a
-//    "Restart Language Server" / "Show Output" choice so the
-//    user can recover with one click instead of reloading the
-//    window.
-//  - Suppresses the restart entirely once the server announces it
-//    was superseded (markSuperseded). The decision itself lives in
-//    decideClose (wiring.ts) so it can be unit-tested without vscode.
-class MdsmithErrorHandler implements ErrorHandler {
-  private static readonly maxRestarts = 25;
-  private static readonly windowMs = 3 * 60 * 1000;
-  private state: RestartPolicyState = { restarts: [], superseded: false };
-
-  // markSuperseded records that the server told us (via the
-  // mdsmith/superseded notification) that a newer instance for this
-  // workspace has taken over. The imminent connection close is then
-  // expected and intentional, so closed() must NOT restart — otherwise
-  // this now-orphaned editor host would respawn a server the newer one
-  // supersedes again, the exact restart loop a leaked extension host
-  // used to sustain.
-  markSuperseded(): void {
-    this.state.superseded = true;
-  }
-
-  error(_error: Error, _message: Message | undefined, _count: number | undefined): ErrorHandlerResult {
-    return { action: ErrorAction.Continue };
-  }
-
-  closed(): CloseHandlerResult {
-    const { restart, capExceeded } = decideClose(
-      this.state,
-      Date.now(),
-      MdsmithErrorHandler.maxRestarts,
-      MdsmithErrorHandler.windowMs
-    );
-    if (capExceeded) {
-      // Show the prompt asynchronously so we do not block the
-      // close handler. The promise body decides whether to
-      // restart based on the user's choice.
-      void promptRestartAfterRepeatedFailures();
-    }
-    return { action: restart ? CloseAction.Restart : CloseAction.DoNotRestart };
-  }
 }
 
 // promptRestartAfterRepeatedFailures runs after the error
