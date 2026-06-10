@@ -47,11 +47,19 @@ flips.
       STATEMENT coverage (`go tool cover -func`), and the path
       parser is checked end-to-end by the differential corpus plus
       `FuzzParsePath`. Branch coverage is reported by
-      `go tool gobco -branch`, not asserted at 100 %: as of round 3
-      `cue/cuelite` sits at 268/272 conditions, the four gaps being
-      pre-existing defensive conditions in `path.go`/`value.go`
-      outside the surface-D path code (the path-parser changes here
-      are fully branch-covered).
+      `go tool gobco -branch`, not asserted at 100 %: as of round 4
+      `cue/cuelite` sits at 342/344 conditions. The two remaining
+      gaps are structural, not "defensive conditions outside the
+      path code" (round 3's claim was wrong for three of its four):
+      `path.go`'s `kind == sepBracket` is one arm of an exhaustive
+      `sepKind` switch, and `multiline.go`'s `for i > 0` walk-back
+      bound cannot underflow because the multiline opener's `"`
+      is a non-space sentinel that always breaks the loop first.
+      The three conditions round 3 called defensive in
+      `value.go`'s `scanDuplicateJSONKeys` (the array-close arm and
+      its parent-restore and array-element-scalar branches) are LIVE
+      and now have dedicated array-shaped unit tests
+      (`{"a":[1],"a":2}`, `[{"a":1},{"a":1}]`, `[1]`).
 - [x] All tests pass: `go test ./...`
 - [x] `go tool golangci-lint run` reports no issues.
 
@@ -78,6 +86,29 @@ flips.
   `\#u`+plain-`\u` pair wrongly accepted. Each is now pinned in BOTH the
   corpus and the unit tables and seeded into `FuzzParsePath`, and a 300 s
   deep fuzz run after the fix reported no further divergence.
+- **Review round 4 found two more grammar-divergence classes and a CR
+  edge inside one of them.** (1) The single-line raw-string close scan used
+  a blind `strings.Index`, so an escaped quote followed by a hash run
+  (`#"\#"#"#`, body `\#"#`, decoding to `"#`) was read as a false
+  terminator — CUE accepts these; the in-house parser rejected them. The
+  scan is now escape-aware (`rawStringCloseIndex`/`multilineCloseIndex` skip
+  `\`+N`#`+selector before matching the close). (2) Multiline string labels
+  (`"""…`/`#"""…`, plain and raw) were rejected wholesale; CUE accepts them
+  as head and bracket operands (never after a dot). They are now implemented
+  in-house (`multiline.go`) porting CUE's `cue/literal` semantics for the
+  string-label subset: the opener must be followed by a newline, the closing
+  line's leading whitespace is the indentation stripped from every content
+  line, the final newline before the close is excluded, and escapes follow
+  the single/raw dialect with surrogate pairing. A malformed multiline whose
+  CUE `Unquoted()` is `""` (bad opener/indent/close, escaped final newline,
+  lone surrogate) decodes to `""` here and is rejected by the empty-segment
+  check — the same outcome as the oracle. While probing, the harness caught a
+  CR bug: CUE's scanner strips every `\r` from a multiline token
+  (`scanner.stripCR`), so `unquoteMultiline` strips CR up front, matching
+  `cue.ParsePath` on CRLF and bare-CR content. Every probed shape (including
+  CUE's error cases) is pinned in BOTH the corpus and the unit tables and
+  seeded into `FuzzParsePath`. A 300 s deep fuzz run after the fixes reported
+  no further divergence.
 - **First in-house cut diverged systematically from CUE; corrected in
   review round 1.** The committed parser (`3969eed`) used an ASCII-only
   ident class and `strconv.Unquote`, validated only against a curated
