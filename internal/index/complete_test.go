@@ -487,3 +487,11 @@ func TestCodeNodeContainsLineNoSpillover(t *testing.T) {
 	// Line 5 (normal text after the blank separator) must NOT be inside the block.
 	assert.False(t, insideCodeBlock(root, body, 5), "line 5 must not be inside code block")
 }
+
+func TestListItemPathKeyOtherDirective(t *testing.T) {
+	t.Parallel()
+	// Only catalog glob: and build inputs:/outputs: list items complete
+	// to filesystem paths; list items in any other directive never do.
+	assert.False(t, listItemPathKey("include", "file"))
+	assert.False(t, listItemPathKey("toc", "inputs"))
+}

@@ -92,6 +92,29 @@ func TestResolvePathInRoot_SymlinkedOutputDirEscapesRoot(t *testing.T) {
 	require.Error(t, err, "an output under a symlinked-out directory is an error")
 }
 
+func TestResolvePathInRoot_NonexistentRootFallsBackLexical(t *testing.T) {
+	// A root that cannot be symlink-resolved (it does not exist) falls
+	// back to the lexical absolute root; an output entry still resolves
+	// to its in-root relative form.
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	root := filepath.Join(base, "ghost")
+
+	got, err := ResolvePathInRoot(root, "out.html", false)
+	require.NoError(t, err)
+	assert.Equal(t, "out.html", got)
+}
+
+func TestResolvePathInRoot_ExistingOutputOK(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "out.html"), []byte("x"), 0o644))
+	// mustExist=false with an output that already exists on disk: the
+	// longest existing prefix is the full path itself.
+	got, err := ResolvePathInRoot(root, "out.html", false)
+	require.NoError(t, err)
+	assert.Equal(t, "out.html", got)
+}
+
 func TestResolvePathInRoot_SymlinkWithinRootOK(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation is unreliable on Windows CI")

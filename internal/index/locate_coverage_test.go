@@ -193,3 +193,26 @@ func TestLocateInASTNoMatch(t *testing.T) {
 	// Empty line — no match.
 	assert.Equal(t, TokenNone, res.Tag)
 }
+
+func TestEnclosingListKeyStopsAtPopulatedKeyValue(t *testing.T) {
+	t.Parallel()
+	// A list item directly below a populated `key: value` line belongs
+	// to no list: the scalar line closes the upward scan.
+	lines := [][]byte{
+		[]byte("<?build"),
+		[]byte("recipe: r"),
+		[]byte("- stray.md"),
+	}
+	assert.Empty(t, enclosingListKey(lines, 3))
+}
+
+func TestEnclosingListKeyNoPrecedingKey(t *testing.T) {
+	t.Parallel()
+	// A list item with no `key:` line anywhere above it scans to the
+	// top of the file and yields no key.
+	lines := [][]byte{
+		[]byte("<?build"),
+		[]byte("- orphan.md"),
+	}
+	assert.Empty(t, enclosingListKey(lines, 2))
+}
