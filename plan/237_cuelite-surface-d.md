@@ -47,9 +47,11 @@ flips.
       STATEMENT coverage (`go tool cover -func`), and the path
       parser is checked end-to-end by the differential corpus plus
       `FuzzParsePath`. Branch coverage is reported by
-      `go tool gobco -branch`, not asserted at 100 %: as of round 4
-      `cue/cuelite` sits at 342/344 conditions. The two remaining
-      gaps are structural, not "defensive conditions outside the
+      `go tool gobco -branch`, not asserted at 100 %: as of round 5
+      `cue/cuelite` sits at 394/396 conditions (up from round 4's
+      342/344 as the multiline CR-family and escaped-newline fixes
+      added live, covered branches). The two remaining gaps are the
+      SAME two structural ones, not "defensive conditions outside the
       path code" (round 3's claim was wrong for three of its four):
       `path.go`'s `kind == sepBracket` is one arm of an exhaustive
       `sepKind` switch, and `multiline.go`'s `for i > 0` walk-back
@@ -109,6 +111,55 @@ flips.
   CUE's error cases) is pinned in BOTH the corpus and the unit tables and
   seeded into `FuzzParsePath`. A 300 s deep fuzz run after the fixes reported
   no further divergence.
+- **Review round 4's CR handling was wrong; round 5 corrected the CR
+  family and uncovered an escaped-newline asymmetry.** Round 4's
+  `unquoteMultiline` stripped every `\r` from the whole token BEFORE lexing.
+  CUE v0.16.1 does the opposite: its scanner runs `stripCR` on the final
+  literal only AFTER scanning (`scanner.scanString`, stripCR at 429/453),
+  while the opener-newline check (a multiline opener must be followed by a lone
+  `\n` or exactly one `\r\n` — scanner 813–829) and `scanEscape` (the escape
+  selector and any `\u`/`\U` hex digits — scanner 352–413) run on the RAW
+  bytes. So three inputs the in-house parser accepted are CUE scan errors:
+  a CR run at the opener (`"""\r\r\n0\n"""`, fuzz-minimized); a raw CR between
+  the backslash and the escape selector (→ "unknown escape sequence"); and a
+  raw CR among the `\u` hex digits (→ "illegal character U+000D in escape
+  sequence"). The fix validates the
+  opener-newline and the escapes on the RAW token (`rawMultilineOK`/
+  `rawEscapesOK`/`rawEscapeScan`), stripping CR only for value assembly, so the
+  benign CR cases still decode CR-free — including the `\`+CR+`#` level-1 case,
+  which the raw scanner reads as a literal backslash (the oracle agrees). A
+  300 s fuzz run after that fix then minimized a fourth input,
+  `#"""\n\`+CR+`#\n0\n"""#`, which exposed a deeper, pre-existing gap: CUE's
+  SCANNER and its `literal.Unquote` disagree on `\#`+newline. The scanner
+  rejects it as an unknown escape, but `literal.Unquote` treats it as an
+  ESCAPED NEWLINE (a line continuation that elides the newline —
+  `escapedNewline`, errEscapedLastNewline for the final one). `cue.ParsePath`
+  runs both, so the only way to reach the escaped-newline value path is via the
+  `\`+CR+`#` fusion: the scanner accepts the literal backslash, stripCR fuses
+  `\#`+newline, and `literal.Unquote` then elides it. `decodeMultilineBody` now
+  ports that escaped-newline handling (`escapedNewlineTail`), so the in-house
+  value decode matches `literal.Unquote` for line continuations, the final-
+  newline rejection, and the bad-next-line-indent rejection. All four inputs
+  (plus the benign CR shapes, the `\U` multiline escape, the truncated-hex-at-
+  close case, the full non-unicode escape-selector set, and the escaped-newline
+  join/keep-indent/last-newline/bad-indent shapes) are pinned in BOTH the
+  corpus and the unit tables and seeded into `FuzzParsePath`; the minimized
+  `\`+CR+`#` input is also committed as a `testdata/fuzz/FuzzParsePath` seed.
+  Branch coverage rose from 342/344 to 394/396 (only the two known structural
+  conditions remain). A final 300 s deep fuzz run (~2.12M execs) after the
+  round-5 fixes reported no further divergence.
+- **Item 7 (fieldinterp boundary error passthrough) was SKIPPED.**
+  `fieldinterp.ParseCUEPath` returns `[]string` (nil on error) and is used by
+  seven call sites (`catalog/rule.go`, `schema/matcher.go`, `schema/
+  matchtree.go`, `requiredstructure/rule.go`, …), each relying on the
+  `[]string`/nil contract. Surfacing `cuelite.ParsePath`'s precise error would
+  change the hard-coded "non-identifier keys must be quoted" hint those callers
+  emit — a user-visible message pinned by `schema/plan156_acceptance_test.go`
+  (and embedded in three production sites). That is a message-contract change,
+  not a small/clean one, and the round-5 brief forbids changing pinned messages
+  without deliberately updating the tests. Phase 2 can revisit it (e.g. a
+  parallel `ParseCUEPathErr` that threads the underlying error) alongside a
+  deliberate message-contract update.
 - **First in-house cut diverged systematically from CUE; corrected in
   review round 1.** The committed parser (`3969eed`) used an ASCII-only
   ident class and `strconv.Unquote`, validated only against a curated
