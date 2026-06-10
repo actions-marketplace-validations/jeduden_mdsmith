@@ -22,11 +22,20 @@ func FuzzParsePath(f *testing.F) {
 		f.Add(c.Expr)
 	}
 	// A few extra raw-byte and escape seeds the corpus does not name, to
-	// steer the mutator toward the quoting and whitespace boundaries.
+	// steer the mutator toward the quoting, whitespace, surrogate, bracket,
+	// raw-string, and BOM boundaries.
 	for _, seed := range []string{
 		"a\rb", "\"a\rb\"", "\"a\\u0041\"", "\"\\U0001F600\"",
 		"a\t.\tb", "a\n.b", "a\v.b", "\"a\x01b\"", "\"a\x7fb\"",
 		"$.$", "a.if.for", "x.true.false", "\"\\/\"", "\"\\\\\"",
+		// Surrogate pairing and lone halves.
+		"\"\\uD83D\\uDE00\"", "\"\\uD83D\"", "\"\\uDC00\"", "\"\\uD83D\\u0041\"",
+		// Bracket string-index selectors.
+		"a[\"b\"]", "a[\n\"b\"]", "a[\"b\"\n]", "a[0]", "a[ \"b\" ]", "[\"b\"]",
+		// Multi-hash raw-string labels and the after-dot rejection.
+		"#\"b\"#", "##\"b\"##", "a[#\"b\"#]", "a.#\"b\"#", "#\"a\\#nb\"#", "#x",
+		// BOM at offset 0 (skipped) vs interior (rejected).
+		"\ufeffa", "a\ufeffb", "\"a\ufeffb\"", "a//\ufeff",
 	} {
 		f.Add(seed)
 	}

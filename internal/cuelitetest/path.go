@@ -25,6 +25,7 @@ package cuelitetest
 // cannot represent.
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -49,6 +50,14 @@ type PathCase struct {
 type PathOutcome struct {
 	Accepted bool
 	Segments []string
+	// PanicNote records the recovered message when the oracle arm's
+	// cue.ParsePath panics (it is empty on the in-house arm and on a clean
+	// oracle parse). Equal ignores it — it is diagnostic only — but it keeps
+	// the recover SCOPED: if a future CUE upgrade panics on a new input
+	// class, the note surfaces it instead of silently degrading every panic
+	// to a bare rejection. TestSafeParsePath_panicFamily pins that the only
+	// currently-known panicking family is the double-dot one.
+	PanicNote string
 }
 
 // Equal reports whether two PathOutcomes agree — the same accept/reject
@@ -108,8 +117,11 @@ func OraclePathParsePath(c PathCase) PathOutcome {
 	if c.Expr == "" {
 		return PathOutcome{Accepted: false}
 	}
-	p, panicked := safeParsePath(c.Expr)
-	if panicked || p.Err() != nil {
+	p, panicNote := safeParsePath(c.Expr)
+	if panicNote != "" {
+		return PathOutcome{Accepted: false, PanicNote: panicNote}
+	}
+	if p.Err() != nil {
 		return PathOutcome{Accepted: false}
 	}
 	sels := p.Selectors()
@@ -147,16 +159,20 @@ func selectorSegment(s cue.Selector) (string, bool) {
 // safeParsePath calls cue.ParsePath and recovers from the panic
 // cuelang.org/go v0.16.1 raises inside the parser on a few malformed
 // inputs (a trailing "..." such as "a..." nil-derefs deep in the upstream
-// expression parser). It returns the parsed path and whether a panic
-// occurred, so OraclePathParsePath can map the panic to a rejection — the
-// in-house parser rejects the same inputs, so both arms still agree.
-func safeParsePath(expr string) (p cue.Path, panicked bool) {
+// expression parser). It returns the parsed path and, when a panic
+// occurred, the recovered message (empty otherwise) — so OraclePathParsePath
+// maps the panic to a rejection that CARRIES the panic note. Capturing the
+// note keeps the recover scoped: a CUE upgrade that panics on a new,
+// actually-valid input would otherwise silently degrade to a bare
+// rejection and hide the divergence, whereas the note makes it inspectable
+// (and TestSafeParsePath_panicFamily pins the known family).
+func safeParsePath(expr string) (p cue.Path, panicNote string) {
 	defer func() {
 		if r := recover(); r != nil {
-			panicked = true
+			panicNote = fmt.Sprintf("oracle panic: %v", r)
 		}
 	}()
-	return cue.ParsePath(expr), false
+	return cue.ParsePath(expr), ""
 }
 
 // ComparePathOutcomes runs one PathCase through both inHouse and oracle
@@ -186,23 +202,31 @@ func RunPath(t testing.TB, cases []PathCase) {
 }
 
 // pathCorpus returns the representative set of path expressions for the
-// differential path arm. The cases are derived from CUE's path grammar —
-// one per behaviour class — rather than from the in-house parser's test
-// list, so the corpus stays an independent description of the contract.
-// It spans:
+// differential path arm, one row per behaviour class of CUE's path
+// grammar. These are the SAME inputs the in-house unit tests in
+// cue/cuelite/path_test.go cover, exercised through two harnesses: the
+// unit tests pin the in-house parser's output directly, while this corpus
+// drives the differential arm (in-house vs cue.ParsePath), and every row
+// also seeds FuzzParsePath so a regression in a known class fails before
+// the fuzzer even mutates. Keeping the two lists aligned is deliberate —
+// a divergence class only counts as covered when a row pins it in both
+// places. It spans:
 //
 //   - accepted inputs: ASCII idents (with digits, underscores, mixed
 //     case), unicode-letter idents, "$" idents, the non-literal keywords
 //     if/for/let/in, dotted idents, keywords as non-leading selectors,
 //     quoted keys (dots, escaped quotes, "\/", "\uXXXX", unicode,
-//     numeric-looking), and mixed ident+quoted;
+//     numeric-looking), mixed ident+quoted, paired surrogate escapes that
+//     combine into one astral rune, bracket string-index selectors
+//     (a["b"]), multi-hash raw-string labels (#"b"#), and a leading BOM;
 //   - rejected inputs: the empty string, leading/trailing dots, an empty
 //     quoted segment, a missing dot after a quoted segment, the literal
 //     keywords true/false/null as the leading selector, hidden labels
 //     (underscore-prefixed), definition labels (# prefix), index labels
 //     (bare numeric, a[0]), Go-only escapes (\xNN, octal \NNN), a raw NUL
 //     inside quotes, the upstream-parser-panic input "a...", whitespace
-//     forms, unterminated quotes, and invalid escape sequences.
+//     forms, unterminated quotes, invalid escape sequences, lone surrogate
+//     halves, a raw-string label after a dot, and a non-offset-0 BOM.
 //
 //nolint:funlen // one table of corpus cases, one row per behaviour class.
 func pathCorpus() []PathCase {
@@ -247,7 +271,7 @@ func pathCorpus() []PathCase {
 		{Name: "quoted key with cr escape", Expr: `"a\rb"`},
 		{Name: "quoted key with control escape", Expr: `"a\tb"`},
 		{Name: "quoted key with big unicode escape", Expr: `"\U0001F600"`},
-		{Name: "quoted key with unicode escape", Expr: `"A"`},
+		{Name: "quoted key with unicode escape", Expr: `"\u0041"`},
 		{Name: "quoted key with unicode", Expr: `"über"`},
 		{Name: "numeric-looking quoted segment", Expr: `"123"`},
 		{Name: "quoted key with space", Expr: `"a b"`},
@@ -346,7 +370,92 @@ func pathCorpus() []PathCase {
 		// Rejected: unterminated quoted segment.
 		{Name: "unterminated quoted", Expr: `"unterminated`},
 
-		// Rejected: invalid escape sequence (lone surrogate).
-		{Name: "lone-surrogate escape", Expr: `"\ud800"`},
+		// Accepted: paired surrogate escapes combine into one astral rune
+		// (utf16.DecodeRune). CUE joins an adjacent high+low surrogate
+		// escape pair regardless of \u vs \U form; a LONE half decodes to
+		// "" and the empty-segment check rejects it (both arms agree).
+		{Name: "raw astral rune in quotes", Expr: `"😀"`},
+		{Name: "paired backslash-u surrogate escapes", Expr: `"\uD83D\uDE00"`},
+		{Name: "paired backslash-U surrogate escapes", Expr: `"\U0000D800\U0000DC00"`},
+		{Name: "mixed u-high U-low surrogate escapes", Expr: `"\uD83D\U0000DE00"`},
+		{Name: "mixed U-high u-low surrogate escapes", Expr: `"\U0000D83D\uDE00"`},
+		{Name: "lone high surrogate escape", Expr: `"\uD800"`},
+		{Name: "lone low surrogate escape", Expr: `"\uDC00"`},
+		{Name: "high surrogate then BMP escape", Expr: `"\uD83DA"`},
+		{Name: "high surrogate then raw char", Expr: `"\uD83Dx"`},
+		{Name: "low then high surrogate escapes", Expr: `"\uDC00\uD800"`},
+
+		// Accepted: bracket string-index selectors. cue.ParsePath treats
+		// ["<string>"] as a StringLabel — the same segment as a dotted
+		// quoted selector — with space/tab/CR/newline tolerated before the
+		// string but only space/tab/CR (no newline) before the ']'. A bare
+		// numeric a[0] stays an IndexLabel rejection.
+		{Name: "bracket string index", Expr: `a["b"]`},
+		{Name: "chained bracket string index", Expr: `a["b"]["c"]`},
+		{Name: "bracket index spaces inside", Expr: `a[ "b" ]`},
+		{Name: "bracket index leading newline", Expr: "a[\n\"b\"]"},
+		{Name: "bracket index tabs inside", Expr: "a[\t\"b\"\t]"},
+		{Name: "bracket index then dot ident", Expr: `a["b"].c`},
+		{Name: "dot ident then bracket index", Expr: `a.b["c"]`},
+		{Name: "bracket numeric-looking string", Expr: `a["0"]`},
+		{Name: "space before bracket index", Expr: `a ["b"]`},
+		{Name: "quoted head then bracket index", Expr: `"b" ["c"]`},
+		{Name: "bracket numeric is index label", Expr: `a[0]`},
+		{Name: "bracket index trailing newline rejected", Expr: "a[\"b\"\n]"},
+		{Name: "leading bracket index rejected", Expr: `["b"]`},
+		{Name: "empty bracket rejected", Expr: `a[]`},
+		{Name: "bracket two strings rejected", Expr: `a["b" "c"]`},
+		{Name: "bracket bare ident rejected", Expr: `a[b]`},
+		{Name: "bracket literal true rejected", Expr: `a[true]`},
+		{Name: "bracket index with spaces is index label", Expr: `a[ 0 ]`},
+		{Name: "unterminated bracket rejected", Expr: `a["b"`},
+
+		// Accepted: multi-hash raw-string labels. A '#' before a '"' opens
+		// a CUE raw string, NOT a definition label. cue.ParsePath accepts
+		// #"..."# as a head selector and inside brackets — but NOT after a
+		// dot (a.#"b"# rejects). Raw strings take #-counted delimiters and
+		// \#-prefixed escapes; a bare #foo without a quote stays a
+		// definition-selector rejection.
+		{Name: "raw-string head label", Expr: `#"b"#`},
+		{Name: "raw-string label in bracket", Expr: `a[#"b"#]`},
+		{Name: "double-hash raw-string label", Expr: `##"b"##`},
+		{Name: "many-hash raw-string label", Expr: `####"x"####`},
+		{Name: "raw-string head then dot ident", Expr: `#"a"#.b`},
+		{Name: "raw-string head then dot quoted", Expr: `#"a"#."b"`},
+		{Name: "raw-string with dot inside", Expr: `#"a.b"#`},
+		{Name: "raw-string literal backslash-n", Expr: `#"a\nb"#`},
+		{Name: "raw-string escaped newline", Expr: "#\"a\\#nb\"#"},
+		{Name: "raw-string escaped tab", Expr: "#\"tab\\#tend\"#"},
+		{Name: "raw-string escaped quote", Expr: "#\"q\\#\"x\"#"},
+		{Name: "raw-string embedded quotes", Expr: `#"say "hi""#`},
+		{Name: "raw-string escaped unicode", Expr: "#\"\\#u0041\"#"},
+		{Name: "raw-string astral rune", Expr: `#"😀"#`},
+		{Name: "raw-string in bracket then dot", Expr: `a[#"b"#].c`},
+		{Name: "empty raw-string label rejected", Expr: `#""#`},
+		{Name: "raw-string after dot rejected", Expr: `a.#"b"#`},
+		{Name: "raw-string unterminated one hash", Expr: `#"b"`},
+		{Name: "raw-string unterminated more hashes", Expr: `##"a"#`},
+		{Name: "raw-string unknown escape rejected", Expr: `#"a\##nb"#`},
+		{Name: "raw-string truncated escape rejected", Expr: `#"a\#"#`},
+		{Name: "multiline raw-string opener rejected", Expr: `##"""##`},
+		{Name: "single-hash multiline raw opener rejected", Expr: `#"""#`},
+		{Name: "raw newline in raw-string rejected", Expr: "#\"\n\"#"},
+		{Name: "raw CR in raw-string rejected", Expr: "#\"\r\"#"},
+		{Name: "bracket malformed quoted rejected", Expr: `a["\z"]`},
+		{Name: "bracket malformed raw-string rejected", Expr: `a[#"a\##nb"#]`},
+		{Name: "high surrogate then BMP escape rejected", Expr: `"\uD83DA"`},
+		{Name: "high surrogate then non-unicode escape rejected", Expr: "\"\\uD83D\\n\""},
+		{Name: "high surrogate then truncated escape rejected", Expr: `"\uD83D\u12"`},
+		{Name: "bare hash ident is definition label", Expr: `#x`},
+
+		// BOM handling: a UTF-8 BOM is skipped only at offset 0; anywhere
+		// else (including inside quotes and comments) CUE rejects it with
+		// 'illegal byte order mark'.
+		{Name: "leading BOM skipped", Expr: "\ufeffa"},
+		{Name: "interior BOM in ident rejected", Expr: "a\ufeffb"},
+		{Name: "BOM inside quotes rejected", Expr: "\"a\ufeffb\""},
+		{Name: "BOM-only quoted segment rejected", Expr: "\"\ufeff\""},
+		{Name: "BOM in comment rejected", Expr: "a//\ufeff"},
+		{Name: "trailing BOM rejected", Expr: "a\ufeff"},
 	}
 }

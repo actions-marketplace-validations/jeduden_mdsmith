@@ -92,12 +92,40 @@ func TestOraclePathParsePath(t *testing.T) {
 		o := OraclePathParsePath(PathCase{Expr: `"\ud800"`})
 		assert.False(t, o.Accepted)
 	})
-	t.Run("upstream parser panic is rejected", func(t *testing.T) {
+	t.Run("upstream parser panic is rejected and noted", func(t *testing.T) {
 		// "a..." nil-derefs inside cuelang v0.16.1's parser; safeParsePath
-		// recovers the panic and the oracle reports a rejection.
+		// recovers the panic and the oracle reports a rejection that carries
+		// the panic note, so the recover stays scoped.
 		o := OraclePathParsePath(PathCase{Expr: "a..."})
 		assert.False(t, o.Accepted)
+		assert.Contains(t, o.PanicNote, "oracle panic")
 	})
+}
+
+// TestSafeParsePath_panicFamily pins the ONLY currently-known panicking
+// family of cue.ParsePath (cuelang v0.16.1): a selector immediately
+// followed by a run of three-or-more dots ("a...", "a...b", "a.b..."). It
+// asserts those carry a panic note while structurally similar non-panicking
+// inputs (the empty string, a bare "..", a double-dot "a..b") do not. A CUE
+// upgrade that introduces a NEW panic class on some other input fails this
+// test — surfacing the new family as a visible diff rather than letting the
+// unscoped recover silently degrade it to a bare rejection.
+func TestSafeParsePath_panicFamily(t *testing.T) {
+	panicking := []string{"a...", "a...b", "a.b...", "a....b"}
+	for _, expr := range panicking {
+		t.Run("panics: "+expr, func(t *testing.T) {
+			_, note := safeParsePath(expr)
+			assert.NotEmpty(t, note, "expected the double-dot family to panic")
+		})
+	}
+	nonPanicking := []string{"", "a", "a.b", "..", "a..b", "...", "a.."}
+	for _, expr := range nonPanicking {
+		t.Run("no panic: "+expr, func(t *testing.T) {
+			_, note := safeParsePath(expr)
+			assert.Empty(t, note,
+				"a new panicking input class appeared; review the oracle recover")
+		})
+	}
 }
 
 // TestComparePathOutcomes pins the Compare helper: agreement returns
