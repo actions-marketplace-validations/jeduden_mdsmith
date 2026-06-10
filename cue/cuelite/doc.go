@@ -11,6 +11,13 @@
 // Validate error into one [PathError] per failing field, each tagged
 // with the path of the field that failed.
 //
+// [ParsePath] parses the string-label subset of CUE paths — dotted,
+// quoted, bracket, raw-string, and multiline-string labels — into a
+// [Path]; index, definition, and hidden selectors are rejected with an
+// error naming the kind. [MakePath] constructs a Path directly from segments, and
+// deliberately accepts segments ParsePath cannot parse (data keys
+// like "true" or "a.b"), mirroring cue.MakePath.
+//
 // # Error model
 //
 // Validate upholds one invariant:
@@ -30,7 +37,9 @@
 //
 // # Concurrency and memory
 //
-// The implementation delegates to cuelang.org/go, and CUE v0.16.1
+// Compile, Unify, and Validate delegate to cuelang.org/go; ParsePath
+// is already in-house (a pure-Go parser checked against cue.ParsePath
+// by a differential corpus and fuzzer). CUE v0.16.1
 // documents that values from one *cue.Context are not safe for
 // concurrent use and that a long-lived context grows without bound.
 // Each [Compile] and [CompileJSON] result therefore owns a fresh

@@ -134,11 +134,12 @@ cmd/mdsmith              internal/lsp
                         (the public, versioned
                          CUE-subset façade;
                          imports no internal/
-                         package; its eventual
+                         package; fieldinterp
+                         already consumes its
+                         ParsePath; its eventual
                          consumers are schema,
                          requiredstructure,
-                         query, fieldinterp,
-                         and cuetemplate)
+                         query, and cuetemplate)
 ```
 
 `pkg/markdown` sits at the bottom. It
@@ -177,19 +178,24 @@ mirroring `cue/types`.
 
 `cue/cuelite` lands first as a thin
 wrapper over `cuelang.org/go`. It is
-later flipped to a pure-Go engine behind
-the same API. The CUE-backed path stays
-as the differential oracle in the
-module-internal `internal/cuelitetest`
-harness — kept under `internal/` so the
+then flipped to a pure-Go engine surface
+by surface. `ParsePath` is already
+in-house (plan 237). `Compile`, `Unify`,
+and `Validate` still delegate. The
+CUE-backed arm stays as the differential
+oracle in the module-internal
+`internal/cuelitetest` harness. It is
+kept under `internal/` so the
 `cuelang.org/go` import that plan 218
 phase 4 deletes never becomes part of the
-public surface. Its eventual
+public surface.
+
+`fieldinterp` is already a consumer,
+reading `cuelite.ParsePath`. Its further
 consumers are `internal/schema`,
-`requiredstructure`, `query`,
-`fieldinterp`, and `cuetemplate`. It
-imports none of them, and nothing else in
-the tree.
+`requiredstructure`, `query`, and
+`cuetemplate`. It imports none of them,
+and nothing else in the tree.
 
 These packages are public surfaces.
 For details see

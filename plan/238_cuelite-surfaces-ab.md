@@ -83,6 +83,15 @@ unification rules.
 
 ## Implementation notes
 
+- **Build paths from data keys via `MakePath`, never `ParsePath`.**
+  `query.collectPaths` and any other consumer that derives a path from a
+  `map[string]any` key (e.g. iterating `Value.Fields()`) must use
+  `cuelite.MakePath(segs...)`, which stores raw segments — including empty,
+  dotted, `true`-headed, or quote-needing keys that `ParsePath` (the narrower
+  string-label EXPRESSION grammar) cannot parse back. Reserve `ParsePath`
+  for user-typed path expressions. There is deliberately no `Path` render
+  today (`PathError.Error()`'s dot-join is lossy and display-only); a future
+  `Path.String()` must quote any segment that is not a bare identifier.
 - **LookupPath provenance.** A derived `Value` (a `Unify` result)
   is context-pinned and retains no source, so it cannot be rebuilt
   into another context. `LookupPath` on such a value inherits that

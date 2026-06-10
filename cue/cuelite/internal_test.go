@@ -224,6 +224,33 @@ func TestScanDuplicateJSONKeys(t *testing.T) {
 		// data (a fabricated second value) to Extract.
 		assert.NoError(t, scanDuplicateJSONKeys([]byte(`42 {"a":1,"a":2}`)))
 	})
+	t.Run("array value then a duplicate key reported", func(t *testing.T) {
+		// An array is the value half of the first "a"; closing it restores the
+		// object level (value.go's array-close arm flips seenKey back), so the
+		// second "a" is read as a key and the duplicate is caught. This drives
+		// the array-close branch that the plan wrongly called defensive.
+		err := scanDuplicateJSONKeys([]byte(`{"a":[1],"a":2}`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"a"`)
+	})
+	t.Run("equal keys in distinct array-element objects are not duplicates", func(t *testing.T) {
+		// Each array element is its own object level, so "a" in the first and
+		// "a" in the second are not duplicates. This walks the array level and
+		// the parent-restore branch without fabricating a duplicate.
+		assert.NoError(t, scanDuplicateJSONKeys([]byte(`[{"a":1},{"a":1}]`)))
+	})
+	t.Run("top-level array with a scalar element is clean", func(t *testing.T) {
+		// A scalar inside a top-level array is the array's element, not a value
+		// half of any object pair; the scan walks it and returns nil. This
+		// drives the array-element scalar branch (cur.keys == nil).
+		assert.NoError(t, scanDuplicateJSONKeys([]byte(`[1]`)))
+	})
+	t.Run("a real duplicate inside an array-element object is reported", func(t *testing.T) {
+		// Within a single array-element object, a repeated key is a duplicate.
+		err := scanDuplicateJSONKeys([]byte(`[{"a":1,"a":2}]`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"a"`)
+	})
 	t.Run("duplicate nested under a U+FFFD key reported", func(t *testing.T) {
 		// A U+FFFD key is skipped for dup tracking, but its VALUE subtree must
 		// still be walked: a real duplicate inside the object the lossy key

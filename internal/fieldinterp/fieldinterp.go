@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"cuelang.org/go/cue"
+	"github.com/jeduden/mdsmith/cue/cuelite"
 )
 
 // fieldPattern matches a single-brace placeholder using CUE path
@@ -130,30 +130,20 @@ func Validate(text string) error {
 }
 
 // ParseCUEPath parses a CUE path expression into unquoted label
-// segments using cue.ParsePath. Non-identifier keys (hyphens, dots,
+// segments using cuelite.ParsePath. Non-identifier keys (hyphens, dots,
 // spaces) must be quoted: "my-key". Returns nil for malformed
 // expressions.
+//
+// cuelite.ParsePath never succeeds with zero segments (it rejects the
+// empty and whitespace-only expression), so a nil error guarantees a
+// non-empty Segments(); the result is returned directly with no
+// zero-length guard and no extra copy beyond Segments()' own clone.
 func ParseCUEPath(expr string) []string {
-	if expr == "" {
+	p, err := cuelite.ParsePath(expr)
+	if err != nil {
 		return nil
 	}
-	p := cue.ParsePath(expr)
-	if p.Err() != nil {
-		return nil
-	}
-	sels := p.Selectors()
-	if len(sels) == 0 {
-		return nil
-	}
-	segments := make([]string, len(sels))
-	for i, s := range sels {
-		u := s.Unquoted()
-		if u == "" {
-			return nil // reject empty labels
-		}
-		segments[i] = u
-	}
-	return segments
+	return p.Segments()
 }
 
 // ResolvePath walks data using the given path segments and returns

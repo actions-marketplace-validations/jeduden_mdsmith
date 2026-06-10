@@ -44,3 +44,34 @@ func ExampleCompileJSON() {
 	fmt.Println(err)
 	// Output: duplicate JSON key "status"
 }
+
+// ParsePath parses a CUE field-path expression into its unquoted
+// per-selector segments. A quoted label is decoded — the quotes are
+// stripped and CUE string escapes applied — so "my-key".sub yields the
+// two segments "my-key" and "sub".
+func ExampleParsePath() {
+	p, err := cuelite.ParsePath(`"my-key".sub`)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%q\n", p.Segments())
+	// Output: ["my-key" "sub"]
+}
+
+// MakePath constructs a Path directly from segments, and deliberately
+// accepts data keys ParsePath would reject. "my-key" needs quoting to
+// parse as an expression, but MakePath stores it verbatim — the
+// documented asymmetry that lets a path be built from any map key (e.g.
+// over Fields() iteration) without round-tripping through the parser.
+func ExampleMakePath() {
+	p := cuelite.MakePath("my-key", "sub")
+	fmt.Printf("%q\n", p.Segments())
+
+	// The same key cannot be PARSED back: bare "my-key" is not a CUE
+	// expression-grammar label.
+	_, err := cuelite.ParsePath("my-key")
+	fmt.Println(err != nil)
+	// Output:
+	// ["my-key" "sub"]
+	// true
+}
