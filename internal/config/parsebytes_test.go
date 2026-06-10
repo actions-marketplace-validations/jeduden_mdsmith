@@ -42,6 +42,23 @@ func TestParseBytesInlineKind(t *testing.T) {
 	assert.True(t, ok, "inline kind 'doc' present after ParseBytes")
 }
 
+// TestParseBytesInvalidBuildConfig pins loadFromBytes' build
+// validation wrap: a recipe param claiming a reserved name aborts the
+// parse under the "validating config" prefix.
+func TestParseBytesInvalidBuildConfig(t *testing.T) {
+	yml := `build:
+  recipes:
+    x:
+      command: ""
+      params:
+        required: ["alt"]
+`
+	_, err := ParseBytes([]byte(yml))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validating config")
+	assert.Contains(t, err.Error(), "reserved name")
+}
+
 // TestParseBytesInvalidYAML surfaces a parse error rather than a
 // silently-empty config.
 func TestParseBytesInvalidYAML(t *testing.T) {

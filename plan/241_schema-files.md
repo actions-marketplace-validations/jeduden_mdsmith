@@ -1,7 +1,7 @@
 ---
 id: 241
 title: Schema-per-file config under `.mdsmith/schemas/`
-status: "🔲"
+status: "✅"
 model: opus
 depends-on: [146, 156, 208, 209]
 summary: >-
@@ -271,44 +271,44 @@ no new package; the type change ripples from
 
 ## Acceptance Criteria
 
-- [ ] A `schema: foo` (file) kind and a kind
+- [x] A `schema: foo` (file) kind and a kind
       with the same body inline produce the same
       messages and anchors on a reference doc;
       only the schema-source location differs.
-- [ ] The inline-vs-named fixture pair emits
+- [x] The inline-vs-named fixture pair emits
       matching message+anchor streams; two kinds
       sharing `schema: foo` both validate.
-- [ ] An undeclared `schema:` name errors,
+- [x] An undeclared `schema:` name errors,
       naming the kind and the missing schema.
-- [ ] Each of these errors with a clear
+- [x] Each of these errors with a clear
       message: basename outside
       `[a-z][a-z0-9-]*`, file in a subdirectory,
       symlink, duplicate basename across
       `.yaml`/`.yml`, unknown top-level key,
       name declared inline under `schemas:` AND
       as a file.
-- [ ] A kind that sets a named `schema:` and
+- [x] A kind that sets a named `schema:` and
       `rules.required-structure.schema:` errors;
       same for named `schema:` and
       `inline-schema:`. Both quote "pick one
       source".
-- [ ] `mdsmith kinds resolve <file>` prints the
+- [x] `mdsmith kinds resolve <file>` prints the
       schema's source path; `schema-source-path:`
       is set for file and inline-registry sources,
       omitted for inline-on-kind.
-- [ ] `docs/reference/schema-files.md` exists.
+- [x] `docs/reference/schema-files.md` exists.
       [schemas.md](../docs/guides/schemas.md)
       documents all three sources.
-- [ ] kind-files.md and cross-system.md each
+- [x] kind-files.md and cross-system.md each
       reference `.mdsmith/schemas/`.
-- [ ] `docs/guides/conventions.md` covers the
+- [x] `docs/guides/conventions.md` covers the
       H2s named in task 13.
-- [ ] Unit tests cover `KindSchemaRef.UnmarshalYAML`,
+- [x] Unit tests cover `KindSchemaRef.UnmarshalYAML`,
       `discoverSchemas`, `mergeSchemaFiles`,
       and `resolveNamedSchemas`.
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` clean.
-- [ ] `mdsmith check .` passes.
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` clean.
+- [x] `mdsmith check .` passes.
 
 ## ...
 

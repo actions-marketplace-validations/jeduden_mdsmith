@@ -25,9 +25,9 @@ func TestResolveKindInlineSchema_NoSchemaReturnsNil(t *testing.T) {
 // Without this, `kinds show` would render `date` for a
 // shortcut-bearing schema instead of the canonical CUE regex.
 func TestResolveKindInlineSchema_NoExtendsNormalisesShortcuts(t *testing.T) {
-	body := KindBody{Schema: map[string]any{"frontmatter": map[string]any{
+	body := KindBody{Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{
 		"d": "date",
-	}}}
+	}})}
 	kinds := map[string]KindBody{"plan": body}
 	out, err := ResolveKindInlineSchema(kinds, "plan")
 	require.NoError(t, err)
@@ -43,24 +43,24 @@ func TestResolveKindInlineSchema_NoExtendsNormalisesShortcuts(t *testing.T) {
 // flow through, and child sections wholly replace parent's.
 func TestResolveKindInlineSchema_ParentChildMerge(t *testing.T) {
 	kinds := map[string]KindBody{
-		"rfc-base": {Schema: map[string]any{
+		"rfc-base": {Schema: inlineSchemaRef(map[string]any{
 			"frontmatter": map[string]any{
 				"id": `=~"^RFC-[0-9]{4}$"`,
 			},
 			"sections": []any{
 				map[string]any{"heading": "Context"},
 			},
-		}},
+		})},
 		"rfc-ratified": {
 			Extends: "rfc-base",
-			Schema: map[string]any{
+			Schema: inlineSchemaRef(map[string]any{
 				"frontmatter": map[string]any{
 					"status": `"ratified"`,
 				},
 				"sections": []any{
 					map[string]any{"heading": "Decision"},
 				},
-			},
+			}),
 		},
 	}
 	out, err := ResolveKindInlineSchema(kinds, "rfc-ratified")
@@ -79,14 +79,14 @@ func TestResolveKindInlineSchema_ParentChildMerge(t *testing.T) {
 // expression joins with `&`.
 func TestResolveKindInlineSchema_FrontmatterUnifies(t *testing.T) {
 	kinds := map[string]KindBody{
-		"base": {Schema: map[string]any{"frontmatter": map[string]any{
+		"base": {Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{
 			"status": `"open" | "closed" | "ratified"`,
-		}}},
+		}})},
 		"child": {
 			Extends: "base",
-			Schema: map[string]any{"frontmatter": map[string]any{
+			Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{
 				"status": `"ratified"`,
-			}},
+			}}),
 		},
 	}
 	out, err := ResolveKindInlineSchema(kinds, "child")
@@ -102,14 +102,14 @@ func TestResolveKindInlineSchema_FrontmatterUnifies(t *testing.T) {
 // (or ValidateKinds at load time) to surface the conflict.
 func TestResolveKindInlineSchema_MergesConflictExpressionsWithoutError(t *testing.T) {
 	kinds := map[string]KindBody{
-		"base": {Schema: map[string]any{"frontmatter": map[string]any{
+		"base": {Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{
 			"status": `"open" | "closed"`,
-		}}},
+		}})},
 		"child": {
 			Extends: "base",
-			Schema: map[string]any{"frontmatter": map[string]any{
+			Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{
 				"status": `int`,
-			}},
+			}}),
 		},
 	}
 	out, err := ResolveKindInlineSchema(kinds, "child")
@@ -124,14 +124,14 @@ func TestResolveKindInlineSchema_MergesConflictExpressionsWithoutError(t *testin
 // UnsatisfiableKeyError wrapped with the child kind name.
 func TestValidateKindInlineSchema_NamesKindOnConflict(t *testing.T) {
 	kinds := map[string]KindBody{
-		"base": {Schema: map[string]any{"frontmatter": map[string]any{
+		"base": {Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{
 			"status": `"open" | "closed"`,
-		}}},
+		}})},
 		"child": {
 			Extends: "base",
-			Schema: map[string]any{"frontmatter": map[string]any{
+			Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{
 				"status": `int`,
-			}},
+			}}),
 		},
 	}
 	err := ValidateKindInlineSchema(kinds, "child")
@@ -147,14 +147,14 @@ func TestValidateKindInlineSchema_NamesKindOnConflict(t *testing.T) {
 // parent's disjunction).
 func TestValidateKindInlineSchema_NoErrorWhenChainIsCompatible(t *testing.T) {
 	kinds := map[string]KindBody{
-		"base": {Schema: map[string]any{"frontmatter": map[string]any{
+		"base": {Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{
 			"status": `"open" | "closed"`,
-		}}},
+		}})},
 		"child": {
 			Extends: "base",
-			Schema: map[string]any{"frontmatter": map[string]any{
+			Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{
 				"status": `"open"`,
-			}},
+			}}),
 		},
 	}
 	assert.NoError(t, ValidateKindInlineSchema(kinds, "child"))
@@ -164,7 +164,7 @@ func TestValidateKindInlineSchema_NoErrorWhenChainIsCompatible(t *testing.T) {
 // fast-path: a kind without `extends:` has no merge to validate.
 func TestValidateKindInlineSchema_NoExtendsReturnsNil(t *testing.T) {
 	kinds := map[string]KindBody{
-		"a": {Schema: map[string]any{"frontmatter": map[string]any{"x": "string"}}},
+		"a": {Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{"x": "string"}})},
 	}
 	assert.NoError(t, ValidateKindInlineSchema(kinds, "a"))
 }
@@ -173,8 +173,8 @@ func TestValidateKindInlineSchema_NoExtendsReturnsNil(t *testing.T) {
 // validator surfaces structural errors from the resolver.
 func TestValidateKindInlineSchema_PropagatesCycleError(t *testing.T) {
 	kinds := map[string]KindBody{
-		"a": {Extends: "b", Schema: map[string]any{"filename": "a.md"}},
-		"b": {Extends: "a", Schema: map[string]any{"filename": "b.md"}},
+		"a": {Extends: "b", Schema: inlineSchemaRef(map[string]any{"filename": "a.md"})},
+		"b": {Extends: "a", Schema: inlineSchemaRef(map[string]any{"filename": "b.md"})},
 	}
 	err := ValidateKindInlineSchema(kinds, "a")
 	require.Error(t, err)
@@ -186,7 +186,7 @@ func TestValidateKindInlineSchema_PropagatesCycleError(t *testing.T) {
 // resolver returns the parent's schema directly.
 func TestResolveKindInlineSchema_ParentOnlySchema(t *testing.T) {
 	kinds := map[string]KindBody{
-		"parent": {Schema: map[string]any{"filename": "RFC-*.md"}},
+		"parent": {Schema: inlineSchemaRef(map[string]any{"filename": "RFC-*.md"})},
 		"child":  {Extends: "parent"},
 	}
 	out, err := ResolveKindInlineSchema(kinds, "child")
@@ -198,9 +198,9 @@ func TestResolveKindInlineSchema_ParentOnlySchema(t *testing.T) {
 // resolver walks more than one extends hop.
 func TestResolveKindInlineSchema_MultiHopChain(t *testing.T) {
 	kinds := map[string]KindBody{
-		"a": {Schema: map[string]any{"frontmatter": map[string]any{"a": `string`}}},
-		"b": {Extends: "a", Schema: map[string]any{"frontmatter": map[string]any{"b": `string`}}},
-		"c": {Extends: "b", Schema: map[string]any{"frontmatter": map[string]any{"c": `string`}}},
+		"a": {Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{"a": `string`}})},
+		"b": {Extends: "a", Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{"b": `string`}})},
+		"c": {Extends: "b", Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{"c": `string`}})},
 	}
 	out, err := ResolveKindInlineSchema(kinds, "c")
 	require.NoError(t, err)
@@ -215,8 +215,8 @@ func TestResolveKindInlineSchema_MultiHopChain(t *testing.T) {
 // caller that constructed a kinds map directly would hang.
 func TestResolveKindInlineSchema_CycleDefenseInDepth(t *testing.T) {
 	kinds := map[string]KindBody{
-		"a": {Extends: "b", Schema: map[string]any{"filename": "a.md"}},
-		"b": {Extends: "a", Schema: map[string]any{"filename": "b.md"}},
+		"a": {Extends: "b", Schema: inlineSchemaRef(map[string]any{"filename": "a.md"})},
+		"b": {Extends: "a", Schema: inlineSchemaRef(map[string]any{"filename": "b.md"})},
 	}
 	_, err := ResolveKindInlineSchema(kinds, "a")
 	require.Error(t, err)
@@ -270,9 +270,9 @@ func TestKindExtendsChain_StopsOnCycleDefensively(t *testing.T) {
 // MergeRawMap call.
 func TestExtendsChainSchemas_DropsEmptyLayers(t *testing.T) {
 	kinds := map[string]KindBody{
-		"a": {Schema: map[string]any{"filename": "a.md"}},
+		"a": {Schema: inlineSchemaRef(map[string]any{"filename": "a.md"})},
 		"b": {Extends: "a"},
-		"c": {Extends: "b", Schema: map[string]any{"frontmatter": map[string]any{"x": "string"}}},
+		"c": {Extends: "b", Schema: inlineSchemaRef(map[string]any{"frontmatter": map[string]any{"x": "string"}})},
 	}
 	chain, err := extendsChainSchemas(kinds, "c")
 	require.NoError(t, err)
@@ -288,8 +288,8 @@ func TestExtendsChainSchemas_DropsEmptyLayers(t *testing.T) {
 // rather than dropping the schema source entirely.
 func TestResolvedInlineSchema_FallbackOnError(t *testing.T) {
 	kinds := map[string]KindBody{
-		"a": {Extends: "b", Schema: map[string]any{"filename": "a.md"}},
-		"b": {Extends: "a", Schema: map[string]any{"filename": "b.md"}},
+		"a": {Extends: "b", Schema: inlineSchemaRef(map[string]any{"filename": "a.md"})},
+		"b": {Extends: "a", Schema: inlineSchemaRef(map[string]any{"filename": "b.md"})},
 	}
 	out := resolvedInlineSchema(kinds, "a", kinds["a"])
 	require.NotNil(t, out)
@@ -301,7 +301,7 @@ func TestResolvedInlineSchema_FallbackOnError(t *testing.T) {
 // fast-path branch: no extends → no resolver call, return body
 // schema unchanged.
 func TestResolvedInlineSchema_NoExtendsReturnsBodySchema(t *testing.T) {
-	body := KindBody{Schema: map[string]any{"filename": "x.md"}}
+	body := KindBody{Schema: inlineSchemaRef(map[string]any{"filename": "x.md"})}
 	out := resolvedInlineSchema(map[string]KindBody{"a": body}, "a", body)
 	assert.Equal(t, "x.md", out["filename"])
 }
@@ -313,7 +313,7 @@ func TestResolvedInlineSchema_NoExtendsReturnsBodySchema(t *testing.T) {
 func TestResolveLayerInlineSchema_NilKindsMapFallback(t *testing.T) {
 	body := KindBody{
 		Extends: "missing",
-		Schema:  map[string]any{"filename": "x.md"},
+		Schema:  inlineSchemaRef(map[string]any{"filename": "x.md"}),
 	}
 	out := resolveLayerInlineSchema("a", body, nil)
 	assert.Equal(t, "x.md", out["filename"])
@@ -322,7 +322,7 @@ func TestResolveLayerInlineSchema_NilKindsMapFallback(t *testing.T) {
 // TestResolveLayerInlineSchema_NoExtendsReturnsBodySchema covers
 // the early-return branch when the kind has no extends.
 func TestResolveLayerInlineSchema_NoExtendsReturnsBodySchema(t *testing.T) {
-	body := KindBody{Schema: map[string]any{"filename": "x.md"}}
+	body := KindBody{Schema: inlineSchemaRef(map[string]any{"filename": "x.md"})}
 	out := resolveLayerInlineSchema("a", body, map[string]KindBody{"a": body})
 	assert.Equal(t, "x.md", out["filename"])
 }
@@ -331,12 +331,12 @@ func TestResolveLayerInlineSchema_NoExtendsReturnsBodySchema(t *testing.T) {
 // provenance helper invokes the resolver when extends is set.
 func TestResolveLayerInlineSchema_WithExtendsCallsResolver(t *testing.T) {
 	kinds := map[string]KindBody{
-		"base": {Schema: map[string]any{
+		"base": {Schema: inlineSchemaRef(map[string]any{
 			"frontmatter": map[string]any{"id": "string"},
-		}},
-		"child": {Extends: "base", Schema: map[string]any{
+		})},
+		"child": {Extends: "base", Schema: inlineSchemaRef(map[string]any{
 			"frontmatter": map[string]any{"status": `"ratified"`},
-		}},
+		})},
 	}
 	out := resolveLayerInlineSchema("child", kinds["child"], kinds)
 	require.NotNil(t, out)
@@ -350,8 +350,8 @@ func TestResolveLayerInlineSchema_WithExtendsCallsResolver(t *testing.T) {
 // malformed; it falls back to the kind's own schema.
 func TestResolveLayerInlineSchema_DefensiveFallbackOnResolverError(t *testing.T) {
 	kinds := map[string]KindBody{
-		"a": {Extends: "b", Schema: map[string]any{"filename": "a.md"}},
-		"b": {Extends: "a", Schema: map[string]any{"filename": "b.md"}},
+		"a": {Extends: "b", Schema: inlineSchemaRef(map[string]any{"filename": "a.md"})},
+		"b": {Extends: "a", Schema: inlineSchemaRef(map[string]any{"filename": "b.md"})},
 	}
 	out := resolveLayerInlineSchema("a", kinds["a"], kinds)
 	assert.Equal(t, "a.md", out["filename"])
@@ -376,12 +376,12 @@ func TestKindExtendsChain_UnknownIntermediateBreaksChain(t *testing.T) {
 func TestValidateKinds_RejectsExtendsFrontmatterConflict(t *testing.T) {
 	cfg := &Config{
 		Kinds: map[string]KindBody{
-			"base": {Schema: map[string]any{
+			"base": {Schema: inlineSchemaRef(map[string]any{
 				"frontmatter": map[string]any{"x": "int"},
-			}},
-			"child": {Extends: "base", Schema: map[string]any{
+			})},
+			"child": {Extends: "base", Schema: inlineSchemaRef(map[string]any{
 				"frontmatter": map[string]any{"x": "string"},
-			}},
+			})},
 		},
 	}
 	err := ValidateKinds(cfg)
@@ -396,18 +396,18 @@ func TestValidateKinds_RejectsExtendsFrontmatterConflict(t *testing.T) {
 func TestEffectiveRules_ExtendsResolvedInSchemaSources(t *testing.T) {
 	cfg := &Config{
 		Kinds: map[string]KindBody{
-			"rfc-base": {Schema: map[string]any{
+			"rfc-base": {Schema: inlineSchemaRef(map[string]any{
 				"frontmatter": map[string]any{
 					"id": `=~"^RFC-[0-9]{4}$"`,
 				},
-			}},
+			})},
 			"rfc-ratified": {
 				Extends: "rfc-base",
-				Schema: map[string]any{
+				Schema: inlineSchemaRef(map[string]any{
 					"frontmatter": map[string]any{
 						"status": `"ratified"`,
 					},
-				},
+				}),
 			},
 		},
 	}
@@ -431,7 +431,7 @@ func TestEffectiveRules_ExtendsResolvedInSchemaSources(t *testing.T) {
 func TestEffectiveRules_ExtendsParentSchemaWithoutChild(t *testing.T) {
 	cfg := &Config{
 		Kinds: map[string]KindBody{
-			"base":  {Schema: map[string]any{"filename": "RFC-*.md"}},
+			"base":  {Schema: inlineSchemaRef(map[string]any{"filename": "RFC-*.md"})},
 			"child": {Extends: "base"},
 		},
 	}

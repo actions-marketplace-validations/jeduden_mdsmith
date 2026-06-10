@@ -165,7 +165,7 @@ func copyKinds(kinds map[string]KindBody) map[string]KindBody {
 		result[name] = KindBody{
 			Rules:       rules,
 			Categories:  copyCategories(body.Categories),
-			Schema:      cloneSettings(body.Schema),
+			Schema:      copySchemaRef(body.Schema),
 			PathPattern: body.PathPattern,
 			Extends:     body.Extends,
 			SourcePath:  body.SourcePath,
@@ -179,6 +179,20 @@ func copyKinds(kinds map[string]KindBody) map[string]KindBody {
 func copyRuleCfg(rc RuleCfg) RuleCfg {
 	rc.Settings = cloneSettings(rc.Settings)
 	return rc
+}
+
+// copySchemaRef deep-copies a KindSchemaRef, cloning the resolved
+// inline body so a mutation during merge cannot reach back into the
+// loaded config. Name and SourcePath are scalars and copy by value.
+// Resolution (resolveNamedSchemas) runs in Load before copyKinds, so
+// a named ref's body is already filled in here and must survive the
+// deep copy — hence cloning Map() rather than dropping it.
+func copySchemaRef(ref KindSchemaRef) KindSchemaRef {
+	return KindSchemaRef{
+		Name:       ref.Name,
+		SourcePath: ref.SourcePath,
+		inline:     cloneSettings(ref.Map()),
+	}
 }
 
 // copyKindAssignment returns a deep copy of a kind-assignment slice.
@@ -420,7 +434,7 @@ func effectiveRules(cfg *Config, filePath string, kinds []string) map[string]Rul
 			continue
 		}
 		if resolved := resolvedInlineSchema(cfg.Kinds, kindName, body); len(resolved) > 0 {
-			applyInlineSchemaSource(result, resolved, body.SourcePath)
+			applyInlineSchemaSource(result, resolved, schemaSourcePath(body))
 		}
 		if body.PathPattern != "" {
 			applyPathPattern(result, kindName, body.PathPattern)
@@ -503,18 +517,33 @@ func resolvedInlineSchema(
 	kinds map[string]KindBody, kindName string, body KindBody,
 ) map[string]any {
 	if body.Extends == "" {
-		return body.Schema
+		return body.Schema.Map()
 	}
 	resolved, err := ResolveKindInlineSchema(kinds, kindName)
 	if err != nil {
-		return body.Schema
+		return body.Schema.Map()
 	}
 	return resolved
 }
 
-// applyInlineSchemaSource appends a KindBody.Schema (inline schema
-// map) as a `schema-sources` entry. Multiple kinds with inline
-// schemas thus accumulate rather than overwrite.
+// schemaSourcePath returns the defining-source path the schema-sources
+// entry should carry for one kind's schema. A named reference resolves
+// to the schema's own origin (Schema.SourcePath — a `.mdsmith/schemas/
+// <name>.yaml` path or `.mdsmith.yml` for an inline-registry entry), so
+// "go to schema" lands on the schema rather than the referencing kind.
+// An inline-on-kind body has no separate origin (Schema.SourcePath
+// empty), so it falls back to the kind's own defining file.
+func schemaSourcePath(body KindBody) string {
+	if body.Schema.SourcePath != "" {
+		return body.Schema.SourcePath
+	}
+	return body.SourcePath
+}
+
+// applyInlineSchemaSource appends a resolved schema body as a
+// `schema-sources` entry, tagged with the schema's defining-source
+// path. Multiple kinds with schemas thus accumulate rather than
+// overwrite.
 func applyInlineSchemaSource(result map[string]RuleCfg, schema map[string]any, sourcePath string) {
 	rs, ok := result["required-structure"]
 	if !ok {
@@ -557,7 +586,7 @@ func effectiveExplicit(cfg *Config, filePath string, kinds []string) map[string]
 		// effect — inconsistent with the file-source path that
 		// lives under body.Rules. The same reasoning applies to
 		// `path-pattern:`.
-		if len(body.Schema) > 0 || body.PathPattern != "" {
+		if len(body.Schema.Map()) > 0 || body.PathPattern != "" {
 			result["required-structure"] = true
 		}
 	}

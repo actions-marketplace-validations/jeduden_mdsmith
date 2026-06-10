@@ -628,11 +628,11 @@ func TestKindLayerRules_MergesPathPatternWithExistingRules(t *testing.T) {
 func TestKindLayerRules_MirrorsInlineSchemaAndPathPattern(t *testing.T) {
 	body := KindBody{
 		PathPattern: "plan/*.md",
-		Schema: map[string]any{
+		Schema: inlineSchemaRef(map[string]any{
 			"sections": []any{
 				map[string]any{"heading": "Goal"},
 			},
-		},
+		}),
 	}
 	out := kindLayerRules("plan", body, nil)
 	rs := out["required-structure"]

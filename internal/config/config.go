@@ -75,6 +75,15 @@ type Config struct {
 	// built-in conventions ("portable", "github", "plain").
 	Conventions map[string]UserConvention `yaml:"conventions,omitempty"`
 
+	// Schemas holds named document-structure schemas declared inline
+	// under the top-level `schemas:` key — the inline equivalent of a
+	// `.mdsmith/schemas/<name>.yaml` file (plan 241). Each entry is a
+	// raw schema body (the map schema.ParseInline consumes). A kind
+	// references one by name (`schema: rfc-v1`); resolveNamedSchemas
+	// replaces the reference with the body at load time. Names must
+	// not collide with a `.mdsmith/schemas/` file basename.
+	Schemas map[string]map[string]any `yaml:"schemas,omitempty"`
+
 	// LegacyNoFollowSymlinks captures the removed `no-follow-symlinks`
 	// key. Its presence surfaces a deprecation warning via
 	// Deprecations; its contents are otherwise ignored now that
@@ -138,10 +147,14 @@ func (o Override) Patterns() []string {
 // front-matter kinds: or kind-assignment:.
 //
 // Schema, when set, declares the document-structure schema for files
-// of this kind inline (rather than referencing a proto.md file via
-// rules.required-structure.schema:). A kind that sets both Schema
-// and rules.required-structure.schema: is a config error; see
-// ValidateKinds.
+// of this kind. It is polymorphic (see KindSchemaRef): a YAML scalar
+// names an entry in the top-level `schemas:` registry (resolved to a
+// body at load time by resolveNamedSchemas), while a YAML mapping is
+// an inline body carried directly on the kind. Either form is an
+// alternative to referencing a proto.md file via
+// rules.required-structure.schema:. A kind that sets Schema and
+// rules.required-structure.schema: (or inline-schema:) is a config
+// error; see ValidateKinds. Read the resolved body via Schema.Map().
 //
 // PathPattern, when set, is a glob the workspace-relative path of
 // every file assigned to this kind must match. The pattern uses the
@@ -156,7 +169,7 @@ func (o Override) Patterns() []string {
 type KindBody struct {
 	Rules       map[string]RuleCfg `yaml:"rules"`
 	Categories  map[string]bool    `yaml:"categories"`
-	Schema      map[string]any     `yaml:"schema,omitempty"`
+	Schema      KindSchemaRef      `yaml:"schema,omitempty"`
 	PathPattern string             `yaml:"path-pattern,omitempty"`
 	// Extends, when set, names another kind whose `schema:` this
 	// kind inherits from. Frontmatter constraints unify under CUE

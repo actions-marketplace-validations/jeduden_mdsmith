@@ -16,12 +16,17 @@ they are the canonical place to lock down the shape
 of a recurring document type (plan, RFC, runbook,
 rule README).
 
-mdsmith reads schemas from two sources:
+mdsmith reads schemas from three sources:
 
 - **Inline** — a `schema:` block on a kind body in
   `.mdsmith.yml`. Uses the new matcher engine
   (`regex:`, `repeat:`, `\#(digits)`, `\#(fmvar(...))`).
-- **File** — a `proto.md` referenced by
+- **Named YAML** — a `schema: <name>` reference to a
+  `.mdsmith/schemas/<name>.yaml` file (or an inline
+  `schemas:` registry entry of the same name). Same
+  matcher engine as the inline source, shared across
+  kinds. See [File-based YAML schemas](#file-based-yaml-schemas).
+- **proto.md** — a `proto.md` referenced by
   `rules.required-structure.schema:`. MDS020 still
   validates this source through its legacy parser
   today; the schema-package parser shipped with plan
@@ -29,7 +34,7 @@ mdsmith reads schemas from two sources:
   is exercised only by tests until the cutover
   follow-up wires MDS020 through.
 
-A kind may use only one source; setting both is a
+A kind may use only one source; setting two is a
 config error.
 
 ## Inline schemas on kinds
@@ -133,17 +138,16 @@ Backslashes pass through to RE2; interpolation uses
   `sequential: true` the validator asserts the
   captured numbers are strictly increasing without
   gaps.
-- **`fmvar(name)`** — looks up the document's
-  frontmatter field `name`, regex-escapes its value,
-  and substitutes it.
+- **`fmvar(name)`** — looks up frontmatter field
+  `name`, regex-escapes its value, and substitutes it.
 
 `repeat:` bounds how many consecutive matching
-headings the matcher claims. Omitting `repeat:`
-means exactly one; `{ min: 0 }` is zero-or-more;
+headings the matcher claims. Omitting `repeat:` means
+exactly one; `{ min: 0 }` is zero-or-more;
 `{ min: 0, max: 1 }` is optional; `{ min: 1 }` is
 one-or-more; bounded forms enforce both bounds.
-`repeat: { max: 0 }` and `repeat: { min > max }`
-each parse-error.
+`repeat: { max: 0 }` and `repeat: { min > max }` each
+parse-error.
 
 The wildcard-slot shape — `regex: '.+'` with
 `repeat: { min: 0 }` — is positional: it absorbs
@@ -183,11 +187,10 @@ a heading whose text is `A` or `B`.
 ### Section content
 
 `sections:` constrains nested headings. To pin down
-what AST nodes must appear inside a section's body —
-a required YAML code block, a settings table with
-specific columns, an ordered list with a minimum item
-count — add a `content:` list alongside the scope's
-existing fields.
+what AST nodes must appear inside a section's body — a
+required YAML code block, a settings table with
+specific columns — add a `content:` list alongside the
+scope's existing fields.
 
 ```yaml
 sections:
@@ -213,15 +216,14 @@ kind-specific fields:
   any non-matching nodes at that position even under
   `closed: true`.
 
-Entries match in declared order. A node that
-appears earlier than expected but matches a later
-listed entry is claimed out-of-order with a
-diagnostic — the same rule the heading-tree walker
-uses. Sub-shape mismatches (wrong code-block
-language, wrong table columns, list violating
-ordered/min/max) emit their own diagnostics but
-still consume the slot. Missing required entries
-anchor at the section's heading line.
+Entries match in declared order. A node that matches
+a later listed entry is claimed out-of-order with a
+diagnostic, the same rule the heading-tree walker
+uses. Sub-shape mismatches (wrong code-block language,
+wrong table columns, list violating ordered/min/max)
+emit their own diagnostics but still consume the slot.
+Missing required entries anchor at the section's
+heading line.
 
 `content:` is rejected on a slot scope (the
 wildcard-slot shape has no fixed identity to
@@ -233,10 +235,9 @@ match named sections.
 Any scope may carry a `rules:` block. The override
 sits on top of the rule's defaults — keys it sets
 replace the defaults wholesale; keys it omits keep
-their default value. The override applies only inside
-that scope's heading range. This is the way to say
-"this section is stricter than the rest of the
-document" without scattering glob overrides.
+their default value. It applies only inside that
+scope's heading range, so one section can be stricter
+than the rest of the document without glob overrides.
 
 ```yaml
 sections:
@@ -248,15 +249,11 @@ sections:
         max-words: 200
 ```
 
-Two follow-ups land later, tracked on plan 146:
-first, the override is not yet a config-style deep
-merge — nested maps and list merge modes (e.g.
-`placeholders` append) behave like a plain
-ApplySettings call. Second, the override stacks on
-rule defaults, not the rule's full per-file config;
-threading the full
-defaults → kinds → file globs → scope merge through
-the engine is the same follow-up.
+Two follow-ups land later (plan 146): the override is
+not yet a config-style deep merge (nested maps and
+list append modes behave like a plain ApplySettings
+call), and it stacks on rule defaults rather than the
+rule's full per-file config.
 
 If a scope's `rules:` block names a rule that does
 not exist or supplies settings the rule rejects, the
@@ -268,10 +265,7 @@ scope's heading line.
 Five rules ship per-scope prose constraints. Each is
 default-disabled and reuses the standard `rules:`
 surface — there is no separate schema vocabulary for
-"max words" or "forbidden text". Set them globally
-under top-level `rules:` for document-wide
-enforcement, or under a scope's `rules:` block for
-section-scoped enforcement.
+"max words" or "forbidden text".
 
 | Rule                                                                                                  | Setting                                        | Effect                                                                |
 | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------- |
@@ -281,17 +275,9 @@ section-scoped enforcement.
 | [MDS057 required-text-patterns](../../internal/rules/MDS057-required-text-patterns/README.md)         | `patterns: [{pattern, message, skip-indices}]` | Flag a section whose body does not match every configured regex.      |
 | [MDS058 required-mentions](../../internal/rules/MDS058-required-mentions/README.md)                   | `mentions: [str, ...]`                         | Flag a section that does not contain every listed substring.          |
 
-Document-wide example:
-
-```yaml
-rules:
-  required-mentions:
-    mentions: ["scope: production"]
-  forbidden-text:
-    contains: ["should", "may", "might"]
-```
-
-Per-section example, scoped to a `Diagnosis` section:
+Set them under top-level `rules:` for the whole
+document, or under a scope's `rules:` block for one
+section — scoped to a `Diagnosis` section here:
 
 ```yaml
 kinds:
@@ -313,9 +299,8 @@ per-scope filter keeps only diagnostics inside the
 section's range, so the same rule code works for
 document-wide and per-section enforcement.
 
-`skip-indices:` on MDS057 parses but currently does
-nothing; it activates when section-content `children:`
-ships in a later plan.
+`skip-indices:` on MDS057 parses but is inert until
+section-content `children:` ships in a later plan.
 
 ### Cross-references, acronyms, and index
 
@@ -339,12 +324,11 @@ kinds:
 ```
 
 `cross-references:` checks that every match of
-`pattern:` in the document body resolves to a heading
-slug after filling captures into `must-match:`. Use
-`{n}` for the first capture, `{1}` / `{2}` for
-numbered captures, or a named group name. The
-`skip-lines-matching:` regex exempts blockquoted or
-historical lines.
+`pattern:` in the body resolves to a heading slug
+after filling captures into `must-match:` (`{n}` for
+the first capture, `{1}` / `{2}` for numbered groups,
+or a named group). The `skip-lines-matching:` regex
+exempts blockquoted or historical lines.
 
 `acronyms:` flags first-use all-caps tokens
 (length 2-6) that lack a parenthesised expansion.
@@ -356,24 +340,44 @@ check document-wide.
 `index:` asks `mdsmith fix` to write a JSON side-
 output next to the source file describing requested
 sub-objects (`step-map`, `cross-ref-graph`,
-`word-counts`, `headings`). `mdsmith check` never
-writes the file. Output paths are resolved relative
-to the source file's directory; absolute paths and
-`..` traversal are rejected. See
+`word-counts`, `headings`); `mdsmith check` never
+writes it. Output paths resolve relative to the source
+file; absolute paths and `..` traversal are rejected.
+See
 [MDS020 required-structure](../../internal/rules/MDS020-required-structure/README.md#index-side-output)
 for the JSON shape per include entry.
 
-Today the scope override runs the rule again with
-the override's settings, in addition to the engine's
-normal run with the file-level settings. If the same
-rule is enabled globally and the override only
-tightens the cap, both runs may fire on the same
-line — producing two diagnostics where the user
-expected one. Workaround until engine-level dispatch
-lands: disable the rule globally for files that rely
-on the scope override (a kind or override that sets
-`rule-name: false` plus the scope's per-section
-override).
+## File-based YAML schemas
+
+A **named YAML schema** moves an inline `schema:`
+block into a `.mdsmith/schemas/<name>.yaml` file (or
+a top-level `schemas:` registry entry), and a kind
+references it by name. The body shares the inline
+matcher engine, so every `regex:`, `repeat:`, nested
+`sections:`, and `content:` shape carries across. The
+gain is reuse: one schema drives several kinds.
+
+```yaml
+# .mdsmith/schemas/rfc-v1.yaml — referenced by
+# `schema: rfc-v1` on one or more kinds
+filename: "RFC-[0-9][0-9][0-9][0-9].md"
+sections:
+  - heading: "Overview"
+  - heading: "Decision"
+```
+
+The `schema:` key is polymorphic: a scalar names a
+registry entry, a mapping is an inline body. The
+resolver substitutes a named reference for the
+schema's body before the kind validates, so a
+`schema: rfc-v1` kind matches a kind with the same
+body inline. A named `schema:` is mutually exclusive
+with the other sources, the same as an inline block.
+
+The [schema files reference](../reference/schema-files.md)
+covers the directory layout, the basename rule, the
+undeclared-name error, and the registry-vs-file
+collision in full.
 
 ## File-based schemas (`proto.md`)
 
@@ -431,19 +435,22 @@ documents the directive.
 
 ## Choosing a source
 
-| Need                                   | Inline | File               |
-| -------------------------------------- | ------ | ------------------ |
-| Short schema with no templated body    | yes    | works              |
-| Schema reused via `<?include?>`        | no     | yes                |
-| Frontmatter-body `{field}` sync        | no     | yes                |
-| Nested section tree                    | yes    | via heading levels |
-| Section content entries                | yes    | via `<?content?>`  |
-| Per-scope rule overrides               | yes    | no                 |
-| Stays next to other kind rule settings | yes    | indirect           |
+| Need                                   | Inline | Named YAML | proto.md           |
+| -------------------------------------- | ------ | ---------- | ------------------ |
+| Short schema with no templated body    | yes    | works      | works              |
+| Same schema shared across kinds        | no     | yes        | yes                |
+| Schema reused via `<?include?>`        | no     | no         | yes                |
+| Frontmatter-body `{field}` sync        | no     | no         | yes                |
+| Nested section tree                    | yes    | yes        | via heading levels |
+| Section content entries                | yes    | yes        | via `<?content?>`  |
+| Per-scope rule overrides               | yes    | yes        | no                 |
+| Stays next to other kind rule settings | yes    | no         | indirect           |
 
-A project can mix sources across kinds — some kinds use
-inline schemas, others use `proto.md` — but a single
-kind must pick one.
+A project can mix sources across kinds — some kinds
+use inline schemas, others a named YAML schema or a
+`proto.md` — but a single kind must pick one. A named
+YAML schema carries the inline matcher engine, trading
+the inline source's adjacency for reuse across kinds.
 
 ## Schema inheritance with `extends`
 
@@ -550,17 +557,15 @@ sections lists. `rule-readme`'s `nature` is
 
 ### Picking an input order
 
-The composed section list is the concatenation of each
-schema's sections (with same-heading scopes merged).
-Order matters for the "last required section" — if the
-later schema's required sections must appear before
-the earlier schema's required sections in the document,
-either reorder the kinds in `kind-assignment` or rewrite
-the document so the sections fall in composed order.
-The directive READMEs put `Pattern` after
-`Meta-Information` precisely so the composed ordering
-(`rule-readme` first, `directive-rule-readme` appended)
-matches the document layout.
+The composed section list concatenates each schema's
+sections (same-heading scopes merged). Order matters
+for the "last required section": when the later
+schema's required sections must precede the earlier
+schema's, reorder the kinds in `kind-assignment` or
+rewrite the document to match composed order. The
+directive READMEs put `Pattern` after
+`Meta-Information` so the composed ordering matches
+the document layout.
 
 ## Extracting data
 
@@ -572,20 +577,13 @@ mdsmith extract <kind> --format json|yaml|msgpack <file>
 ```
 
 emits a data tree whose nesting mirrors the schema
-hierarchy — no annotations required. The root carries a
-`frontmatter` object plus the projected sections beside
-it; literal headings key by slug, repeating sections
-become arrays whose elements retain every captured
-placeholder, a `heading: null` section's content hoists
-into its enclosing object, and `code-block` / `list` /
-`table` / `paragraph` content entries project under
-`code` / `items` / `rows` / `text`. Wildcard slots and
-unlisted headings are skipped. Set `bind: <name>` on a
-scope or content entry to override the default key;
-`bind: ""` hoists a scope's children into the parent.
-See
-[`mdsmith extract`](../reference/cli/extract.md) for the
-full projection rules and exit codes.
+hierarchy — no annotations required. Literal headings
+key by slug, repeating sections become arrays, and
+`code-block` / `list` / `table` / `paragraph` content
+entries project their bodies. Set `bind: <name>` on a
+scope or content entry to override the default key.
+See [`mdsmith extract`](../reference/cli/extract.md)
+for the full projection rules and exit codes.
 
 ## Diagnostics
 
@@ -600,6 +598,8 @@ mismatch`, and `out of order` mean.
 
 - [Section schema reference](../reference/section-schema.md)
   — the entry-shape grammar in full.
+- [Schema files](../reference/schema-files.md) — one
+  file per named schema under `.mdsmith/schemas/`.
 - [File kinds](file-kinds.md) — how kinds attach
   schemas (and other rule config) to file groups.
 - [Enforcing document structure with schemas](directives/enforcing-structure.md)

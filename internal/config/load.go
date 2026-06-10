@@ -95,6 +95,10 @@ func loadFromBytes(data []byte, sourcePath string, mergeKinds bool) (*Config, er
 		}
 	}
 
+	if err := mergeAndResolveSchemas(&cfg, sourcePath, mergeKinds); err != nil {
+		return nil, err
+	}
+
 	if err := ValidateKinds(&cfg); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
@@ -108,6 +112,31 @@ func loadFromBytes(data []byte, sourcePath string, mergeKinds bool) (*Config, er
 	}
 
 	return &cfg, nil
+}
+
+// mergeAndResolveSchemas builds the named-schema registry, then
+// resolves each kind's named `schema:` reference to a body, so
+// ValidateKinds and the merge layer see one inline body — exactly as
+// they do for an inline-on-kind schema. The registry combines inline
+// `schemas:` entries with file-defined schemas under
+// `.mdsmith/schemas/` (plan 241). When mergeKinds is false (the
+// in-memory ParseBytes path), disk discovery is skipped and the
+// resolver runs against the inline registry alone.
+func mergeAndResolveSchemas(cfg *Config, sourcePath string, mergeKinds bool) error {
+	var reg map[string]discoveredSchema
+	if mergeKinds {
+		merged, err := mergeSchemaFiles(cfg, sourcePath)
+		if err != nil {
+			return fmt.Errorf("loading schema files: %w", err)
+		}
+		reg = merged
+	} else {
+		reg = resolveInlineRegistry(cfg, sourcePath)
+	}
+	if err := resolveNamedSchemas(cfg, reg); err != nil {
+		return fmt.Errorf("resolving schemas: %w", err)
+	}
+	return nil
 }
 
 // topLevelKeySet returns the set of top-level YAML mapping keys
