@@ -147,7 +147,11 @@ flips.
   `\`+CR+`#` input is also committed as a `testdata/fuzz/FuzzParsePath` seed.
   Branch coverage rose from 342/344 to 394/396 (only the two known structural
   conditions remain). A final 300 s deep fuzz run (~2.12M execs) after the
-  round-5 fixes reported no further divergence.
+  round-5 fixes reported no further divergence. A round-6 420 s fuzz run then
+  found one more input in the same CR family — a multiline close fused from
+  `"""`+CR+`#` by stripCR, which CUE's raw-byte scanner does not treat as a
+  close — fixed by matching the close on raw bytes and pinned in the corpus,
+  the unit tables, and two committed fuzz seeds.
 - **Item 7 (fieldinterp boundary error passthrough) was SKIPPED.**
   `fieldinterp.ParseCUEPath` returns `[]string` (nil on error) and is used by
   seven call sites (`catalog/rule.go`, `schema/matcher.go`, `schema/
