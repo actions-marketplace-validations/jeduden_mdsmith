@@ -12,9 +12,9 @@
 // with the path of the field that failed.
 //
 // [ParsePath] parses the string-label subset of CUE paths — dotted,
-// quoted, bracket, and raw-string labels — into a [Path]; index,
-// definition, and hidden selectors are rejected with an error naming
-// the kind. [MakePath] constructs a Path directly from segments, and
+// quoted, bracket, raw-string, and multiline-string labels — into a
+// [Path]; index, definition, and hidden selectors are rejected with an
+// error naming the kind. [MakePath] constructs a Path directly from segments, and
 // deliberately accepts segments ParsePath cannot parse (data keys
 // like "true" or "a.b"), mirroring cue.MakePath.
 //

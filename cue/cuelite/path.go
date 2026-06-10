@@ -106,6 +106,19 @@ func MakePath(segments ...string) Path {
 // opening a raw string) is a definition selector, not a string label, and
 // is rejected.
 //
+// Multiline-string selector. A triple-quoted multiline string — both the
+// plain `"""…"""` form and the raw `#"""…"""#` (or ##"""…"""##, …) form — is a
+// CUE string label, accepted as the HEAD selector or as a bracket operand but
+// NOT after a dot (a."""…""" and a.#"""…"""# reject, mirroring the raw-string
+// selector). The opener must be followed immediately by a lone '\n' or exactly
+// one '\r\n'; the closing line's leading whitespace is the indentation stripped
+// from every content line; and the final newline before the close is excluded.
+// Escapes follow the plain/raw dialect of the matching hash level, with
+// surrogate pairing. CUE strips '\r' from the literal only AFTER it has scanned
+// the opener and the escapes on the raw bytes, so a CR run at the opener, a CR
+// between a backslash and its escape selector, or a CR among \u/\U hex digits
+// is a scan error CUE rejects — not a stripped-away no-op.
+//
 // Bracket selector. A bracket string-index selector a["b"] (and a[#"b"#])
 // is a CUE string label, the same segment as the dotted form a."b". CUE
 // tolerates whitespace and a newline before the bracketed string but only
@@ -182,13 +195,15 @@ const (
 // more dot- or bracket-selectors:
 //
 //   - the head and a bracketed selector accept an identifier, a
-//     double-quoted string, OR a multi-hash raw string (#"..."#);
+//     double-quoted string, a multi-hash raw string (#"..."#), OR a
+//     triple-quoted multiline string ("""…""" or #"""…"""#);
 //   - a dot-selector accepts only an identifier or a double-quoted string —
-//     a raw string after a dot is rejected, matching cue.ParsePath;
+//     a raw string or a multiline string after a dot is rejected, matching
+//     cue.ParsePath;
 //   - a "[" opens a bracket string-index selector ("a[\"b\"]"), whose
-//     operand must be a quoted or raw string (a bare number "a[0]" stays an
-//     index-label rejection), with newline tolerated before the operand but
-//     not before the closing "]".
+//     operand must be a quoted, raw, or multiline string (a bare number
+//     "a[0]" stays an index-label rejection), with newline tolerated before
+//     the operand but not before the closing "]".
 //
 // A leading dot, a trailing dot, an empty decoded value, a malformed quoted
 // string, an unexpected character, the literal true/false/null as the
