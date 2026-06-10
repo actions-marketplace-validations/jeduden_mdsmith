@@ -443,12 +443,13 @@ class FakeDisposable {
 }
 
 // FakeClient stands in for a vscode-languageclient LanguageClient. It
-// records start/stop calls, lets a test force start() to reject, and
-// captures the mdsmith/superseded notification handler so the supersede
-// path can be exercised without a live server.
+// records start/stop/sendNotification calls, lets a test force start()
+// to reject, and captures the mdsmith/superseded notification handler
+// so the supersede path can be exercised without a live server.
 class FakeClient {
   started = 0;
   stopped = 0;
+  notifications = 0;
   running = false;
   startRejection: Error | undefined;
   supersededHandler: (() => void) | undefined;
@@ -470,6 +471,9 @@ class FakeClient {
   }
   isRunning(): boolean {
     return this.running;
+  }
+  async sendNotification(_type: unknown, _params?: unknown): Promise<void> {
+    this.notifications++;
   }
 }
 
@@ -749,19 +753,12 @@ describe("Wiring LSP client lifecycle", () => {
     // only while the client is running.
     const { wiring, fake, lastClient } = makeWiring();
     await wiring.activate(makeContext());
-    let notified = 0;
     const client = lastClient();
-    const origSend = client.isRunning.bind(client);
-    // Spy on the notification path by counting sendNotification calls.
-    (client as unknown as { sendNotification: () => Promise<void> }).sendNotification = () => {
-      notified++;
-      return Promise.resolve();
-    };
-    expect(origSend()).toBe(true);
+    expect(client.isRunning()).toBe(true);
     fake.fireConfigChange(true);
-    expect(notified).toBe(1);
+    expect(client.notifications).toBe(1);
     // An unrelated change does not nudge the server.
     fake.fireConfigChange(false);
-    expect(notified).toBe(1);
+    expect(client.notifications).toBe(1);
   });
 });

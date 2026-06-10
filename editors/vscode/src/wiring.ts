@@ -332,6 +332,10 @@ export const RUN_ON_TYPE = "onType";
 export const RUN_ON_SAVE = "onSave";
 export const RUN_OFF = "off";
 
+// RESTART_SERVER_COMMAND is registered in activate() and re-invoked by
+// the crash-recovery prompt; one constant keeps the two from drifting.
+const RESTART_SERVER_COMMAND = "mdsmith.restartServer";
+
 // TRANSPORT_STDIO_DEFAULT is the wire value of TransportKind.stdio. The
 // Wiring uses it only as the default when extension.ts does not inject
 // the real enum value; referencing the enum directly here would pull the
@@ -438,7 +442,7 @@ export class Wiring {
     // Channel" so the user can read the failure reason). Restart will
     // try a fresh start.
     context.subscriptions.push(
-      this.api.commands.registerCommand("mdsmith.restartServer", () => this.restartServer(context)),
+      this.api.commands.registerCommand(RESTART_SERVER_COMMAND, () => this.restartServer(context)),
       this.api.commands.registerCommand("mdsmith.showOutput", () => this.showOutput())
     );
 
@@ -665,7 +669,7 @@ export class Wiring {
       "Show Output"
     );
     if (choice === "Restart Language Server") {
-      await this.api.commands.executeCommand("mdsmith.restartServer");
+      await this.api.commands.executeCommand(RESTART_SERVER_COMMAND);
     } else if (choice === "Show Output") {
       this.showOutput();
     }
@@ -737,7 +741,7 @@ export class Wiring {
       appendOutput: (text: string) => {
         this.getOutputChannel().append(text);
       },
-      showOutput: () => this.getOutputChannel().show(true),
+      showOutput: () => this.showOutput(),
     });
 
     // showNotification routes failures (messages containing "failed" or
@@ -751,6 +755,14 @@ export class Wiring {
           : api.window.showInformationMessage(msg, ...buttons)
       );
     };
+
+    // showError surfaces a command failure; the palette commands share
+    // this one helper so the surfacing cannot drift between them.
+    const showError = (msg: string): Promise<void> =>
+      Promise.resolve(api.window.showErrorMessage(msg)).then(() => {});
+
+    const getDiagnostics = (filePath: string) =>
+      api.languages.getDiagnostics(api.Uri.file(filePath));
 
     const confirmDestructive = (label: string) => async () => {
       const answer = await api.window.showWarningMessage(
@@ -784,8 +796,7 @@ export class Wiring {
           workspaceRoot: getWorkspaceRoot(),
           isTrusted,
           showInfo: (msg, ...buttons) => showNotification(msg, ...buttons),
-          showError: (msg) =>
-            Promise.resolve(api.window.showErrorMessage(msg)).then(() => {}),
+          showError,
           ...outputDeps(),
         });
       }),
@@ -797,8 +808,7 @@ export class Wiring {
           isTrusted,
           confirm: confirmDestructive("mdsmith merge-driver install"),
           showInfo: (msg, ...buttons) => showNotification(msg, ...buttons),
-          showError: (msg) =>
-            Promise.resolve(api.window.showErrorMessage(msg)).then(() => {}),
+          showError,
           ...outputDeps(),
         });
       }),
@@ -811,8 +821,7 @@ export class Wiring {
           isTrusted,
           confirm: confirmDestructive("mdsmith fix ."),
           showInfo: (msg, ...buttons) => showNotification(msg, ...buttons),
-          showError: (msg) =>
-            Promise.resolve(api.window.showErrorMessage(msg)).then(() => {}),
+          showError,
           ...outputDeps(),
         });
       }),
@@ -820,19 +829,16 @@ export class Wiring {
       api.commands.registerCommand("mdsmith.kinds.resolve", async () => {
         await runKindsResolve({
           getActiveFilePath: getActiveMarkdownFilePath,
-          getDiagnostics: (filePath) =>
-            api.languages.getDiagnostics(api.Uri.file(filePath)),
+          getDiagnostics,
           openVirtualDoc,
-          showError: (msg) =>
-            Promise.resolve(api.window.showErrorMessage(msg)).then(() => {}),
+          showError,
         });
       }),
 
       api.commands.registerCommand("mdsmith.kinds.why", async () => {
         await runKindsWhy({
           getActiveFilePath: getActiveMarkdownFilePath,
-          getDiagnostics: (filePath) =>
-            api.languages.getDiagnostics(api.Uri.file(filePath)),
+          getDiagnostics,
           pickRule: async (rules) => {
             const items =
               rules.length > 0
@@ -850,8 +856,7 @@ export class Wiring {
             });
           },
           openVirtualDoc,
-          showError: (msg) =>
-            Promise.resolve(api.window.showErrorMessage(msg)).then(() => {}),
+          showError,
         });
       }),
 
