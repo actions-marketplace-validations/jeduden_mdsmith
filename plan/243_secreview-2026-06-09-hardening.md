@@ -1,7 +1,7 @@
 ---
 id: 243
 title: 'Security hardening batch — 2026-06-09 audit'
-status: "🔲"
+status: "🔳"
 model: sonnet
 summary: >-
   Two low-risk hardening fixes from the 2026-06-09 audit:
@@ -51,11 +51,11 @@ package already imports `yamlutil` for the pre-check.
 
 ## Tasks
 
-1. [ ] Add a failing test that drives `buildCUESource`
+1. [x] Add a failing test that drives `buildCUESource`
    down its marshal-error branch and asserts an error
    return (not a panic); thread the error through
    `Render` and its catalog caller.
-2. [ ] Replace the `panic` in `buildCUESource` with an
+2. [x] Replace the `panic` in `buildCUESource` with an
    error return.
 3. [ ] Replace `yaml.Unmarshal(data, &node)` in
    `parseConventionFileBody` with
@@ -65,7 +65,7 @@ package already imports `yamlutil` for the pre-check.
 
 ## Acceptance Criteria
 
-- [ ] `buildCUESource` returns an error on marshal
+- [x] `buildCUESource` returns an error on marshal
       failure; no panic reaches the catalog render path or
       the LSP.
 - [ ] Convention-file YAML is parsed via

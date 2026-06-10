@@ -113,7 +113,10 @@ func (t *Template) Render(fm map[string]any) (string, error) {
 	if fm == nil {
 		fm = map[string]any{}
 	}
-	src := buildSource(fm, t.expr)
+	src, err := buildSource(fm, t.expr)
+	if err != nil {
+		return "", err
+	}
 	val := t.ctx.CompileString(src)
 	if err := val.Err(); err != nil {
 		return "", fmt.Errorf("evaluating cue expression: %w", err)
@@ -144,10 +147,11 @@ func (t *Template) Render(fm map[string]any) (string, error) {
 //   - The synthetic outField holding the user's expression.
 //
 // JSON marshalling is infallible for the value shapes
-// produced by the YAML frontmatter loader, so any encoding
-// failure indicates a programming bug upstream and the panic
-// is the correct response.
-func buildSource(fm map[string]any, expr string) string {
+// produced by the YAML frontmatter loader. A non-zero error
+// indicates a non-JSON-serialisable type reached frontmatter,
+// which is a programming error upstream; returning the error
+// instead of panicking keeps the LSP server alive.
+func buildSource(fm map[string]any, expr string) (string, error) {
 	// Single-pass filter: drop the renderer's synthetic field
 	// names from the JSON-emitted map AND collect the sorted
 	// alias keys in the same walk. Both surfaces use the same
@@ -171,7 +175,7 @@ func buildSource(fm map[string]any, expr string) string {
 
 	fmJSON, err := json.Marshal(emit)
 	if err != nil {
-		panic(fmt.Errorf("cuetemplate: encoding frontmatter: %w", err))
+		return "", fmt.Errorf("encoding frontmatter: %w", err)
 	}
 	var src []byte //nolint:prealloc
 	src = append(src, []byte(
@@ -186,5 +190,5 @@ func buildSource(fm map[string]any, expr string) string {
 	}
 	src = append(src, []byte(fmt.Sprintf("%s: %s\n",
 		outField, expr))...)
-	return string(src)
+	return string(src), nil
 }

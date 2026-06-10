@@ -218,3 +218,24 @@ func TestTemplate_Render_CUEKeywordKeyIsQuoted(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "MDS001", got)
 }
+
+// TestTemplate_Render_UnmarshalableValueReturnsError pins that
+// a frontmatter value that json.Marshal cannot serialise produces
+// an error return from Render rather than a panic. A chan is the
+// canonical non-JSON-marshallable Go type; go-yaml v3 scalars
+// never produce one, but the guard is needed for future-safety
+// and to keep the LSP alive if the type escapes into frontmatter.
+func TestTemplate_Render_UnmarshalableValueReturnsError(t *testing.T) {
+	tpl, err := Compile(`"literal"`)
+	require.NoError(t, err)
+	// Use require.NotPanics so a panic produces a clear test failure
+	// rather than crashing the test binary with a non-deferred panic.
+	var gotErr error
+	require.NotPanics(t, func() {
+		_, gotErr = tpl.Render(map[string]any{
+			"bad": make(chan int),
+		})
+	})
+	require.Error(t, gotErr)
+	assert.Contains(t, gotErr.Error(), "encoding frontmatter")
+}
