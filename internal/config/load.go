@@ -103,12 +103,8 @@ func loadFromBytes(data []byte, sourcePath string, mergeKinds bool) (*Config, er
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
-	if err := rejectRemovedBuildKeys(data); err != nil {
-		return nil, fmt.Errorf("parsing config file: %w", err)
-	}
-
-	if err := ValidateBuildConfig(&cfg); err != nil {
-		return nil, fmt.Errorf("validating config: %w", err)
+	if err := checkBuildConfig(data, &cfg); err != nil {
+		return nil, err
 	}
 
 	if err := applyConvention(&cfg); err != nil {
@@ -168,6 +164,20 @@ func topLevelKeySet(data []byte) map[string]bool {
 // yamlHasKey returns true if the top-level YAML mapping contains the given key.
 func yamlHasKey(data []byte, key string) bool {
 	return topLevelKeySet(data)[key]
+}
+
+// checkBuildConfig runs the two build-config validators that must run
+// after the main YAML parse but before convention application. It is
+// extracted from loadFromBytes to keep that function under the funlen
+// limit.
+func checkBuildConfig(data []byte, cfg *Config) error {
+	if err := rejectRemovedBuildKeys(data); err != nil {
+		return fmt.Errorf("parsing config file: %w", err)
+	}
+	if err := ValidateBuildConfig(cfg); err != nil {
+		return fmt.Errorf("validating config: %w", err)
+	}
+	return nil
 }
 
 // rejectRemovedBuildKeys errors if the config still carries a

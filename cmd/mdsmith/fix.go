@@ -39,6 +39,48 @@ func runFix(args []string) int {
 	return fixDiscovered(opts)
 }
 
+// buildFixFlags holds the flag variables for the --build-* group.
+// Separating them keeps parseFixFlags under the funlen limit and
+// co-locates the build-flag descriptions with their defaults.
+type buildFixFlags struct {
+	noBuild   bool
+	buildOnly bool
+	dryRun    bool
+	recipe    string
+	timeout   time.Duration
+}
+
+func (b *buildFixFlags) register(fs *flag.FlagSet) {
+	fs.BoolVar(&b.noBuild, "no-build", false, "Run the lint-fix pass only; skip the build pass")
+	fs.BoolVar(&b.buildOnly, "build-only", false, "Run the build pass only; skip the lint-fix pass")
+	fs.StringVar(&b.recipe, "build-recipe", "", "Only build <?build?> directives whose recipe matches NAME")
+	fs.BoolVar(&b.dryRun, "build-dry-run", false, "Enumerate build targets without running any recipe")
+	fs.DurationVar(&b.timeout, "build-timeout", 30*time.Second, "Per-recipe timeout (e.g. 30s, 2m)")
+}
+
+func (b buildFixFlags) toPassOpts() buildPassOpts {
+	return buildPassOpts{
+		noBuild:   b.noBuild,
+		buildOnly: b.buildOnly,
+		recipe:    b.recipe,
+		dryRun:    b.dryRun,
+		timeout:   b.timeout,
+	}
+}
+
+// setFixUsage wires the usage message for the fix subcommand onto fs.
+func setFixUsage(fs *flag.FlagSet) {
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: mdsmith fix [flags] [files...]\n\n"+
+			"Auto-fix lint issues in Markdown files.\n\n"+
+			"Files can be paths, directories (walked recursively for *.md), or glob patterns.\n"+
+			"Pass - to read from stdin (rejected: files must be writable).\n"+
+			"With no file arguments, discovers files using config patterns.\n\n"+
+			"Flags:\n")
+		fs.PrintDefaults()
+	}
+}
+
 // parseFixFlags configures the `fix` flag set, parses args, and
 // returns the resolved opts plus positional arguments. The bool
 // `hasStdin` is true when the caller passed `-` as a positional
@@ -47,11 +89,10 @@ func runFix(args []string) int {
 func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 	fs := flag.NewFlagSet("fix", flag.ContinueOnError)
 	var (
-		configPath, format, maxInputSize, buildRecipe                         string
+		configPath, format, maxInputSize                                      string
 		noColor, quiet, verbose, noGitignore, followSymlinks, explain, dryRun bool
-		noBuild, buildOnly, buildDryRun                                       bool
-		buildTimeout                                                          time.Duration
 	)
+	var bf buildFixFlags
 
 	fs.StringVarP(&configPath, "config", "c", "", "Override config file path")
 	fs.StringVarP(&format, "format", "f", "text", "Output format: text, json")
@@ -67,21 +108,8 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 	fs.BoolVar(&dryRun, "dry-run", false,
 		"Preview which files would change without writing; "+
 			"per-file output lists the rules that would fire and their counts")
-	fs.BoolVar(&noBuild, "no-build", false, "Run the lint-fix pass only; skip the build pass")
-	fs.BoolVar(&buildOnly, "build-only", false, "Run the build pass only; skip the lint-fix pass")
-	fs.StringVar(&buildRecipe, "build-recipe", "", "Only build <?build?> directives whose recipe matches NAME")
-	fs.BoolVar(&buildDryRun, "build-dry-run", false, "Enumerate build targets without running any recipe")
-	fs.DurationVar(&buildTimeout, "build-timeout", 30*time.Second, "Per-recipe timeout (e.g. 30s, 2m)")
-
-	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: mdsmith fix [flags] [files...]\n\n"+
-			"Auto-fix lint issues in Markdown files.\n\n"+
-			"Files can be paths, directories (walked recursively for *.md), or glob patterns.\n"+
-			"Pass - to read from stdin (rejected: files must be writable).\n"+
-			"With no file arguments, discovers files using config patterns.\n\n"+
-			"Flags:\n")
-		fs.PrintDefaults()
-	}
+	bf.register(fs)
+	setFixUsage(fs)
 
 	if err := fs.Parse(args); err != nil {
 		if code := reportFlagParseErr(err, os.Stderr, "mdsmith: fix"); code >= 0 {
@@ -89,12 +117,11 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 		}
 	}
 
-	// --quiet suppresses verbose
 	if quiet {
 		verbose = false
 	}
 
-	if noBuild && buildOnly {
+	if bf.noBuild && bf.buildOnly {
 		fmt.Fprintf(os.Stderr, "mdsmith: fix: --no-build and --build-only are mutually exclusive\n")
 		return fixCLIOpts{}, nil, false, 2
 	}
@@ -114,13 +141,7 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 		maxInputSize: maxInputSize,
 		explain:      explain,
 		dryRun:       dryRun,
-		build: buildPassOpts{
-			noBuild:   noBuild,
-			buildOnly: buildOnly,
-			recipe:    buildRecipe,
-			dryRun:    buildDryRun,
-			timeout:   buildTimeout,
-		},
+		build:        bf.toPassOpts(),
 	}, fileArgs, hasStdin, -1
 }
 

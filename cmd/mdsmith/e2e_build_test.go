@@ -149,7 +149,8 @@ func TestE2E_Build_TimeoutKillsRecipe(t *testing.T) {
 	dir := writeBuildRepo(t, "    slow:\n      command: sleep 30\n")
 	writeFixture(t, dir, "doc.md", buildDirective("slow", "", "out.txt"))
 
-	_, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "--build-timeout", "200ms", "doc.md")
+	_, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color",
+		"--build-only", "--build-timeout", "200ms", "doc.md")
 	assert.Equal(t, 2, code)
 	assert.Contains(t, stderr, "FAIL")
 }

@@ -269,3 +269,66 @@ func TestArgvExpansion_ParamWhitespaceStaysOneEntry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"tool", "a b c"}, argv)
 }
+
+func TestSubstituteParams_UnclosedBrace(t *testing.T) {
+	// An unclosed { is written through literally rather than panicking.
+	out, err := substituteParams("{unclosed", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "{unclosed", out)
+}
+
+func TestSubstituteParams_AbsentOptionalParam(t *testing.T) {
+	// A {name} placeholder with no matching param expands to the empty string.
+	out, err := substituteParams("{missing}", map[string]string{})
+	require.NoError(t, err)
+	assert.Equal(t, "", out)
+}
+
+func TestBuild_RecipeDoesNotProduceOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh is not available on Windows")
+	}
+	root := t.TempDir()
+	bindir := t.TempDir()
+	// Recipe exits 0 but never writes the staged output file.
+	script := writeScript(t, bindir, "noop.sh", `exit 0`)
+	b := NewCustomBuilder(map[string]RecipeSpec{
+		"noop": recipeCmd(script),
+	})
+	err := b.Build(context.Background(), Target{
+		Recipe:  "noop",
+		Root:    root,
+		Outputs: []string{"out.txt"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not produce declared output")
+}
+
+func TestBuild_OutputEscapingRootErrors(t *testing.T) {
+	root := t.TempDir()
+	b := NewCustomBuilder(map[string]RecipeSpec{
+		"echo": recipeCmd("echo hi"),
+	})
+	err := b.Build(context.Background(), Target{
+		Recipe:  "echo",
+		Root:    root,
+		Outputs: []string{"../escape.txt"},
+	})
+	require.Error(t, err)
+}
+
+func TestBuild_InputGlobMalformed(t *testing.T) {
+	root := t.TempDir()
+	b := NewCustomBuilder(map[string]RecipeSpec{
+		"echo": recipeCmd("echo hi"),
+	})
+	// "[z-a]" is a character class with inverted range — doublestar returns
+	// an error for it.
+	err := b.Build(context.Background(), Target{
+		Recipe:  "echo",
+		Root:    root,
+		Inputs:  []string{"[z-a]"},
+		Outputs: []string{"out.txt"},
+	})
+	require.Error(t, err)
+}

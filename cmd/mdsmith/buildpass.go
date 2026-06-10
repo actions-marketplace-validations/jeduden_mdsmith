@@ -49,11 +49,25 @@ func runBuildPass(
 	cfg *config.Config, cfgPath string, files []string, opts buildPassOpts, w io.Writer,
 ) int {
 	root := rootDirFromConfig(cfgPath)
+
+	// Filter out ignored files so the build pass honours the same
+	// cfg.Ignore patterns the lint pass applies internally. When a
+	// directory argument is expanded (e.g. "mdsmith fix .") the file
+	// list may include fixture or demo files that lint skips silently;
+	// without this filter the build pass would try to dispatch directives
+	// in those files, failing on undefined recipes.
+	nonIgnored := make([]string, 0, len(files))
+	for _, f := range files {
+		if !config.IsIgnored(cfg.Ignore, workspaceRelativePath(f, root)) {
+			nonIgnored = append(nonIgnored, f)
+		}
+	}
+
 	recipes := buildRecipeSpecs(cfg)
 
-	targets, errs := collectBuildTargets(files, root, opts.recipe, opts.maxBytes)
+	targets, errs := collectBuildTargets(nonIgnored, root, opts.recipe, opts.maxBytes)
 	for _, err := range errs {
-		fmt.Fprintf(w, "mdsmith: %v\n", err)
+		_, _ = fmt.Fprintf(w, "mdsmith: %v\n", err)
 	}
 
 	if len(targets) == 0 {
@@ -73,15 +87,15 @@ func runBuildPass(
 	for _, bt := range targets {
 		label := fmt.Sprintf("%s:%d (%s)", bt.file, bt.line, bt.target.Recipe)
 		if opts.dryRun {
-			fmt.Fprintf(w, "build %s: DRY-RUN\n", label)
+			_, _ = fmt.Fprintf(w, "build %s: DRY-RUN\n", label)
 			continue
 		}
 		if err := runOneTarget(builder, bt, timeout); err != nil {
-			fmt.Fprintf(w, "build %s: FAIL: %v\n", label, err)
+			_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, err)
 			failed = true
 			continue
 		}
-		fmt.Fprintf(w, "build %s: OK\n", label)
+		_, _ = fmt.Fprintf(w, "build %s: OK\n", label)
 	}
 
 	if failed || len(errs) > 0 {

@@ -23,6 +23,22 @@ func TestLoad_RecipesWithoutBaseURLOK(t *testing.T) {
 	require.Contains(t, cfg.Build.Recipes, "r")
 }
 
+func TestLoad_RejectsInvalidBuildConfig(t *testing.T) {
+	// A recipe that embeds a collective placeholder in a larger token is
+	// invalid. loadFromBytes must surface the ValidateBuildConfig error.
+	yml := []byte("build:\n  recipes:\n    x:\n      command: tool -o{outputs}\n")
+	_, err := loadFromBytes(yml, "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outputs")
+}
+
+func TestCheckBuildConfig_NoBuildKey(t *testing.T) {
+	// A config with no build: key should pass checkBuildConfig without error.
+	yml := []byte("rules: {}\n")
+	_, err := loadFromBytes(yml, "", false)
+	require.NoError(t, err)
+}
+
 // --- ValidateBuildConfig ---
 
 func TestValidateBuildConfig_Nil(t *testing.T) {
