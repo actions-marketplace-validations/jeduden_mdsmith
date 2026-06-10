@@ -30,3 +30,32 @@ func TestRootGoModStaysInstallable(t *testing.T) {
 			r.Old.Path, r.New.Path)
 	}
 }
+
+// TestRootGoModCarriesNoDevTools keeps dev-only tools (golangci-lint,
+// vhs, gobco) out of the module graph that `go install` and library
+// consumers must resolve. A tool directive pulls the tool's full
+// dependency tree into go.sum and raises the root `go` floor to the
+// tool's own: vhs v0.11.0 declares `go 1.25.8` and dragged the whole
+// module from 1.25.0 (the highest floor among real dependencies) up
+// to 1.25.8, forcing a toolchain download on every consumer install.
+// Dev tools belong in go.tools.mod, invoked via
+// `go tool -modfile=go.tools.mod <tool>`.
+func TestRootGoModCarriesNoDevTools(t *testing.T) {
+	data, err := os.ReadFile("../../go.mod")
+	require.NoError(t, err)
+	f, err := modfile.Parse("go.mod", data, nil)
+	require.NoError(t, err)
+
+	for _, tool := range f.Tool {
+		assert.Failf(t, "tool directive in root go.mod",
+			"go.mod declares tool %s; move it to go.tools.mod so its dependency "+
+				"tree and go-version floor stay out of the consumer-facing module graph",
+			tool.Path)
+	}
+	if f.Toolchain != nil {
+		assert.Failf(t, "toolchain directive in root go.mod",
+			"go.mod pins toolchain %s; `go install m@version` honors it, forcing that "+
+				"exact toolchain download on consumers — the go directive alone sets the floor",
+			f.Toolchain.Name)
+	}
+}

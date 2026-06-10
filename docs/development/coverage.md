@@ -33,7 +33,7 @@ an `if` or `switch` were taken.
 condition-level branch coverage:
 
 ```bash
-go tool gobco ./...
+go tool -modfile=go.tools.mod gobco ./...
 ```
 
 Flags:
