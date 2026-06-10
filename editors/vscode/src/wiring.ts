@@ -1,18 +1,40 @@
-// Wiring helpers extracted from extension.ts so the spawn/glob/error
-// shapes can be unit-tested without booting a real VS Code host.
+// Wiring is the VS Code extension's composition root: it owns the
+// LanguageClient lifecycle, the .mdsmith.yml watcher, the shared output
+// channel, and every command registration. extension.ts shrinks to
+// constructing one Wiring with the live `vscode` namespace and the
+// LanguageClient ctor, then handing over.
 //
-// These functions deliberately depend only on the types from
-// `vscode-languageclient/node` plus a couple of structural shapes
-// (FileSystemWatcher, Uri-like) so `bun test` can stand in lightweight
-// fakes without pulling in the full `vscode` runtime.
+// Crucially, this module imports `vscode` and `vscode-languageclient`
+// only in *type* position — never as runtime values — so `bun test` can
+// load it and drive the orchestration with lightweight fakes (a fake
+// `VscodeApi` plus a `createClient` factory) without the editor runtime,
+// which require()s `vscode` at load time. The concrete `vscode` and
+// `LanguageClient` cross the boundary as injected parameters; the
+// boundary between the live editor API and this logic is exactly the
+// Wiring constructor.
 
-import {
+import type {
   LanguageClientOptions,
   ServerOptions,
   TransportKind
 } from "vscode-languageclient/node";
 
 import type { BinaryCandidate } from "./binary";
+import { resolveBinary as resolveBinaryImpl, findBinaryCandidates as findBinaryCandidatesImpl } from "./binary";
+import { MdsmithErrorHandler } from "./commands/error-handler";
+import { runFixWorkspace } from "./commands/fix-workspace";
+import { runInit } from "./commands/init";
+import { runMergeDriverInstall } from "./commands/merge-driver";
+import { runKindsResolve, runKindsWhy, makeKindsContentProvider } from "./commands/kinds";
+import { KINDS_SCHEME, kindsContentUri, parseKindsUri } from "./commands/virtual-doc";
+import {
+  RULE_SCHEME,
+  OPEN_RULE_DOC_COMMAND,
+  buildRuleDocUri,
+  isRuleId,
+  provideRuleDocContent,
+  rewriteHoverMarkdown,
+} from "./commands/rule-doc";
 
 // FileSystemWatcherLike is the structural subset of
 // vscode.FileSystemWatcher that LanguageClientOptions.synchronize.fileEvents
@@ -309,3 +331,582 @@ export function decideClose(
 export const RUN_ON_TYPE = "onType";
 export const RUN_ON_SAVE = "onSave";
 export const RUN_OFF = "off";
+
+// TRANSPORT_STDIO_DEFAULT is the wire value of TransportKind.stdio. The
+// Wiring uses it only as the default when extension.ts does not inject
+// the real enum value; referencing the enum directly here would pull the
+// vscode-languageclient runtime into bun test. The DEFAULT_DEPS that
+// extension.ts supplies pass the genuine TransportKind.stdio.
+const TRANSPORT_STDIO_DEFAULT = 0 as TransportKind;
+
+// VscodeApi is the live `vscode` namespace, injected into Wiring rather
+// than imported. The `import("vscode")` here is a *type* query — erased
+// at compile time — so this module never triggers a runtime
+// `require("vscode")` and stays loadable under `bun test`.
+export type VscodeApi = typeof import("vscode");
+
+// FileSystemWatcher / OutputChannel / Uri are referenced only in type
+// position (again, erased) so Wiring's fields and helpers can name the
+// concrete vscode shapes without importing the runtime.
+type FileSystemWatcher = import("vscode").FileSystemWatcher;
+type OutputChannel = import("vscode").OutputChannel;
+type Uri = import("vscode").Uri;
+
+// ClientLike is the structural subset of vscode-languageclient's
+// LanguageClient that Wiring drives. extension.ts injects a factory that
+// returns the real LanguageClient; tests inject a fake. Keeping it
+// structural (rather than importing the class) is what lets this module
+// stay off the languageclient runtime.
+export interface ClientLike {
+  onNotification(method: string, handler: () => void): { dispose(): void };
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  isRunning(): boolean;
+  sendNotification(type: unknown, params?: unknown): Promise<void>;
+}
+
+// CreateClientFn constructs a language client from the same arguments
+// the real `new LanguageClient(id, name, serverOptions, clientOptions)`
+// takes. Injected so the construction — the one spot that needs the
+// languageclient runtime — lives in extension.ts.
+export type CreateClientFn = (
+  id: string,
+  name: string,
+  serverOptions: ServerOptions,
+  clientOptions: LanguageClientOptions
+) => ClientLike;
+
+// WiringDeps are the boundary objects extension.ts injects. Everything
+// that needs the live editor or the languageclient runtime arrives here;
+// the rest of Wiring is plain logic.
+export interface WiringDeps {
+  api: VscodeApi;
+  createClient: CreateClientFn;
+  // Optional seams; production uses the binary.ts implementations and
+  // TransportKind.stdio. Tests stub them to avoid real binary lookups
+  // and the languageclient enum import.
+  resolveBinary?: (configuredPath: string, extensionPath: string) => string;
+  findBinaryCandidates?: (extensionPath: string) => ReadonlyArray<BinaryCandidate>;
+  stdioTransport?: TransportKind;
+}
+
+// ExtensionContextLike is the slice of vscode.ExtensionContext that
+// Wiring consumes: the disposables array and the extension install path.
+export interface ExtensionContextLike {
+  subscriptions: Array<{ dispose(): void }>;
+  extensionPath: string;
+}
+
+// DidChangeConfigurationNotificationType is the notification id Wiring
+// pushes to nudge the server to re-pull configuration. The server keys
+// off the method name "workspace/didChangeConfiguration"; passing the
+// id as a string (rather than importing the typed
+// DidChangeConfigurationNotification.type) keeps Wiring off the
+// languageclient runtime. extension.ts no longer constructs the typed
+// notification — the method string is the contract the server matches.
+const DID_CHANGE_CONFIGURATION = "workspace/didChangeConfiguration";
+
+export class Wiring {
+  private readonly api: VscodeApi;
+  private readonly createClient: CreateClientFn;
+  private readonly resolveBinary: (configuredPath: string, extensionPath: string) => string;
+  private readonly findBinaryCandidates: (extensionPath: string) => ReadonlyArray<BinaryCandidate>;
+  private readonly stdioTransport: TransportKind;
+
+  private client: ClientLike | undefined;
+  // Track the .mdsmith.yml watcher across the activate / startServer /
+  // restartServer / deactivate lifecycle. A new watcher is created on
+  // every server start; the old one must be disposed first or VS Code
+  // accumulates watchers and emits duplicate change events per restart.
+  private configWatcher: FileSystemWatcher | undefined;
+  private outputChannel: OutputChannel | undefined;
+
+  constructor(deps: WiringDeps) {
+    this.api = deps.api;
+    this.createClient = deps.createClient;
+    this.resolveBinary = deps.resolveBinary ?? resolveBinaryImpl;
+    this.findBinaryCandidates = deps.findBinaryCandidates ?? findBinaryCandidatesImpl;
+    this.stdioTransport = deps.stdioTransport ?? TRANSPORT_STDIO_DEFAULT;
+  }
+
+  // activate registers commands (first, so they stay usable even when
+  // the server fails to start), wires the config-change forwarder, and
+  // starts the language server.
+  async activate(context: ExtensionContextLike): Promise<void> {
+    // Register commands first so they remain available even when the
+    // server fails to start (the most useful one then is "Show Output
+    // Channel" so the user can read the failure reason). Restart will
+    // try a fresh start.
+    context.subscriptions.push(
+      this.api.commands.registerCommand("mdsmith.restartServer", () => this.restartServer(context)),
+      this.api.commands.registerCommand("mdsmith.showOutput", () => this.showOutput())
+    );
+
+    this.registerPaletteCommands(context);
+
+    // Fix-on-save uses VS Code's native editor.codeActionsOnSave with
+    // source.fixAll.mdsmith — the same model ESLint uses with
+    // source.fixAll.eslint (the deprecated mdsmith.fixOnSave setting
+    // points users there). The extension contributes nothing beyond the
+    // LSP code action: VS Code runs the action on save through the
+    // bulk-edit service, which honours mdsmith.previewFix's
+    // ChangeAnnotation and opens the Refactor Preview before writing. A
+    // custom onWillSaveTextDocument handler cannot — its waitUntil drops
+    // the annotation and times out rather than wait for a confirmation
+    // UI. See docs/guides/editors/vscode.md.
+
+    // Forward mdsmith.* settings changes to the running server so it
+    // re-pulls config (mdsmith.run, mdsmith.config, mdsmith.previewFix).
+    // The server only reads these on initialize and on
+    // workspace/didChangeConfiguration; vscode-languageclient does not
+    // emit that notification by itself in the pull model, so without this
+    // toggling e.g. mdsmith.previewFix would have no effect until a
+    // server restart. See forwardMdsmithConfigChange for the rationale.
+    context.subscriptions.push(
+      this.api.workspace.onDidChangeConfiguration((event) =>
+        forwardMdsmithConfigChange(event, () => {
+          notifyConfigChangeToClient(this.client, (c) =>
+            c.sendNotification(DID_CHANGE_CONFIGURATION, { settings: null })
+          );
+        })
+      )
+    );
+
+    await this.startServer(context);
+  }
+
+  // startServer creates a fresh language client and start()s it. On
+  // failure it surfaces a quick-fix dialog (Download / Open Settings)
+  // without throwing, because the commands registered in activate() must
+  // remain usable so the user can retry.
+  private async startServer(context: ExtensionContextLike): Promise<void> {
+    const cfg = this.api.workspace.getConfiguration("mdsmith");
+    const configuredPath = cfg.get<string>("path", "mdsmith");
+    const binary = this.resolveBinary(configuredPath, context.extensionPath);
+    const workspaceRoot = this.api.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    const serverOptions = buildServerOptions(binary, this.stdioTransport, workspaceRoot);
+    // Replace any previous watcher before creating a new one.
+    // restartServer disposes via disposeConfigWatcher, but defensively
+    // dispose here too so a future caller of startServer (other than
+    // restartServer) cannot accidentally leak. context.subscriptions
+    // covers deactivate-time cleanup.
+    this.disposeConfigWatcher();
+    this.configWatcher = this.api.workspace.createFileSystemWatcher("**/.mdsmith.yml");
+    context.subscriptions.push(this.configWatcher);
+    const clientOptions = buildClientOptions(this.configWatcher, this.getOutputChannel());
+    // Replace the default ErrorHandler (DoNotRestart after 5 close
+    // events in 3 minutes) with one that gives the user a clear recovery
+    // path. We let the client keep restarting up to a higher per-window
+    // threshold; once we hit that ceiling we surface a notification with
+    // a "Restart Language Server" / "Show Output" prompt instead of
+    // silently disabling the extension. The mdsmith.restartServer
+    // command stays the explicit manual recovery path either way. The
+    // handler surfaces the prompt via the injected callback once the cap
+    // is exceeded; the decision logic lives in decideClose.
+    const errorHandler = new MdsmithErrorHandler(() => {
+      void this.promptRestartAfterRepeatedFailures();
+    });
+    clientOptions.errorHandler = errorHandler;
+
+    // Rewrite the server's public-website rule-docs links (in hovers) so
+    // they open the README offline from the bundled binary instead of a
+    // browser. The server keeps emitting https links so editors without
+    // this extension still get a working link; VS Code intercepts them
+    // here and points them at the mdsmith-rule: virtual document. See
+    // commands/rule-doc.ts.
+    clientOptions.middleware = {
+      provideHover: async (document, position, token, next) => {
+        const hover = await next(document, position, token);
+        if (hover) {
+          for (const block of hover.contents) {
+            if (block instanceof this.api.MarkdownString) {
+              rewriteHoverMarkdown(block);
+            }
+          }
+        }
+        return hover;
+      },
+    };
+
+    const client = this.createClient("mdsmith", "mdsmith", serverOptions, clientOptions);
+    this.client = client;
+
+    // Listen for the server announcing that a newer instance for this
+    // workspace has taken over. Marking the error handler turns the
+    // imminent connection close into a no-restart, so this (now orphaned)
+    // editor host stops respawning a server the newer one immediately
+    // supersedes again. See the newest-wins workspace singleton in
+    // internal/lsp/singleton.go. Registered BEFORE start() so the
+    // notification can never land in the gap between start() resolving
+    // and handler registration — vscode-languageclient buffers pre-start
+    // notification handlers.
+    client.onNotification("mdsmith/superseded", () => {
+      errorHandler.markSuperseded();
+      this.getOutputChannel().appendLine(
+        "mdsmith: a newer server has taken over this workspace; " +
+          "stopping this instance (it will not be restarted)."
+      );
+    });
+
+    try {
+      await client.start();
+    } catch (err) {
+      // start() rejected — leave the client referenceable briefly so the
+      // user can hit "Show Output" to read the failure log, then drop the
+      // reference. Without this clear, a partially-started client lingers
+      // and a subsequent deactivate() / restart would call stop() on
+      // something that never reached the running state, throwing inside
+      // vscode-languageclient. Also tear down the watcher; startServer
+      // will install a fresh one on next attempt.
+      const candidates = this.findBinaryCandidates(context.extensionPath);
+      const detail = startupErrorMessage(err, {
+        configuredPath,
+        resolvedCommand: binary,
+        candidates,
+      });
+      // Mirror the full diagnostic to the Output channel so the user can
+      // scroll, copy, and inspect every candidate path — VS Code
+      // truncates long error notifications, but the channel does not.
+      this.getOutputChannel().appendLine(detail);
+      const choice = await this.api.window.showErrorMessage(
+        detail,
+        "Download mdsmith",
+        "Open Settings",
+        "Show Output"
+      );
+      if (choice === "Show Output") {
+        this.showOutput();
+      }
+      this.client = undefined;
+      this.disposeConfigWatcher();
+      if (choice === "Download mdsmith") {
+        await this.api.env.openExternal(
+          this.api.Uri.parse("https://github.com/jeduden/mdsmith/releases")
+        );
+      } else if (choice === "Open Settings") {
+        await this.api.commands.executeCommand("workbench.action.openSettings", "mdsmith");
+      }
+    }
+  }
+
+  // restartServer stops the running client (if any) and starts a fresh
+  // one. Useful when the user fixes `mdsmith.path`, rebuilds the binary,
+  // or otherwise wants to recover without reloading the VS Code window.
+  async restartServer(context: ExtensionContextLike): Promise<void> {
+    if (this.client) {
+      try {
+        await this.client.stop();
+      } catch {
+        // Ignore — a half-started client may refuse to stop, but
+        // dropping the reference is enough to reclaim it.
+      }
+      this.client = undefined;
+    }
+    // Clean up the previous file watcher; startServer will install a
+    // fresh one.
+    this.disposeConfigWatcher();
+    await this.startServer(context);
+  }
+
+  // deactivate stops the client and disposes the watcher and output
+  // channel for tight cleanup ordering (context.subscriptions is flushed
+  // only after deactivate returns).
+  async deactivate(): Promise<void> {
+    if (this.client) {
+      try {
+        await this.client.stop();
+      } catch {
+        // A client whose start() failed (or that is still "starting"
+        // when the host shuts the extension down) can throw from stop();
+        // swallow so deactivate always completes cleanly. Dropping the
+        // reference below releases the client object regardless.
+      }
+      this.client = undefined;
+    }
+    // The watcher is also pushed onto context.subscriptions in
+    // startServer, but VS Code disposes those AFTER deactivate returns;
+    // clear it explicitly so the dispose ordering is tight and
+    // configWatcher does not survive into a subsequent activation.
+    this.disposeConfigWatcher();
+    // Dispose the shared output channel for the same tight-ordering
+    // reason.
+    if (this.outputChannel) {
+      this.outputChannel.dispose();
+      this.outputChannel = undefined;
+    }
+  }
+
+  // disposeConfigWatcher releases the active .mdsmith.yml watcher so a
+  // new one can take over. Idempotent — calling it without an active
+  // watcher is a no-op.
+  private disposeConfigWatcher(): void {
+    if (this.configWatcher) {
+      this.configWatcher.dispose();
+      this.configWatcher = undefined;
+    }
+  }
+
+  // showOutput reveals the "mdsmith" output channel. Uses
+  // getOutputChannel() so the standalone channel created by palette
+  // commands is also reachable when the LSP client is not running.
+  private showOutput(): void {
+    this.getOutputChannel().show(true);
+  }
+
+  // promptRestartAfterRepeatedFailures runs after the error handler has
+  // decided to stop restarting. The user can pick one of the actionable
+  // buttons; "Restart" calls the same command users get from the palette
+  // so the recovery path is consistent.
+  private async promptRestartAfterRepeatedFailures(): Promise<void> {
+    const choice = await this.api.window.showErrorMessage(
+      "mdsmith server crashed too many times in a row. Linting is paused.",
+      "Restart Language Server",
+      "Show Output"
+    );
+    if (choice === "Restart Language Server") {
+      await this.api.commands.executeCommand("mdsmith.restartServer");
+    } else if (choice === "Show Output") {
+      this.showOutput();
+    }
+  }
+
+  // getOutputChannel returns the single "mdsmith" OutputChannel shared
+  // between palette commands and the language client. Created lazily on
+  // first use so we don't reserve a channel before anyone needs it; the
+  // same instance is passed into LanguageClientOptions.outputChannel so
+  // the LSP client doesn't register a second channel with the same name.
+  private getOutputChannel(): OutputChannel {
+    if (!this.outputChannel) {
+      this.outputChannel = this.api.window.createOutputChannel("mdsmith");
+    }
+    return this.outputChannel;
+  }
+
+  // resolveActiveBinary reads `mdsmith.path` at call time so the palette
+  // commands pick up config edits without a window reload.
+  private resolveActiveBinary(extensionPath: string, scope?: Uri): string {
+    const cfg = this.api.workspace.getConfiguration("mdsmith", scope);
+    return this.resolveBinary(cfg.get<string>("path", "mdsmith"), extensionPath);
+  }
+
+  // registerPaletteCommands wires the mdsmith.* palette commands and the
+  // two virtual-document schemes. Called once from activate(). Trust-
+  // gated commands use the built-in isWorkspaceTrusted when condition,
+  // which VS Code re-evaluates automatically when trust is granted — no
+  // onDidGrantWorkspaceTrust subscription is required.
+  private registerPaletteCommands(context: ExtensionContextLike): void {
+    const api = this.api;
+    const getActiveFileUri = (): Uri | undefined => {
+      const uri = api.window.activeTextEditor?.document.uri;
+      return uri?.scheme === "file" ? uri : undefined;
+    };
+    // In multi-root workspaces, prefer the folder containing the active
+    // editor so file-modifying commands operate in the folder the user is
+    // working in. Falls back to the first folder when there is no active
+    // editor or it lives outside any workspace folder.
+    const getWorkspaceRoot = (): string | undefined => {
+      const folders = api.workspace.workspaceFolders;
+      if (!folders || folders.length === 0) return undefined;
+      if (folders.length > 1) {
+        const activeUri = api.window.activeTextEditor?.document.uri;
+        if (activeUri) {
+          const folder = api.workspace.getWorkspaceFolder(activeUri);
+          if (folder) return folder.uri.fsPath;
+        }
+      }
+      return folders[0].uri.fsPath;
+    };
+    // Scope configuration lookups to the workspace folder being operated
+    // on so per-folder mdsmith.path / mdsmith.config values are respected
+    // in multi-root workspaces. Falls back to the active file URI when no
+    // workspace folder is available (e.g. for the kinds virtual-doc
+    // commands).
+    const getConfigScope = (): Uri | undefined => {
+      const root = getWorkspaceRoot();
+      return root ? api.Uri.file(root) : getActiveFileUri();
+    };
+    const getBinary = () => this.resolveActiveBinary(context.extensionPath, getConfigScope());
+    const getConfigPath = (): string | undefined => {
+      const v = api.workspace.getConfiguration("mdsmith", getConfigScope()).get<string>("config", "");
+      return v || undefined;
+    };
+    const isTrusted = () => api.workspace.isTrusted;
+
+    const outputDeps = () => ({
+      appendOutput: (text: string) => {
+        this.getOutputChannel().append(text);
+      },
+      showOutput: () => this.getOutputChannel().show(true),
+    });
+
+    // showNotification routes failures (messages containing "failed" or
+    // "could not start") to showWarningMessage so they surface as
+    // warnings rather than appearing informational to the user.
+    const showNotification = (msg: string, ...buttons: string[]): Promise<string | undefined> => {
+      const isFailure = msg.includes("failed") || msg.includes("could not start");
+      return Promise.resolve(
+        isFailure
+          ? api.window.showWarningMessage(msg, ...buttons)
+          : api.window.showInformationMessage(msg, ...buttons)
+      );
+    };
+
+    const confirmDestructive = (label: string) => async () => {
+      const answer = await api.window.showWarningMessage(
+        `Run \`${label}\` in the workspace? This will modify files.`,
+        { modal: true },
+        "Proceed"
+      );
+      return answer === "Proceed";
+    };
+
+    const openVirtualDoc = async (uri: string) => {
+      const doc = await api.workspace.openTextDocument(api.Uri.parse(uri));
+      const mdDoc = await api.languages.setTextDocumentLanguage(doc, "markdown");
+      await api.window.showTextDocument(mdDoc, {
+        preview: true,
+        viewColumn: api.ViewColumn.Beside,
+      });
+    };
+
+    const getActiveMarkdownFilePath = (): string | undefined => {
+      const editor = api.window.activeTextEditor;
+      if (!editor || editor.document.uri.scheme !== "file") return undefined;
+      if (editor.document.languageId !== "markdown") return undefined;
+      return editor.document.uri.fsPath;
+    };
+
+    context.subscriptions.push(
+      api.commands.registerCommand("mdsmith.init", async () => {
+        await runInit({
+          binary: getBinary(),
+          workspaceRoot: getWorkspaceRoot(),
+          isTrusted,
+          showInfo: (msg, ...buttons) => showNotification(msg, ...buttons),
+          showError: (msg) =>
+            Promise.resolve(api.window.showErrorMessage(msg)).then(() => {}),
+          ...outputDeps(),
+        });
+      }),
+
+      api.commands.registerCommand("mdsmith.mergeDriver.install", async () => {
+        await runMergeDriverInstall({
+          binary: getBinary(),
+          workspaceRoot: getWorkspaceRoot(),
+          isTrusted,
+          confirm: confirmDestructive("mdsmith merge-driver install"),
+          showInfo: (msg, ...buttons) => showNotification(msg, ...buttons),
+          showError: (msg) =>
+            Promise.resolve(api.window.showErrorMessage(msg)).then(() => {}),
+          ...outputDeps(),
+        });
+      }),
+
+      api.commands.registerCommand("mdsmith.fixWorkspace", async () => {
+        await runFixWorkspace({
+          binary: getBinary(),
+          workspaceRoot: getWorkspaceRoot(),
+          configPath: getConfigPath(),
+          isTrusted,
+          confirm: confirmDestructive("mdsmith fix ."),
+          showInfo: (msg, ...buttons) => showNotification(msg, ...buttons),
+          showError: (msg) =>
+            Promise.resolve(api.window.showErrorMessage(msg)).then(() => {}),
+          ...outputDeps(),
+        });
+      }),
+
+      api.commands.registerCommand("mdsmith.kinds.resolve", async () => {
+        await runKindsResolve({
+          getActiveFilePath: getActiveMarkdownFilePath,
+          getDiagnostics: (filePath) =>
+            api.languages.getDiagnostics(api.Uri.file(filePath)),
+          openVirtualDoc,
+          showError: (msg) =>
+            Promise.resolve(api.window.showErrorMessage(msg)).then(() => {}),
+        });
+      }),
+
+      api.commands.registerCommand("mdsmith.kinds.why", async () => {
+        await runKindsWhy({
+          getActiveFilePath: getActiveMarkdownFilePath,
+          getDiagnostics: (filePath) =>
+            api.languages.getDiagnostics(api.Uri.file(filePath)),
+          pickRule: async (rules) => {
+            const items =
+              rules.length > 0
+                ? rules
+                : await api.window
+                    .showInputBox({
+                      prompt: "No active diagnostics. Enter a rule ID (e.g. MDS001)",
+                      placeHolder: "MDS001",
+                    })
+                    .then((v) => (v ? [v] : []));
+            if (!items || items.length === 0) return undefined;
+            if (items.length === 1) return items[0];
+            return api.window.showQuickPick(items, {
+              placeHolder: "Pick a rule to explain",
+            });
+          },
+          openVirtualDoc,
+          showError: (msg) =>
+            Promise.resolve(api.window.showErrorMessage(msg)).then(() => {}),
+        });
+      }),
+
+      // Open a rule's embedded README in a read-only virtual document.
+      // Invoked from hover links the middleware rewrote (and trusted via
+      // isTrusted.enabledCommands), so id is normally a rule ID. But
+      // registerCommand is globally callable, so enforce the same
+      // MDS<digits> shape here and no-op on anything else, rather than
+      // opening a tab that just reports a malformed URI.
+      api.commands.registerCommand(OPEN_RULE_DOC_COMMAND, async (id?: string) => {
+        if (!id || !isRuleId(id)) return;
+        await openVirtualDoc(buildRuleDocUri(id));
+      }),
+
+      // Register the virtual document provider for the mdsmith-kinds:
+      // scheme.
+      api.workspace.registerTextDocumentContentProvider(KINDS_SCHEME, {
+        provideTextDocumentContent: (uri) => {
+          const uriStr = kindsContentUri(uri);
+          const parsed = parseKindsUri(uriStr);
+          // Derive the workspace folder from the file encoded in the URI
+          // so binary/config lookups use the correct per-folder settings
+          // even when the active editor is the virtual doc itself.
+          const fileFolder = parsed
+            ? api.workspace.getWorkspaceFolder(api.Uri.file(parsed.file))
+            : undefined;
+          // When workspace folders are open, reject files outside the
+          // workspace to prevent crafted URIs from analyzing arbitrary
+          // paths on disk.
+          const folders = api.workspace.workspaceFolders;
+          if (parsed && folders && folders.length > 0 && !fileFolder) {
+            return Promise.resolve(
+              `**mdsmith: file is outside the workspace**\n\n\`\`\`\n${parsed.file}\n\`\`\``
+            );
+          }
+          const binaryScope = fileFolder?.uri ?? getActiveFileUri();
+          const binary = this.resolveActiveBinary(context.extensionPath, binaryScope);
+          const provider = makeKindsContentProvider(binary, fileFolder?.uri.fsPath);
+          return provider.provideTextDocumentContent(uriStr);
+        },
+      }),
+
+      // Register the virtual document provider for the mdsmith-rule:
+      // scheme, which renders `mdsmith help rule <id>` (the embedded
+      // README) offline so the rewritten hover doc link opens without a
+      // browser or network.
+      api.workspace.registerTextDocumentContentProvider(RULE_SCHEME, {
+        provideTextDocumentContent: (uri) =>
+          provideRuleDocContent(uri, getBinary(), getWorkspaceRoot()),
+      })
+
+      // VS Code automatically re-evaluates the built-in
+      // `isWorkspaceTrusted` context when trust is granted, so menu
+      // entries gated with `when: isWorkspaceTrusted` appear without a
+      // reload — no explicit handler needed here.
+    );
+  }
+}
