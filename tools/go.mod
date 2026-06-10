@@ -2,12 +2,12 @@ module github.com/jeduden/mdsmith
 
 // Alternate modfile for dev tools only: golangci-lint, vhs, and
 // gobco are built from this graph via
-// `go tool -modfile=go.tools.mod <tool>`. Keeping them out of
+// `go tool -modfile=tools/go.mod <tool>`. Keeping them out of
 // go.mod keeps their dependency trees and go-version floors out of
 // the module graph that `go install m@version` and library
 // consumers resolve (vhs alone forces go >= 1.25.8 here, while the
 // real dependencies in go.mod top out at 1.25.0). Tidy with
-// `go mod tidy -modfile=go.tools.mod`; the require list is a
+// `go mod tidy -modfile=tools/go.mod`; the require list is a
 // superset of go.mod because an alternate modfile still covers the
 // repository's own packages.
 go 1.25.8

@@ -48,13 +48,15 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
-          # go.tools.mod, not go.mod: dev tools live in the alternate
+          # tools/go.mod, not go.mod: dev tools live in the alternate
           # modfile so their go floor (vhs needs >= 1.25.8) stays out
-          # of the consumer-facing go.mod, and toolchain selection
-          # reads only go.mod — so the installed toolchain must
-          # already satisfy the tools floor.
-          go-version-file: go.tools.mod
-      - run: go tool -modfile=go.tools.mod golangci-lint run
+          # of the consumer-facing go.mod. Toolchain selection ignores
+          # -modfile and setup-go pins GOTOOLCHAIN=local, so the
+          # installed toolchain must already satisfy the tools floor.
+          # (setup-go only parses files NAMED go.mod or go.work —
+          # hence tools/go.mod rather than a root go.tools.mod.)
+          go-version-file: tools/go.mod
+      - run: go tool -modfile=tools/go.mod golangci-lint run
 
   # Tracked manifests must stay pinned at 0.0.0-dev between releases;
   # the release workflow rewrites them with `mdsmith-release stamp`

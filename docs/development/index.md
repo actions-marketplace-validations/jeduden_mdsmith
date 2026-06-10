@@ -34,7 +34,7 @@ row: "- [{title}]({filename})"
 ## Build & Test Commands
 
 Requires Go 1.25+. Dev tools (golangci-lint, vhs,
-gobco) build from `go.tools.mod`, which needs Go
+gobco) build from `tools/go.mod`, which needs Go
 1.25.8+; `go.mod` itself must stay tool-free so
 `go install` consumers never inherit a dev tool's
 go floor.
@@ -44,7 +44,7 @@ go floor.
 - `go test -run TestName ./...` — run a specific test
 - `go run ./cmd/mdsmith check .` — lint markdown
 - `go run ./cmd/mdsmith fix .` — auto-fix markdown
-- `go tool -modfile=go.tools.mod golangci-lint run` — run linter
+- `go tool -modfile=tools/go.mod golangci-lint run` — run linter
 - `go vet ./...` — run go vet
 
 ## Project Layout

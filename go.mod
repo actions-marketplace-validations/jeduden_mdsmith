@@ -2,7 +2,7 @@ module github.com/jeduden/mdsmith
 
 // This is the module graph `go install m@version` and library
 // consumers resolve. Keep it lean: dev tools (golangci-lint, vhs,
-// gobco) live in go.tools.mod — `go tool -modfile=go.tools.mod
+// gobco) live in tools/go.mod — `go tool -modfile=tools/go.mod
 // <tool>` — so their dependency trees and go-version floors never
 // constrain consumers. TestRootGoModStaysInstallable and
 // TestRootGoModCarriesNoDevTools enforce both properties.
