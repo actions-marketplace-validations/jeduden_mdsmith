@@ -11,6 +11,7 @@ summary: >-
   before generating diagrams. Same `os/exec` argv
   path and MDS040 lint as recipes — no shell.
 model: sonnet
+depends-on: [2606101546, 103]
 ---
 # Build lifecycle hooks (before/after)
 

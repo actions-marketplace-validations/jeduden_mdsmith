@@ -12,6 +12,7 @@ summary: >-
   outputs all exist. Adds `--build-force` and
   `--build-check-stale` to `mdsmith fix`.
 model: opus
+depends-on: [102, 2606101546]
 ---
 # Build target staleness and dependency tracking
 

@@ -14,6 +14,7 @@ summary: >-
   detection. Add `--build-jobs N` for
   parallel execution.
 model: opus
+depends-on: [2606101546, 103, 2606101548]
 ---
 # Build execution UX (stdout/stderr, debug, parallel)
 

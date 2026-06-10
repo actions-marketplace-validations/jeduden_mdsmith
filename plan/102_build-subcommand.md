@@ -11,6 +11,7 @@ summary: >-
   `{inputs}` argv placeholders to recipe
   `command`. No backwards compatibility.
 model: opus
+depends-on: [100, 101]
 ---
 # Multi-output `<?build?>` directive
 

@@ -16,6 +16,7 @@ summary: >-
   must exist; no undeclared write may slip
   out. Process-group kill on timeout.
 model: opus
+depends-on: [2606101546]
 ---
 # Build execution hardening
 

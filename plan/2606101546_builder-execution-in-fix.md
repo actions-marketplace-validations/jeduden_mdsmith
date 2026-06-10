@@ -12,6 +12,7 @@ summary: >-
   `--build-recipe`, `--build-dry-run`,
   `--build-timeout`. Removes `build.base-url`.
 model: opus
+depends-on: [102]
 ---
 # Builder execution wired into `mdsmith fix`
 
