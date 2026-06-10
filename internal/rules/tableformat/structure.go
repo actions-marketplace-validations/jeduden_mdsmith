@@ -14,7 +14,6 @@ package tableformat
 
 import (
 	"bytes"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,9 +33,6 @@ const (
 	// every row.
 	StyleNoLeadingOrTrailing = "no_leading_or_trailing"
 )
-
-// sepCellRe matches one delimiter-row cell (e.g. `---`, `:--`, `:-:`).
-var sepCellRe = regexp.MustCompile(`^:?-+:?$`)
 
 // tableRow is one parsed source line belonging to a table.
 type tableRow struct {
@@ -316,6 +312,14 @@ func findStructureTables(lines [][]byte, skip func(int) bool) []tableBlock {
 			i++
 			continue
 		}
+		// A GFM separator row must contain '|'. Skip lines without one
+		// before the more expensive sharedPrefix call, avoiding the
+		// string(line) allocations that structureDetectPrefix would pay
+		// on every non-pipe line in the file.
+		if bytes.IndexByte(lines[i], '|') < 0 {
+			i++
+			continue
+		}
 		prefix, ok := sharedPrefix(lines[hdrNum-1], lines[sepNum-1])
 		if !ok || !isSeparator(lines[sepNum-1], prefix) ||
 			!isHeader(lines[hdrNum-1], prefix) {
@@ -359,30 +363,39 @@ func sharedPrefix(header, sep []byte) (string, bool) {
 // so the format and structure passes agree on blockquoted tables.
 // When no blockquote marker is present it falls back to the run of
 // leading whitespace, which covers list-indented and borderless
-// tables.
+// tables. Works entirely in bytes to avoid allocating a string copy
+// of line for the common no-blockquote case.
 func structureDetectPrefix(line []byte) string {
-	s := string(line)
 	var b strings.Builder
-	rem := s
+	rem := line
 	for {
-		trimmed := strings.TrimLeft(rem, " ")
-		indent := rem[:len(rem)-len(trimmed)]
+		// Count leading spaces (ASCII space only, matching original).
+		i := 0
+		for i < len(rem) && rem[i] == ' ' {
+			i++
+		}
+		indent := rem[:i]
+		rem = rem[i:]
 		switch {
-		case strings.HasPrefix(trimmed, "> "):
-			b.WriteString(indent)
+		case len(rem) >= 2 && rem[0] == '>' && rem[1] == ' ':
+			b.Write(indent)
 			b.WriteString("> ")
-			rem = trimmed[2:]
-		case strings.HasPrefix(trimmed, ">") && (len(trimmed) == 1 || trimmed[1] == '>'):
-			b.WriteString(indent)
-			b.WriteString(">")
-			rem = trimmed[1:]
+			rem = rem[2:]
+		case len(rem) >= 1 && rem[0] == '>' && (len(rem) == 1 || rem[1] == '>'):
+			b.Write(indent)
+			b.WriteByte('>')
+			rem = rem[1:]
 		default:
 			if b.Len() > 0 {
 				return b.String()
 			}
+			// No blockquote: count leading whitespace/tabs from original.
 			n := 0
 			for n < len(line) && (line[n] == ' ' || line[n] == '\t') {
 				n++
+			}
+			if n == 0 {
+				return ""
 			}
 			return string(line[:n])
 		}
@@ -421,10 +434,18 @@ func isBlankAround(line []byte, prefix string) bool {
 }
 
 // rowContent strips the prefix and trailing whitespace/CR, returning
-// the bare row text used for pipe and cell analysis.
-func rowContent(line []byte, prefix string) string {
-	s := strings.TrimPrefix(string(line), prefix)
-	return strings.TrimRight(s, " \t\r")
+// the bare row bytes used for pipe and cell analysis. Works entirely
+// in bytes — no string conversion — so callers avoid a heap alloc on
+// every table row in the structure-pass hot path.
+func rowContent(line []byte, prefix string) []byte {
+	content := line
+	// string(line[:len(prefix)]) == prefix is a compiler-optimised
+	// comparison that does not allocate a temporary string.
+	if len(prefix) > 0 && len(line) >= len(prefix) &&
+		string(line[:len(prefix)]) == prefix {
+		content = line[len(prefix):]
+	}
+	return bytes.TrimRight(content, " \t\r")
 }
 
 func isSeparator(line []byte, prefix string) bool {
@@ -434,7 +455,7 @@ func isSeparator(line []byte, prefix string) bool {
 
 func isHeader(line []byte, prefix string) bool {
 	c := rowContent(line, prefix)
-	if c == "" || !containsUnescapedPipe(c) {
+	if len(c) == 0 || !containsUnescapedPipe(c) {
 		return false
 	}
 	if isATXHeading(c) {
@@ -451,57 +472,127 @@ func isHeader(line []byte, prefix string) bool {
 	return !isSeparatorContent(c)
 }
 
-// isATXHeading reports whether s has the shape of a CommonMark ATX
+// isATXHeading reports whether b has the shape of a CommonMark ATX
 // heading: one to six `#` characters followed by a space, tab, or
 // end-of-line. A bare `#` at the start (e.g. `#1 | x`) is not a
 // heading and must not exclude a candidate from table parsing.
-func isATXHeading(s string) bool {
-	s = strings.TrimSpace(s)
+func isATXHeading(b []byte) bool {
+	b = bytes.TrimSpace(b)
 	n := 0
-	for n < len(s) && n < 6 && s[n] == '#' {
+	for n < len(b) && n < 6 && b[n] == '#' {
 		n++
 	}
 	if n == 0 {
 		return false
 	}
-	if n == len(s) {
+	if n == len(b) {
 		return true // bare hashes, empty heading
 	}
-	c := s[n]
+	c := b[n]
 	return c == ' ' || c == '\t'
 }
 
-// containsUnescapedPipe reports whether s contains a `|` that is a
+// containsUnescapedPipe reports whether b contains a `|` that is a
 // real cell delimiter. A `\|` pair is treated as one escaped-pipe
 // literal — matching tablefmt's GFM escape rule. CommonMark's full
 // backslash grammar (where `\\|` would be a literal `\` followed by
 // an unescaped pipe) is intentionally NOT honored: GitHub's renderer
 // doesn't, and the structure pass must agree with tablefmt or the
 // two disagree on cell counts for inputs containing `\\|`.
-func containsUnescapedPipe(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+1 < len(s) && s[i+1] == '|' {
+func containsUnescapedPipe(b []byte) bool {
+	for i := 0; i < len(b); i++ {
+		if b[i] == '\\' && i+1 < len(b) && b[i+1] == '|' {
 			i++ // skip the escaped pipe
 			continue
 		}
-		if s[i] == '|' {
+		if b[i] == '|' {
 			return true
 		}
 	}
 	return false
 }
 
-func isSeparatorContent(c string) bool {
-	cells := logicalCells(c)
-	if len(cells) == 1 && strings.TrimSpace(cells[0]) == "" {
+// isSeparatorContent reports whether c (bare row bytes with prefix
+// already stripped) consists of valid GFM separator cells (:?-+:?).
+// It works entirely in bytes to avoid allocating strings or a cell
+// slice, replacing the former regex + logicalCells path.
+func isSeparatorContent(c []byte) bool {
+	t := bytes.TrimSpace(c)
+	// Strip edge pipes (mirrors logicalCells).
+	if len(t) > 0 && t[0] == '|' {
+		t = t[1:]
+	}
+	if endsWithUnescapedPipeBytes(t) {
+		t = t[:len(t)-1]
+	}
+	if len(t) == 0 {
 		return false
 	}
-	for _, cell := range cells {
-		if !sepCellRe.MatchString(strings.TrimSpace(cell)) {
-			return false
+	hasCells := false
+	for len(t) > 0 {
+		sep := findUnescapedPipe(t)
+		var cell []byte
+		if sep < 0 {
+			cell = bytes.TrimSpace(t)
+			t = t[len(t):]
+		} else {
+			cell = bytes.TrimSpace(t[:sep])
+			t = t[sep+1:]
+		}
+		if len(cell) > 0 {
+			if !isSepCellBytes(cell) {
+				return false
+			}
+			hasCells = true
 		}
 	}
+	return hasCells
+}
+
+// isSepCellBytes reports whether cell matches the GFM separator cell
+// pattern :?-+:? without allocating. Replaces sepCellRe.MatchString.
+func isSepCellBytes(cell []byte) bool {
+	if len(cell) == 0 {
+		return false
+	}
+	i := 0
+	if cell[i] == ':' {
+		i++
+	}
+	if i >= len(cell) || cell[i] != '-' {
+		return false
+	}
+	for i < len(cell) && cell[i] == '-' {
+		i++
+	}
+	if i < len(cell) {
+		return cell[i] == ':' && i == len(cell)-1
+	}
 	return true
+}
+
+// findUnescapedPipe returns the index of the first unescaped '|' in b,
+// or -1 if none. Mirrors containsUnescapedPipe's escape semantics.
+func findUnescapedPipe(b []byte) int {
+	for i := 0; i < len(b); i++ {
+		if b[i] == '\\' && i+1 < len(b) && b[i+1] == '|' {
+			i++
+			continue
+		}
+		if b[i] == '|' {
+			return i
+		}
+	}
+	return -1
+}
+
+// endsWithUnescapedPipeBytes is the []byte counterpart of
+// endsWithUnescapedPipe, used in the structure-pass hot path.
+func endsWithUnescapedPipeBytes(b []byte) bool {
+	if len(b) == 0 || b[len(b)-1] != '|' {
+		return false
+	}
+	return len(b) < 2 || b[len(b)-2] != '\\'
 }
 
 // continuesTable reports whether line is a body row for a table with
@@ -513,6 +604,10 @@ func continuesTable(line []byte, prefix string) bool {
 	}
 	return containsUnescapedPipe(rowContent(line, prefix))
 }
+
+// NOTE: endsWithUnescapedPipe (string version) is retained for use by
+// normalizeEdges in the Fix path. The bytes counterpart above is used
+// in the structure-pass Check hot path.
 
 // endsWithUnescapedPipe reports whether s ends with a real edge pipe
 // rather than an escaped literal `\|`. A trailing `|` is an edge
@@ -529,11 +624,10 @@ func parseRow(line []byte, lineNum int, prefix string) tableRow {
 	c := rowContent(line, prefix)
 	// Extra whitespace between the prefix and the first cell — common
 	// inside list items and blockquotes with double-space indent —
-	// must not hide a real edge pipe; logicalCells already trims, so
-	// edge detection mirrors it.
-	t := strings.TrimSpace(c)
-	lead := strings.HasPrefix(t, "|")
-	trail := endsWithUnescapedPipe(t)
+	// must not hide a real edge pipe; edge detection mirrors countCells.
+	t := bytes.TrimSpace(c)
+	lead := len(t) > 0 && t[0] == '|'
+	trail := endsWithUnescapedPipeBytes(t)
 	return tableRow{
 		lineNum:  lineNum,
 		leading:  lead,
@@ -542,53 +636,42 @@ func parseRow(line []byte, lineNum int, prefix string) tableRow {
 	}
 }
 
-// logicalCells splits a row into its cells, dropping the empty
-// segments a leading or trailing pipe would otherwise produce so a
-// bordered and a borderless row of the same shape count alike.
-func logicalCells(content string) []string {
-	t := strings.TrimSpace(content)
-	t = strings.TrimPrefix(t, "|")
-	if endsWithUnescapedPipe(t) {
-		t = t[:len(t)-1]
-	}
-	return splitCells(t)
-}
-
 // countCells returns the logical cell count of a row. An empty row or
 // a row consisting of a single bare pipe ("|") has zero cells. A
 // bordered row whose interior is all whitespace (e.g. "|  |") has one
 // empty cell, not zero.
 //
-// This avoids allocating a []string via logicalCells: it strips edge
-// pipes directly, then counts unescaped interior pipes.
-func countCells(content string) int {
-	t := strings.TrimSpace(content)
-	if t == "" || t == "|" {
+// Works entirely in bytes to avoid allocating a string copy on each
+// table row in the structure-pass hot path.
+func countCells(content []byte) int {
+	t := bytes.TrimSpace(content)
+	if len(t) == 0 || (len(t) == 1 && t[0] == '|') {
 		return 0
 	}
-	s := strings.TrimPrefix(t, "|")
-	if endsWithUnescapedPipe(s) {
+	s := t
+	if len(s) > 0 && s[0] == '|' {
+		s = s[1:]
+	}
+	if endsWithUnescapedPipeBytes(s) {
 		s = s[:len(s)-1]
 	}
-	if strings.TrimSpace(s) == "" {
+	if len(bytes.TrimSpace(s)) == 0 {
 		// Bordered row like "|  |" has one empty cell, not zero.
 		return 1
 	}
 	return countUnescapedPipes(s) + 1
 }
 
-// countUnescapedPipes counts the number of unescaped '|' characters in s.
+// countUnescapedPipes counts the number of unescaped '|' characters in b.
 // A '\|' pair is treated as one escaped-pipe literal, not a cell delimiter.
-// The escape rule is identical to containsUnescapedPipe — both must stay in sync
-// if tablefmt's GFM escape semantics ever change.
-func countUnescapedPipes(s string) int {
+func countUnescapedPipes(b []byte) int {
 	n := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+1 < len(s) && s[i+1] == '|' {
+	for i := 0; i < len(b); i++ {
+		if b[i] == '\\' && i+1 < len(b) && b[i+1] == '|' {
 			i++ // skip escaped pipe
 			continue
 		}
-		if s[i] == '|' {
+		if b[i] == '|' {
 			n++
 		}
 	}

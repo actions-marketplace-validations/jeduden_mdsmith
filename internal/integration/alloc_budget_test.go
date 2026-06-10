@@ -46,7 +46,7 @@ var allocBudgetGrandfathered = map[string]int{
 	// row a second time alongside tablefmt's alignment scan. Reducing
 	// this to the ≤ 10 ceiling needs the single-table-walk refactor
 	// scheduled as a follow-up to plan 181.
-	"MDS025": 110, // table-format
+	"MDS025": 60, // table-format; tightened after five byte-native fixes (plan 195 task 3 partial)
 	// MDS026 (table-readability) dropped out: cells-as-byte-offsets
 	// refactor (task 2) landed; rule now lands at the 10-alloc
 	// ceiling on the gate fixture.

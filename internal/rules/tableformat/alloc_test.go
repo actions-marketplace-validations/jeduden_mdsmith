@@ -15,9 +15,16 @@ import (
 // Kept in lockstep with allocBudgetGrandfathered["MDS025"] in
 // internal/integration/alloc_budget_test.go — a single
 // authoritative baseline per rule.
+//
+// Tightened from 110 to 60 after five targeted byte-native fixes
+// (pipe guard in findStructureTables, structureDetectPrefix rewrite,
+// rowContent/isSeparatorContent bytes, detectPrefix bytes,
+// splitRowBytes). The remaining cost is the tablefmt cell-string
+// allocation from splitRow, deferred to the full single-table-walk
+// refactor in plan 195 task 3.
 const (
 	allocBudgetMDS025              = 10
-	allocBudgetGrandfatheredMDS025 = 110
+	allocBudgetGrandfatheredMDS025 = 60
 )
 
 const allocBudgetFixture = "# Document title\n" +

@@ -344,7 +344,7 @@ func tryParseTable(lines [][]byte, start int, codeLines map[int]struct{}) (*tabl
 		return nil, start
 	}
 
-	sepCells := splitRow(string(sepContent))
+	sepCells := splitRowBytes(sepContent)
 	if !isSeparatorRow(sepCells) {
 		return nil, start
 	}
@@ -354,7 +354,7 @@ func tryParseTable(lines [][]byte, start int, codeLines map[int]struct{}) (*tabl
 	var rows []row
 
 	// Header row.
-	headerCells := splitRow(string(content))
+	headerCells := splitRowBytes(content)
 	rawLines = append(rawLines, lines[start])
 	rows = append(rows, row{cells: headerCells})
 
@@ -373,7 +373,7 @@ func tryParseTable(lines [][]byte, start int, codeLines map[int]struct{}) (*tabl
 		if !isTableRow(rowContent) {
 			break
 		}
-		dataCells := splitRow(string(rowContent))
+		dataCells := splitRowBytes(rowContent)
 		rawLines = append(rawLines, lines[end])
 		rows = append(rows, row{cells: dataCells})
 		end++
@@ -388,26 +388,31 @@ func tryParseTable(lines [][]byte, start int, codeLines map[int]struct{}) (*tabl
 }
 
 // detectPrefix extracts the blockquote or list prefix from a line.
+// Works in bytes to avoid a string(line) allocation on every scanned
+// line — the dominant per-Violations cost on table-free files.
 func detectPrefix(line []byte) string {
-	s := string(line)
-
-	// Check for blockquote prefix: optional spaces + "> "
-	// Support nested blockquotes: "> > "
+	// Fast path: no '>' means no blockquote. Check for whitespace-only
+	// prefix before a '|' without allocating a string.
+	rem := line
 	var prefix strings.Builder
-	remaining := s
 	for {
-		trimmed := strings.TrimLeft(remaining, " ")
-		indent := remaining[:len(remaining)-len(trimmed)]
-		if strings.HasPrefix(trimmed, "> ") {
-			prefix.WriteString(indent)
-			prefix.WriteString("> ")
-			remaining = trimmed[2:]
-			continue
+		// Count leading spaces.
+		i := 0
+		for i < len(rem) && rem[i] == ' ' {
+			i++
 		}
-		if strings.HasPrefix(trimmed, ">") && (len(trimmed) == 1 || trimmed[1] == '>') {
-			prefix.WriteString(indent)
-			prefix.WriteString(">")
-			remaining = trimmed[1:]
+		indent := rem[:i]
+		rem = rem[i:]
+		switch {
+		case len(rem) >= 2 && rem[0] == '>' && rem[1] == ' ':
+			prefix.Write(indent)
+			prefix.WriteString("> ")
+			rem = rem[2:]
+			continue
+		case len(rem) >= 1 && rem[0] == '>' && (len(rem) == 1 || rem[1] == '>'):
+			prefix.Write(indent)
+			prefix.WriteByte('>')
+			rem = rem[1:]
 			continue
 		}
 		break
@@ -416,12 +421,12 @@ func detectPrefix(line []byte) string {
 		return prefix.String()
 	}
 
-	// Check for list item indentation (spaces only before a |).
-	idx := strings.Index(s, "|")
+	// No blockquote: spaces-only prefix before the first '|'.
+	idx := bytes.IndexByte(line, '|')
 	if idx > 0 {
-		potentialPrefix := s[:idx]
-		if strings.TrimSpace(potentialPrefix) == "" {
-			return potentialPrefix
+		potentialPrefix := line[:idx]
+		if len(bytes.TrimSpace(potentialPrefix)) == 0 {
+			return string(potentialPrefix)
 		}
 	}
 
@@ -470,6 +475,38 @@ func splitRow(row string) []string {
 		if row[i] == '\\' && i+1 < len(row) && row[i+1] == '|' {
 			current.WriteString(`\|`)
 			i++ // skip the pipe
+			continue
+		}
+		if row[i] == '|' {
+			cells = append(cells, strings.TrimSpace(current.String()))
+			current.Reset()
+			continue
+		}
+		current.WriteByte(row[i])
+	}
+	cells = append(cells, strings.TrimSpace(current.String()))
+
+	return cells
+}
+
+// splitRowBytes is a bytes-native version of splitRow that avoids
+// the string([]byte) allocation in the tryParseTable hot path.
+func splitRowBytes(row []byte) []string {
+	row = bytes.TrimSpace(row)
+
+	if len(row) > 0 && row[0] == '|' {
+		row = row[1:]
+	}
+	if len(row) > 0 && row[len(row)-1] == '|' {
+		row = row[:len(row)-1]
+	}
+
+	var cells []string
+	var current strings.Builder
+	for i := 0; i < len(row); i++ {
+		if row[i] == '\\' && i+1 < len(row) && row[i+1] == '|' {
+			current.WriteString(`\|`)
+			i++
 			continue
 		}
 		if row[i] == '|' {
