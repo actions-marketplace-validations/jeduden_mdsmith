@@ -46,6 +46,12 @@ fails on drift.
 | `--canvas` (#FAF7F2)                  | The paper. Warm off-white page surface; no pure-white page backgrounds.                  |
 | `--ok-500`, `--warn-500`, `--err-500` | Diagnostic semantics, matching `mdsmith check` terminal output.                          |
 | `--term-*`                            | Terminal mock palette only. Never mixed with UI tokens.                                  |
+| `--tint-*`                            | bg/fg/line triads for icon tiles. Cycle them; never two adjacent tiles in one hue.       |
+| `--grad-*`                            | Warm-only gradients: hero glow, bento cells, dark panels, gradient icon tiles.           |
+
+Gradients carry two extra rules. Never place one behind body
+text on a light surface. Use at most one gradient surface per
+viewport.
 
 ## Type
 
@@ -84,6 +90,10 @@ fails on drift.
 - Capsules (pills and chips) mark **status only**: rule
   state, version chips, filter toggles. Navigation is
   plain text links with a solid underline on hover.
+- Bento grids (`.bento` / `.bento-card`) lay out feature
+  cells on six columns with a 14px gap and `--radius-lg`
+  corners; cells span 2, 3, 4, or 6 columns. At most one
+  `is-glow` and one `is-dark` cell per bento.
 - Cards: `--bg-raised` background, 1px `--border`, 6px
   radius, `--shadow-sm` at rest. No left-border accent
   stripe; use a rule-ID chip instead.
@@ -101,9 +111,12 @@ fails on drift.
 ## Iconography and brand marks
 
 - Icons are [Lucide](https://lucide.dev/), stroke-only,
-  `currentColor`, sized 16px in dense UI, 20px in prose,
-  24px in nav and CTAs. Icons punctuate; they never carry
-  a layout.
+  sized 16px in dense UI, 20px in prose, 24px in nav and
+  CTAs. Icons punctuate; they never carry a layout.
+- Bare glyphs in prose and nav inherit `currentColor`.
+  Colored icons appear only inside `.icon-tile` tiles,
+  which take a `--tint-*` hue (or the forge gradient for
+  a lead tile).
 - The brand mark is the hash-anvil with hammer:
   `website/static/img/logo-mark.svg` (square),
   `logo-lockup.svg` (mark plus wordmark, light
@@ -115,7 +128,8 @@ fails on drift.
 
 ## Banned motifs
 
-- Bluish-purple gradients.
+- Gradients outside the warm `--grad-*` set; bluish-purple
+  stays a hard veto.
 - Photography and hand-drawn illustration.
 - Frosted-glass blur outside the top nav and the command
   palette scrim.

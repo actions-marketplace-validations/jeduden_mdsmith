@@ -89,6 +89,37 @@ test.describe("homepage positioning", () => {
     }
   });
 
+  test("feature-card icons render as cycling tinted tiles", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    // Lead cards carry the forge-gradient tile; the rest cycle the
+    // six --tint-* hues with no two adjacent tiles sharing a hue
+    // (the design-system rule for icon tiles).
+    const tiles = page.locator(".card-icon.icon-tile");
+    expect(await tiles.count()).toBeGreaterThan(5);
+    await expect(
+      page.locator(".card-body--lead .icon-tile.is-forge-grad").first(),
+    ).toBeVisible();
+
+    const grids = page.locator(".card-grid");
+    const gridCount = await grids.count();
+    for (let g = 0; g < gridCount; g++) {
+      const hues = await grids
+        .nth(g)
+        .locator(".card:not(.card--lead) .icon-tile")
+        .evaluateAll(els =>
+          els.map(el =>
+            Array.from(el.classList).find(c => c.startsWith("is-")),
+          ),
+        );
+      for (let i = 1; i < hues.length; i++) {
+        expect(hues[i]).not.toBe(hues[i - 1]);
+      }
+    }
+  });
+
   test("install commands stay readable on a narrow viewport", async ({
     page,
   }) => {

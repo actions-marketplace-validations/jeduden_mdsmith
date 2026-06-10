@@ -146,9 +146,7 @@ main {
   content: "";
   position: absolute;
   inset: 0;
-  background-image:
-    radial-gradient(circle at 80% 0%, rgba(217,101,29,0.06), transparent 40%),
-    radial-gradient(circle at 0% 100%, rgba(217,101,29,0.04), transparent 50%);
+  background-image: var(--grad-glow);
   pointer-events: none;
 }
 .hero-inner { position: relative; }
@@ -453,23 +451,20 @@ main {
   position: relative;
 }
 
+/* The tile (.icon-tile + tint class, set by feature-grid.html)
+   supplies size, background, and glyph color; this class only
+   adds the card-local spacing. Glyphs keep their 18px/24px
+   attribute size inside the tile. */
 .card-icon {
-  display: flex;
-  align-items: center;
-  width: 32px;
-  height: 32px;
   margin-bottom: 16px;
-  flex-shrink: 0;
-  color: var(--steel-400);
   stroke-width: 1.5;
 }
 .card-body--lead .card-icon {
   width: 36px;
   height: 36px;
   margin-bottom: 20px;
-  color: var(--forge-600);
 }
-.card-icon svg { width: 100%; height: 100%; stroke-width: inherit; }
+.card-icon svg { stroke-width: inherit; }
 
 .card-title {
   font-size: 14.5px;
@@ -1511,6 +1506,80 @@ a.install-label:hover { color: var(--forge-300); text-decoration: underline; }
 .cmp-cell.yes { background: #F0F8F2; color: #1f5e3e; }
 .cmp-cell.no  { color: var(--fg-subtle); }
 .cmp-cell.partial { background: #FCEFD2; color: #7a4a07; }
+
+/* ========== ICON TILES ========== */
+
+/* Colored icon containers from the design system. The --tint-*
+   triads cycle across a grid (never two adjacent tiles in the
+   same hue); bare glyphs in prose and nav keep currentColor. */
+.icon-tile {
+  width: 32px; height: 32px;
+  flex: none;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.icon-tile.is-ember { background: var(--tint-ember-bg); color: var(--tint-ember-fg); border-color: var(--tint-ember-line); }
+.icon-tile.is-sky   { background: var(--tint-sky-bg);   color: var(--tint-sky-fg);   border-color: var(--tint-sky-line); }
+.icon-tile.is-moss  { background: var(--tint-moss-bg);  color: var(--tint-moss-fg);  border-color: var(--tint-moss-line); }
+.icon-tile.is-amber { background: var(--tint-amber-bg); color: var(--tint-amber-fg); border-color: var(--tint-amber-line); }
+.icon-tile.is-clay  { background: var(--tint-clay-bg);  color: var(--tint-clay-fg);  border-color: var(--tint-clay-line); }
+.icon-tile.is-slate { background: var(--tint-slate-bg); color: var(--tint-slate-fg); border-color: var(--tint-slate-line); }
+.icon-tile.is-forge-grad { background: var(--grad-forge); color: #fff; border-color: var(--forge-600); }
+
+/* ========== BENTO ========== */
+
+/* 6-col feature bento from the design system. Cells rest on
+   bg-raised + 1px border and lift to shadow-md on hover; at most
+   one is-glow and one is-dark cell per bento. */
+.bento {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 14px;
+}
+.bento-card {
+  grid-column: span 2;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  display: flex; flex-direction: column; gap: 10px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+}
+.bento-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+.bento-card.is-wide { grid-column: span 3; }
+.bento-card.is-hero { grid-column: span 4; }
+.bento-card.is-full { grid-column: span 6; }
+.bento-card.is-tall { grid-row: span 2; }
+.bento-card h3 { font-size: 16px; font-weight: 600; margin: 2px 0 0; letter-spacing: -0.01em; }
+.bento-card p { font-size: 13.5px; color: var(--fg-muted); line-height: 1.55; margin: 0; }
+.bento-card .rule-chip {
+  display: inline-flex; align-items: center;
+  font-family: var(--font-mono); font-size: 11px;
+  background: var(--steel-50); border: 1px solid var(--border-strong);
+  padding: 1px 6px; border-radius: 3px; color: var(--steel-700);
+  align-self: flex-start;
+}
+.bento-card.is-glow::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: var(--grad-glow);
+  pointer-events: none;
+}
+.bento-card.is-glow > * { position: relative; }
+.bento-card.is-dark { background: var(--grad-steel); border-color: var(--steel-800); color: var(--term-fg); }
+.bento-card.is-dark h3 { color: var(--canvas); }
+.bento-card.is-dark p { color: var(--steel-400); }
+.bento-card.is-dark .icon-tile { background: var(--steel-800); color: var(--forge-300); border-color: var(--steel-700); }
+
+@media (max-width: 880px) {
+  .bento { grid-template-columns: 1fr; }
+  .bento-card, .bento-card.is-wide, .bento-card.is-hero,
+  .bento-card.is-full, .bento-card.is-tall { grid-column: auto; grid-row: auto; }
+}
 
 /* ========== LOGOS STRIP ========== */
 
