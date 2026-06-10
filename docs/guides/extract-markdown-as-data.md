@@ -20,7 +20,12 @@ parts of the file feed the tree:
 - **Body sections** — H1 / H2 / H3 headings and the
   content under them, projected as siblings.
 
-This guide is about when to use which.
+This guide is about when to use which. Two modes share
+the work: declared schema entries **constrain and
+rename** the slice you name, while
+[`projection: blocks`](#projecting-a-whole-section-body)
+**captures everything else** — a section's whole body,
+or, at the schema root, the whole document.
 
 ## The principle
 
@@ -136,19 +141,11 @@ emits:
 
 ```json
 {
-  "frontmatter": {
-    "title": "Product copy"
-  },
+  "frontmatter": { "title": "Product copy" },
   "title": "Product copy",
-  "lead": {
-    "text": "A lint-and-fix tool that keeps your Markdown consistent across every surface — READMEs, docs site, editor extensions."
-  },
-  "tagline": {
-    "text": "Mark down your ideas; smith them into shipping docs."
-  },
-  "vscode-description": {
-    "text": "Inline diagnostics, fix-on-save, and instant navigation for Markdown in VS Code."
-  }
+  "lead": { "text": "A lint-and-fix tool that keeps your Markdown consistent across every surface — READMEs, docs site, editor extensions." },
+  "tagline": { "text": "Mark down your ideas; smith them into shipping docs." },
+  "vscode-description": { "text": "Inline diagnostics, fix-on-save, and instant navigation for Markdown in VS Code." }
 }
 ```
 
@@ -169,8 +166,7 @@ paragraph then projects under an `inline` key as a
 typed, recursive span list instead of a flat string.
 
 The canonical case is a website headline whose hero
-template renders one emphasised word — the consumer
-reads the emphasis position from the data:
+template renders one emphasised word from the data:
 
 ```markdown
 ---
@@ -200,29 +196,15 @@ the trailing text:
 
 ```json
 {
-  "frontmatter": {
-    "title": "Product copy"
-  },
+  "frontmatter": { "title": "Product copy" },
   "headline": {
     "inline": [
+      { "span": "text", "value": "Mark" },
       {
-        "span": "text",
-        "value": "Mark"
+        "span": "emphasis", "level": 1,
+        "children": [{ "span": "text", "value": "down" }]
       },
-      {
-        "children": [
-          {
-            "span": "text",
-            "value": "down"
-          }
-        ],
-        "level": 1,
-        "span": "emphasis"
-      },
-      {
-        "span": "text",
-        "value": ", smithed."
-      }
+      { "span": "text", "value": ", smithed." }
     ]
   }
 }
@@ -237,10 +219,8 @@ flat-versus-recursive mode switch.
 Leaf spans (text, code, autolink) carry a `value`;
 container spans (emphasis, strong, link) carry
 `children`. A wrapped line emits a `break` span between
-the surrounding text spans — `hard` is `true` for a
-hard break (a backslash or two trailing spaces) and
-`false` for a soft wrap — so a multi-line paragraph
-keeps its line structure. An image, inline raw HTML, or
+the surrounding text spans (`hard: true` for a backslash
+or double-space break). An image, inline raw HTML, or
 any node outside that set is a hard error — the same
 exit code as a non-conformant file. The full mapping
 table is in the [extract reference][extract-inline].
@@ -249,14 +229,14 @@ table is in the [extract reference][extract-inline].
 
 ## Projecting list structure
 
-A list projects as an array of strings by default — each
-the item's own text. That flat shape loses nesting, and
-it strips a task checkbox down to a literal `[x]` prefix.
-When the consumer needs the structure — which items are
-checked, which nest children — set `projection: tree` on
-the list entry. Each item then projects as an object with
-its own `text`, a `checked` bool on task items, and a
-recursive `children` array on items that nest a sub-list.
+A list projects as an array of own-text strings by
+default. That flat shape loses nesting and strips a task
+checkbox to a literal `[x]` prefix. When the consumer
+needs the structure — which items are checked, which
+nest children — set `projection: tree` on the list
+entry. Each item then projects as an object with its own
+`text`, a `checked` bool on task items, and a recursive
+`children` array on items that nest a sub-list.
 
 The canonical case is a sprint checklist whose
 status tool reads `checked` and walks `children`:
@@ -292,54 +272,39 @@ kind-assignment:
 
 ```json
 {
-  "frontmatter": {
-    "title": "Sprint tasks"
-  },
+  "frontmatter": { "title": "Sprint tasks" },
   "tasks": {
     "items": [
+      { "checked": true, "text": "done item" },
       {
-        "checked": true,
-        "text": "done item"
+        "checked": false, "text": "open item with bold",
+        "children": [{ "text": "nested child" }]
       },
-      {
-        "checked": false,
-        "children": [
-          {
-            "text": "nested child"
-          }
-        ],
-        "text": "open item with bold"
-      },
-      {
-        "text": "plain item"
-      }
+      { "text": "plain item" }
     ]
   }
 }
 ```
 
 The `[x]` / `[ ]` marker becomes the `checked` bool and
-never leaks into `text`; the `**bold**` flattens to its
-text; `nested child` rides inside its parent's `children`
-rather than concatenating into the parent string. A plain
-item with no marker and no sub-list is just `{text}`. The
-array order is the item order — ordered-list numbering is
-out of scope. YAML and msgpack emit the same tree.
+never leaks into `text`; `**bold**` flattens to its
+text; `nested child` rides inside its parent's
+`children`, not concatenated into the parent string. A
+plain item is just `{text}`. Array order is item order;
+YAML and msgpack emit the same tree.
 
 ## Projecting a table as positional rows
 
 A `kind: table` content entry projects as `rows` (an
 array of record objects) by default. Set
-`projection: rows` on the entry when the consumer
-needs column order preserved, tolerates duplicate
-headers, or works with positional data (a chart
-script, a CSV writer, a diff tool).
+`projection: rows` when the consumer needs column order
+preserved, tolerates duplicate headers, or works with
+positional data (a chart script, a CSV writer).
 
-The `rows` projection injects two sibling keys directly
-into the enclosing section object — `columns` (the
-header array in document order) and `rows` (an array of
-string arrays, one per body row). Short body rows are
-padded with empty strings to match the header width.
+The `rows` projection injects two sibling keys into the
+section object — `columns` (the header array) and `rows`
+(string arrays, one per body row). Short rows are padded
+with empty strings to the header width.
 
 A benchmark table in a performance section:
 
@@ -375,15 +340,10 @@ emits:
 
 ```json
 {
-  "frontmatter": {
-    "title": "Benchmark results"
-  },
+  "frontmatter": { "title": "Benchmark results" },
   "latency": {
     "columns": ["Operation", "p50 ms", "p99 ms"],
-    "rows": [
-      ["check", "12", "45"],
-      ["fix", "18", "70"]
-    ]
+    "rows": [["check", "12", "45"], ["fix", "18", "70"]]
   }
 }
 ```
@@ -397,6 +357,78 @@ semantics are in the
 [extract reference][extract-table].
 
 [extract-table]: ../reference/cli/extract.md#table-projection-modes
+
+## Projecting a whole section body
+
+Everything above names a slice and constrains it. The
+opposite need is to capture a section's *whole* body
+without listing each node. Set `projection: blocks` on
+the scope — or once at the schema root, as the default
+for every section. The body projects as a typed,
+recursive `blocks` list in document order: paragraphs,
+code, lists, tables, quotes, and deeper headings (as
+nested `section` blocks).
+
+A schema-level switch projects a whole document in one
+line. Declared sections still project as keyed objects,
+and gain a `blocks` list. The sections the walker would
+skip — wildcard and unlisted headings — now project
+too. Each lands under its slug, its heading text in a
+`heading` field:
+
+```markdown
+---
+title: Release notes
+---
+# Release notes
+
+## Summary
+
+Ships **block projection**.
+
+## Details
+
+Two new switches.
+```
+
+```yaml
+kinds:
+  notebook:
+    schema:
+      projection: blocks
+      sections:
+        - heading: { regex: '^Summary$' }
+kind-assignment:
+  - glob: ["notes.md"]
+    kinds: [notebook]
+```
+
+`mdsmith extract notebook --format json notes.md`
+emits the H1 under `title`, the declared `summary`, and
+the unlisted `details` (with its `heading` text):
+
+```json
+{
+  "frontmatter": { "title": "Release notes" },
+  "title": "Release notes",
+  "summary": {
+    "blocks": [{ "block": "paragraph", "text": "Ships block projection." }]
+  },
+  "details": {
+    "heading": "Details",
+    "blocks": [{ "block": "paragraph", "text": "Two new switches." }]
+  }
+}
+```
+
+A paragraph block defaults to flat `text`. Add
+`block-paragraphs: inline` beside `projection: blocks`
+to project each paragraph's span list under `inline`
+instead — the same span shape as above, lenient about
+images. The full grammar and its CUE contract are in
+the [extract reference][extract-blocks].
+
+[extract-blocks]: ../reference/cli/extract.md#block-projection-whole-body
 
 ## When frontmatter is the right call
 
@@ -496,38 +528,19 @@ H1 fails `mdsmith check`:
 docs/copy/product.md:4:1 MDS020 heading does not match frontmatter: expected "Product copy" (from title), got "Product page copy"
 ```
 
-The synced H1 also becomes data. `mdsmith extract`
-projects the H1 scope under a `title` key — the
-captured heading text inside — and each section's
-paragraph beneath it:
+The synced H1 also becomes data: `mdsmith extract`
+projects the H1 scope under a `title` object, the
+captured heading text and each section's paragraph
+nested inside it.
 
-```json
-{
-  "frontmatter": {
-    "title": "Product copy"
-  },
-  "title": {
-    "lead": {
-      "text": "A lint-and-fix tool that keeps your Markdown consistent across every surface — READMEs, docs site, editor extensions."
-    },
-    "tagline": {
-      "text": "Mark down your ideas; smith them into shipping docs."
-    },
-    "title": "Product copy"
-  }
-}
-```
-
-One limit remains. Every schema source on a file
-must declare the same root level, so an H1-rooted
-`proto.md` cannot compose with an H2-rooted inline
-schema on the same file. The H1 sync and the body
-extraction must both live on the `proto.md`.
-
-mdsmith cannot project the H1 text without a
-frontmatter field behind it: a `{title}` row with
-no `title` field matches any heading, and `extract`
-skips wildcard scopes. Keep the `title` field when
+One limit remains. Every schema source on a file must
+declare the same root level, so an H1-rooted `proto.md`
+cannot compose with an H2-rooted inline schema. The H1
+sync and the body extraction both live on the
+`proto.md`. And mdsmith cannot project the H1 text
+without a frontmatter field behind it — a `{title}` row
+with no `title` field matches any heading, and `extract`
+skips wildcard scopes — so keep the `title` field when
 the kind syncs the H1.
 
 [mds004]: ../../internal/rules/MDS004-first-line-heading/README.md
@@ -540,18 +553,14 @@ human-readable heading and the consumer-friendly key
 don't match.
 
 - **Heading-to-key rename.** `## VS Code` slugs to
-  `vs-code` by default. Set `bind: vscode-description`
-  on the section so the JSON consumer reads
-  `vscode-description` (matching the field name in
-  the consuming code or manifest).
-- **Collapse a wrapper.** `bind: ""` on a parent
-  scope hoists its children into the grandparent
-  scope. Use it when a heading exists for human
-  reading but should not nest in the data tree.
-- **Repeating sections.** A section with
-  `repeat: {min, max}` and a placeholder-bearing
-  heading projects as an array; combine with
-  `bind:` to rename the array key.
+  `vs-code`; set `bind: vscode-description` so the
+  consumer reads the field name its code expects.
+- **Collapse a wrapper.** `bind: ""` on a parent scope
+  hoists its children into the grandparent — for a
+  heading that should not nest in the data tree.
+- **Repeating sections.** A `repeat: {min, max}` section
+  with a placeholder heading projects as an array;
+  `bind:` renames the array key.
 
 See [the section-schema reference][secref] for the
 full grammar.
@@ -560,16 +569,15 @@ full grammar.
 
 ## Reading a value back into Markdown
 
-`mdsmith extract` writes the projection out as JSON,
-YAML, or msgpack — the right shape for a release
-script, a Hugo data file, or any non-Markdown
+`mdsmith extract` writes the projection out for a
+release script, a Hugo data file, or any non-Markdown
 consumer. The read-side counterpart lives on the
-`<?include?>` directive: the `extract:` parameter
-walks the same JSON tree and splices one leaf into
-the host file's Markdown body.
+`<?include?>` directive: its `extract:` parameter walks
+the same JSON tree and splices one leaf into the host
+file's Markdown body.
 
-Re-using the product-copy example above, a README
-embed reads the tagline directly:
+Re-using the product-copy example, a README embed reads
+the tagline directly:
 
 ```markdown
 <?include
@@ -580,16 +588,10 @@ Mark down your ideas; smith them into shipping docs.
 <?/include?>
 ```
 
-The spliced text lands on one line: a `text`
-projection joins a soft-wrapped paragraph with
-spaces. The directive runs the included file through
-the same projection rules `mdsmith extract` uses,
-walks the dotted path, and splices the leaf. There
-is no intermediate "fragment" file to keep in sync —
-the README reads the source of truth on every lint.
-
-The full set of supported paths, content-key
-shortcuts, and lint-time errors are documented in
+The directive runs the same projection rules, walks the
+dotted path, and splices the leaf — no intermediate
+"fragment" file to keep in sync. The supported paths,
+content-key shortcuts, and lint-time errors are in
 [generating-content.md](directives/generating-content.md#include-a-typed-value).
 
 ## See also

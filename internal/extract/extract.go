@@ -104,6 +104,18 @@ func keyFor(sc *schema.Scope) string {
 	return mdtext.Slugify(sc.Heading)
 }
 
+// inlineBlockParagraphs reports whether paragraph blocks in this
+// scope's body render as inline spans. The scope's own
+// `block-paragraphs` wins; an unset scope value (or a nil scope, the
+// unlisted case) falls back to the schema-level default. Only an
+// explicit `inline` turns it on. Plan 246.
+func (p *projector) inlineBlockParagraphs(sc *schema.Scope) bool {
+	if sc != nil && sc.BlockParagraphs != "" {
+		return sc.BlockParagraphs == schema.ProjectionInline
+	}
+	return p.sch != nil && p.sch.BlockParagraphs == schema.ProjectionInline
+}
+
 // hoistsToParent reports whether sm is a scope match whose bind
 // override directs it to be hoisted into the parent (`bind: ""`).
 // A preamble has the same effect by definition; this helper covers
@@ -138,6 +150,21 @@ func (p *projector) projectChildren(
 			i++
 			continue
 		}
+		if sm.Unlisted {
+			// Unlisted matches (schema-level `projection: blocks` only)
+			// have a nil Scope, so they group by heading slug rather
+			// than scope pointer. Hand the whole contiguous run to
+			// projectUnlisted, which groups same-slug headings into
+			// arrays. collectUnlistedBlockMatches appends them after
+			// the declared matches, so the run reaches the end.
+			j := i + 1
+			for j < len(children) && children[j].Unlisted {
+				j++
+			}
+			p.projectUnlisted(children[i:j], obj)
+			i = j
+			continue
+		}
 		j := i + 1
 		for j < len(children) && children[j].Scope == sm.Scope {
 			j++
@@ -167,6 +194,50 @@ func (p *projector) projectChildren(
 	}
 }
 
+// projectUnlisted projects a run of unlisted (synthetic) scope matches
+// under a schema-level `projection: blocks`. Each projects as a
+// `{heading, blocks}` object keyed by the slug of its heading text.
+// Headings whose slugs collide project as an array under that key, so
+// a section heading that repeats (`## Note`, `## Note`) survives
+// without a collision diagnostic. Plan 246.
+func (p *projector) projectUnlisted(
+	group []*schema.ScopeMatch, obj map[string]any,
+) {
+	// Group by slug in first-seen order so the array elements keep
+	// document order.
+	bySlug := map[string][]*schema.ScopeMatch{}
+	var order []string
+	for _, sm := range group {
+		key := mdtext.Slugify(sm.Heading.Text)
+		if _, seen := bySlug[key]; !seen {
+			order = append(order, key)
+		}
+		bySlug[key] = append(bySlug[key], sm)
+	}
+	for _, key := range order {
+		ms := bySlug[key]
+		if len(ms) == 1 {
+			p.setKey(obj, key, p.projectUnlistedObject(ms[0]))
+			continue
+		}
+		arr := make([]any, 0, len(ms))
+		for _, sm := range ms {
+			arr = append(arr, p.projectUnlistedObject(sm))
+		}
+		p.setKey(obj, key, arr)
+	}
+}
+
+// projectUnlistedObject builds the object for one unlisted section: a
+// `heading` text field (preserving the original heading text the slug
+// key flattens) plus the body `blocks` list. projectScopeObject adds
+// the `blocks` key from sm.Body.
+func (p *projector) projectUnlistedObject(sm *schema.ScopeMatch) map[string]any {
+	obj := p.projectScopeObject(sm)
+	p.setKey(obj, "heading", sm.Heading.Text)
+	return obj
+}
+
 // hoistGroup merges every element of group directly into obj
 // instead of nesting under a key. A `bind: ""` scope's projection
 // is its own child-scopes and content, so projectScopeObject's
@@ -188,7 +259,8 @@ func (p *projector) hoistGroup(group []*schema.ScopeMatch, obj map[string]any) {
 
 // projectScopeObject builds the object value for one matched scope:
 // its captured placeholders (name: value), then its child scopes,
-// then its content entries.
+// then its content entries, then — when the scope (or the schema)
+// projects `blocks` — its whole body under a `blocks` key.
 func (p *projector) projectScopeObject(sm *schema.ScopeMatch) map[string]any {
 	obj := map[string]any{}
 	for name, val := range sm.Captures {
@@ -196,6 +268,19 @@ func (p *projector) projectScopeObject(sm *schema.ScopeMatch) map[string]any {
 	}
 	p.projectChildren(sm.Children, obj)
 	p.projectContent(sm.Content, obj)
+	// The whole-body `blocks` list (plan 246) joins the default-key
+	// set: setKey routes it through the same collision check, so a
+	// declared content entry that binds to `blocks` is reported rather
+	// than silently overwritten. An empty section still emits
+	// `blocks: []` (keyed on ProjectsBlocks, not len(Body)) for a
+	// stable shape. The paragraph rendering choice (scope wins over
+	// schema default) is passed down the walk, never stored, so no
+	// state survives this projection; nested sections and quotes
+	// inherit the same choice.
+	if sm.ProjectsBlocks {
+		p.setKey(obj, "blocks",
+			p.blocksFromNodes(sm.Body, p.inlineBlockParagraphs(sm.Scope)))
+	}
 	return obj
 }
 
@@ -287,13 +372,7 @@ func (p *projector) codeBody(n ast.Node) string {
 	if !ok {
 		return ""
 	}
-	var b strings.Builder
-	segs := fcb.Lines()
-	for i := 0; i < segs.Len(); i++ {
-		seg := segs.At(i)
-		b.Write(seg.Value(p.f.Source))
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.TrimRight(p.rawLines(fcb), "\n")
 }
 
 func (p *projector) listItems(n ast.Node) []any {
@@ -385,11 +464,23 @@ func (p *projector) tableRows(n ast.Node) []any {
 //
 // Duplicate headers are accepted — the columns array is positional, so
 // there is no key collision. Plan 245.
+//
+// A table node with a header but no body rows returns rows as a
+// non-nil empty slice (not nil): under `projection: blocks` the result
+// serialises to `"rows": []`, which the published CUE contract's
+// `rows: [...[...string]]` accepts, whereas a nil slice would serialise
+// to `"rows": null` and fail validation. The nil return above stays
+// reserved for the not-a-table guard.
 func (p *projector) tableRowsPositional(n ast.Node) (cols []any, rows []any) {
 	tbl, ok := n.(*extast.Table)
 	if !ok {
 		return nil, nil
 	}
+	// Both halves start non-nil for the same contract reason: a table
+	// node without a TableHeader child (hand-built; the GFM parser
+	// always emits one) must serialise `"columns": []`, not null.
+	cols = []any{}
+	rows = []any{}
 	var colCount int
 	for r := tbl.FirstChild(); r != nil; r = r.NextSibling() {
 		var cells []string

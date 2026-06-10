@@ -578,6 +578,208 @@ func TestParseInline_ProjectionOnUnlistedRejected(t *testing.T) {
 		"projection is not allowed on kind: unlisted")
 }
 
+// TestParseInline_SchemaProjectionBlocks accepts a schema-level
+// `projection: blocks` and records it on the Schema (plan 246).
+func TestParseInline_SchemaProjectionBlocks(t *testing.T) {
+	sch, err := ParseInline(map[string]any{
+		"projection": "blocks",
+		"sections":   []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.NoError(t, err)
+	assert.Equal(t, ProjectionBlocks, sch.Projection)
+}
+
+// TestParseInline_SchemaProjectionUnknownRejected rejects a
+// schema-level projection value other than `blocks`.
+func TestParseInline_SchemaProjectionUnknownRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"projection": "tree",
+		"sections":   []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocks")
+}
+
+// TestParseInline_ScopeProjectionBlocks accepts `projection: blocks`
+// on a scope and records it on the Scope (plan 246).
+func TestParseInline_ScopeProjectionBlocks(t *testing.T) {
+	sch, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":    "Notes",
+			"projection": "blocks",
+		}},
+	}, "kind x")
+	require.NoError(t, err)
+	require.Len(t, sch.Sections, 1)
+	assert.Equal(t, ProjectionBlocks, sch.Sections[0].Projection)
+}
+
+// TestParseInline_ScopeProjectionUnknownRejected rejects a scope-level
+// projection value other than `blocks` (the only scope projection).
+func TestParseInline_ScopeProjectionUnknownRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":    "Notes",
+			"projection": "tree",
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocks")
+}
+
+// TestParseInline_ScopeProjectionOnPreambleRejected rejects
+// `projection:` on a preamble — the projector hoists a preamble's
+// content, so a blocks key would have no scope object to live on.
+func TestParseInline_ScopeProjectionOnPreambleRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":    nil,
+			"projection": "blocks",
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "preamble")
+}
+
+// TestParseInline_ScopeProjectionOnSlotRejected rejects `projection:`
+// on a wildcard slot — the per-scope blocks projection skips slots
+// (schema-level projection covers them instead).
+func TestParseInline_ScopeProjectionOnSlotRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":    map[string]any{"regex": ".+", "repeat": map[string]any{"min": 0}},
+			"projection": "blocks",
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "slot")
+}
+
+// TestParseInline_ScopeBlockParagraphsInline accepts
+// `block-paragraphs: inline` alongside `projection: blocks`.
+func TestParseInline_ScopeBlockParagraphsInline(t *testing.T) {
+	sch, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":          "Notes",
+			"projection":       "blocks",
+			"block-paragraphs": "inline",
+		}},
+	}, "kind x")
+	require.NoError(t, err)
+	assert.Equal(t, ProjectionInline, sch.Sections[0].BlockParagraphs)
+}
+
+// TestParseInline_ScopeBlockParagraphsWithoutBlocksRejected rejects
+// `block-paragraphs:` when the scope does not project blocks.
+func TestParseInline_ScopeBlockParagraphsWithoutBlocksRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":          "Notes",
+			"block-paragraphs": "inline",
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "projection: blocks")
+}
+
+// TestParseInline_ScopeBlockParagraphsUnknownRejected rejects a value
+// other than inline/text.
+func TestParseInline_ScopeBlockParagraphsUnknownRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":          "Notes",
+			"projection":       "blocks",
+			"block-paragraphs": "tree",
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inline")
+}
+
+// TestParseInline_SchemaBlockParagraphsInline accepts a schema-level
+// `block-paragraphs: inline` alongside a schema-level
+// `projection: blocks`.
+func TestParseInline_SchemaBlockParagraphsInline(t *testing.T) {
+	sch, err := ParseInline(map[string]any{
+		"projection":       "blocks",
+		"block-paragraphs": "inline",
+		"sections":         []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.NoError(t, err)
+	assert.Equal(t, ProjectionInline, sch.BlockParagraphs)
+}
+
+// TestParseInline_SchemaBlockParagraphsWithoutBlocksRejected rejects a
+// schema-level `block-paragraphs:` without a schema-level
+// `projection: blocks`.
+func TestParseInline_SchemaBlockParagraphsWithoutBlocksRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"block-paragraphs": "inline",
+		"sections":         []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "projection: blocks")
+}
+
+// A non-string schema-level `projection:` is a type error naming the
+// offending key, not a silent ignore.
+func TestParseInline_SchemaProjectionNonStringRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"projection": 42,
+		"sections":   []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "schema.projection")
+}
+
+// A non-string schema-level `block-paragraphs:` is a type error.
+func TestParseInline_SchemaBlockParagraphsNonStringRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"projection":       "blocks",
+		"block-paragraphs": true,
+		"sections":         []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "schema.block-paragraphs")
+}
+
+// A schema-level `block-paragraphs:` with a value other than
+// inline/text is rejected before the projection-presence check.
+func TestParseInline_SchemaBlockParagraphsBadValueRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"projection":       "blocks",
+		"block-paragraphs": "tree",
+		"sections":         []any{map[string]any{"heading": "Notes"}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inline")
+}
+
+// A non-string scope-level `projection:` is a type error.
+func TestParseInline_ScopeProjectionNonStringRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":    "Notes",
+			"projection": 7,
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "projection")
+}
+
+// A non-string scope-level `block-paragraphs:` is a type error.
+func TestParseInline_ScopeBlockParagraphsNonStringRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":          "Notes",
+			"projection":       "blocks",
+			"block-paragraphs": 9,
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "block-paragraphs")
+}
+
 func TestParseInline_ContentUnknownKind(t *testing.T) {
 	_, err := ParseInline(map[string]any{
 		"sections": []any{map[string]any{

@@ -323,6 +323,9 @@ func Extend(parent, child *Schema) (*Schema, error) {
 		return nil, err
 	}
 	extendFilename(out, parent, child)
+	if err := extendProjection(out, parent, child); err != nil {
+		return nil, err
+	}
 	extendSections(out, parent, child)
 	extendCrossRefs(out, parent, child)
 	extendAcronyms(out, parent, child)
@@ -457,6 +460,30 @@ func extendFilename(out, parent, child *Schema) {
 		return
 	}
 	out.Filename = parent.Filename
+}
+
+// extendProjection layers the schema-level projection defaults like
+// filename: a child that sets `projection:` or `block-paragraphs:`
+// overrides the parent; an unset child inherits the parent's value,
+// so `projection: blocks` survives an extends chain. The layered
+// result must satisfy the same co-presence rule the parser and
+// composeProjection enforce — `block-paragraphs` without
+// `projection: blocks` is a silently dead setting.
+func extendProjection(out, parent, child *Schema) error {
+	out.Projection = child.Projection
+	if out.Projection == "" {
+		out.Projection = parent.Projection
+	}
+	out.BlockParagraphs = child.BlockParagraphs
+	if out.BlockParagraphs == "" {
+		out.BlockParagraphs = parent.BlockParagraphs
+	}
+	if out.BlockParagraphs != "" && out.Projection != ProjectionBlocks {
+		return fmt.Errorf(
+			"extended schemas set `block-paragraphs:` without a " +
+				"schema-level `projection: blocks`")
+	}
+	return nil
 }
 
 // extendSections copies the child's sections wholesale when it

@@ -1,7 +1,7 @@
 ---
 id: 246
 title: "Typed block projection and full-document extract"
-status: "🔲"
+status: "✅"
 summary: >-
   A block-level analogue of the inline-span grammar: a section
   projects its whole body as a typed, recursive `blocks` list,
@@ -100,44 +100,44 @@ contract instead of prose.
 
 ## Tasks
 
-1. Implement the block walker in
+1. [x] Implement the block walker in
    [`internal/extract`](../internal/extract) over the grammar
    table above, reusing plan 244's item shape and plan 245's
    `columns`/`rows` shape; paragraphs default to `text`.
-2. Accept `projection: blocks` on a scope; the `blocks` key
+2. [x] Accept `projection: blocks` on a scope; the `blocks` key
    joins the default-key set (`bind:`-renamable, collision-
    checked against declared content entries).
-3. Accept schema-level `projection: blocks`; project wildcard
+3. [x] Accept schema-level `projection: blocks`; project wildcard
    and unlisted scopes under their slug with a `heading` text
    field; repeating matches project as arrays.
-4. Write the `#Block` / `#Span` CUE definitions; add the
+4. [x] Write the `#Block` / `#Span` CUE definitions; add the
    differential test validating all extract fixtures against
    them.
-5. Offer a paragraph option for inline spans inside blocks
+5. [x] Offer a paragraph option for inline spans inside blocks
    (`{block: paragraph, inline: [...]}`) gated by the same
    entry-level choice as plan 212, so block mode does not
    force plain text.
-6. Document the grammar in the extract reference and rewrite
+6. [x] Document the grammar in the extract reference and rewrite
    the guide's framing: declared entries constrain and
    rename; `projection: blocks` captures everything else.
 
 ## Acceptance Criteria
 
-- [ ] `projection: blocks` on a scope projects its full body
+- [x] `projection: blocks` on a scope projects its full body
   as the typed list, document order preserved, containers
   recursive.
-- [ ] Schema-level `projection: blocks` projects wildcard and
+- [x] Schema-level `projection: blocks` projects wildcard and
   unlisted sections with `heading` text; no section of a
   matched document is silently dropped.
-- [ ] Every block fixture validates against the published CUE
+- [x] Every block fixture validates against the published CUE
   `#Block` definition in a differential test.
-- [ ] An HTML block and a thematic break project (no hard
+- [x] An HTML block and a thematic break project (no hard
   error); an image inside a `blocks`-mode paragraph projects
   via the inline option or a defined fallback — extract does
   not exit non-zero for representable content.
-- [ ] Reference and guide updated with verified outputs.
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no issues
+- [x] Reference and guide updated with verified outputs.
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no issues
 
 ## Out of scope
 

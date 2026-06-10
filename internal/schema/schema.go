@@ -111,6 +111,21 @@ type Schema struct {
 	// fixer is triggered, but never writes the file itself. See
 	// plan 143.
 	Index *IndexSpec
+
+	// Projection, when set to ProjectionBlocks, makes `mdsmith extract`
+	// project every matched section's whole body as a `blocks` list by
+	// default — including wildcard and unlisted sections the walker
+	// otherwise skips, each under its slug with its heading text. A
+	// per-scope `projection:` still overrides this default. Empty means
+	// the historical declared-entries-only projection. Plan 246.
+	Projection string
+
+	// BlockParagraphs is the schema-level default for paragraph-block
+	// rendering under `projection: blocks` (ProjectionInline or
+	// ProjectionText). A scope's own BlockParagraphs overrides it.
+	// Valid only alongside a schema-level `projection: blocks`. Plan
+	// 246.
+	BlockParagraphs string
 }
 
 // FieldMeta carries optional schema-side metadata for a single
@@ -247,6 +262,23 @@ type Scope struct {
 	// hoists the scope's children into the parent instead of nesting
 	// under a key. Nil means "use the default key". Plan 167.
 	Bind *string
+
+	// Projection, when set to ProjectionBlocks, makes `mdsmith extract`
+	// project this scope's whole body as a typed recursive `blocks`
+	// list (in addition to any declared captures, child scopes, and
+	// content entries). Empty means the default projection (declared
+	// entries only). The parser rejects it on preamble, slot, and
+	// broad-match scopes, which the projector skips. Plan 246.
+	Projection string
+
+	// BlockParagraphs selects how paragraph blocks render inside this
+	// scope's `blocks` list: ProjectionInline emits each paragraph's
+	// typed inline-span list under an `inline` key, ProjectionText (or
+	// empty) emits flat `text`. Valid only alongside
+	// `projection: blocks`; the parser rejects it otherwise. Block-mode
+	// inline is lenient — an image projects an `image` span rather than
+	// aborting like plan 212's strict content-entry inline. Plan 246.
+	BlockParagraphs string
 }
 
 // Matcher describes how a Scope claims one or more consecutive
@@ -416,6 +448,13 @@ const (
 	// are accepted (the columns array is positional). Short body rows are
 	// padded with empty strings to match the header width. Plan 245.
 	ProjectionRows = "rows"
+	// ProjectionBlocks projects a whole section body as a typed,
+	// recursive `blocks` list (the block-level analogue of
+	// ProjectionInline). It is a *scope*-level and *schema*-level
+	// projection, not a content-entry one: set on a Scope's
+	// `projection:` key, or once at the schema root to make it the
+	// default for every matched section. Plan 246.
+	ProjectionBlocks = "blocks"
 )
 
 // IsEmpty reports whether s carries no constraints. Used by callers

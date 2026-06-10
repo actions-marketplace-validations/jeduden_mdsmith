@@ -307,3 +307,106 @@ func TestBuildMatchTree_Content(t *testing.T) {
 	assert.Equal(t, ContentKindCodeBlock, mt.Root.Children[0].Content[0].Entry.Kind)
 	assert.Equal(t, ContentKindList, mt.Root.Children[0].Content[1].Entry.Kind)
 }
+
+// A scope with `projection: blocks` captures its whole body on the
+// match (ProjectsBlocks set, Body populated with deeper headings
+// kept). Plan 246.
+func TestBuildMatchTree_ScopeBlocksBody(t *testing.T) {
+	body := "## Notes\n\npara\n\n### Sub\n\nx\n"
+	sch := &Schema{
+		RootLevel: 2,
+		Sections: []Scope{{
+			Heading:    "Notes",
+			Matcher:    &Matcher{Regex: "Notes"},
+			Projection: ProjectionBlocks,
+		}},
+	}
+	mt := BuildMatchTree(mtFile(t, body), sch, nil)
+	require.Len(t, mt.Root.Children, 1)
+	sm := mt.Root.Children[0]
+	assert.True(t, sm.ProjectsBlocks)
+	// para paragraph + the ### Sub heading (kept for section nesting)
+	// + the nested paragraph -> three body nodes.
+	require.Len(t, sm.Body, 3)
+}
+
+// A schema-level `projection: blocks` default sets ProjectsBlocks on
+// a matched scope that does not itself set a projection. Plan 246.
+func TestBuildMatchTree_SchemaBlocksDefault(t *testing.T) {
+	sch := &Schema{
+		RootLevel:  2,
+		Projection: ProjectionBlocks,
+		Sections:   []Scope{{Heading: "Notes", Matcher: &Matcher{Regex: "Notes"}}},
+	}
+	mt := BuildMatchTree(mtFile(t, "## Notes\n\npara\n"), sch, nil)
+	require.Len(t, mt.Root.Children, 1)
+	assert.True(t, mt.Root.Children[0].ProjectsBlocks)
+}
+
+// A schema-level `projection: blocks` default appends a synthetic
+// unlisted ScopeMatch for every root-level heading no declared scope
+// claimed, carrying the heading, Unlisted, ProjectsBlocks, and the
+// section body (exercising collectUnlistedBlockMatches' append). Plan
+// 246.
+func TestBuildMatchTree_CollectsUnlistedBlockMatches(t *testing.T) {
+	body := "## Goal\n\ng\n\n## Background\n\nb1\n\nb2\n"
+	sch := &Schema{
+		RootLevel:  2,
+		Projection: ProjectionBlocks,
+		Sections:   []Scope{{Heading: "Goal", Matcher: &Matcher{Regex: "Goal"}}},
+	}
+	mt := BuildMatchTree(mtFile(t, body), sch, nil)
+	require.Len(t, mt.Root.Children, 2)
+	// Declared Goal scope first, then the synthetic unlisted Background.
+	assert.False(t, mt.Root.Children[0].Unlisted)
+	bg := mt.Root.Children[1]
+	require.True(t, bg.Unlisted, "Background must be a synthetic unlisted match")
+	assert.True(t, bg.ProjectsBlocks)
+	assert.Equal(t, "Background", bg.Heading.Text)
+	assert.Nil(t, bg.Scope, "unlisted match has a nil Scope")
+	// Body spans the two background paragraphs.
+	require.Len(t, bg.Body, 2)
+}
+
+// collectUnlistedBlockMatches skips a heading a declared scope already
+// claimed (the claimed[i] continue) and a heading shallower/deeper than
+// the root level (the dh.Level != rootLevel continue): only the
+// unclaimed root-level Extra heading becomes a synthetic match.
+func TestCollectUnlistedBlockMatches_SkipsClaimedAndOffLevel(t *testing.T) {
+	// H1 (off level, skipped) + claimed H2 Goal + H3 under it (off
+	// level) + unclaimed H2 Extra (collected).
+	body := "# Title\n\n## Goal\n\ng\n\n### Deep\n\nd\n\n## Extra\n\ne\n"
+	sch := &Schema{
+		RootLevel:  2,
+		Projection: ProjectionBlocks,
+		Sections:   []Scope{{Heading: "Goal", Matcher: &Matcher{Regex: "Goal"}}},
+	}
+	mt := BuildMatchTree(mtFile(t, body), sch, nil)
+	var unlisted []string
+	for _, c := range mt.Root.Children {
+		if c.Unlisted {
+			unlisted = append(unlisted, c.Heading.Text)
+		}
+	}
+	assert.Equal(t, []string{"Extra"}, unlisted,
+		"only the unclaimed root-level heading is collected")
+}
+
+func TestAnyScopeProjectsBlocks(t *testing.T) {
+	assert.False(t, anyScopeProjectsBlocks(nil))
+	assert.False(t, anyScopeProjectsBlocks([]Scope{{Heading: "A"}}))
+	assert.True(t, anyScopeProjectsBlocks([]Scope{{Projection: ProjectionBlocks}}))
+	// Nested scope projects blocks -> the recursive arm reports true.
+	parent := Scope{Heading: "P", Sections: []Scope{{Projection: ProjectionBlocks}}}
+	assert.True(t, anyScopeProjectsBlocks([]Scope{parent}))
+}
+
+func TestBodyBlocksInRange_KeepsHeadings(t *testing.T) {
+	f := mtFile(t, "## Notes\n\npara\n\n### Sub\n\nx\n")
+	blocks := topLevelBlocks(f, parseWithTableExt(f.Source))
+	// Range covering the whole document keeps the ### Sub heading,
+	// unlike blocksInRange which strips every heading.
+	body := bodyBlocksInRange(blocks, 1, len(f.Lines)+1)
+	stripped := blocksInRange(blocks, 1, len(f.Lines)+1)
+	assert.Greater(t, len(body), len(stripped))
+}
