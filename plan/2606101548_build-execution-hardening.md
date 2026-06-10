@@ -32,12 +32,10 @@ it should not.
 
 ## Context
 
-The threat model treats both `.mdsmith.yml`
-and `<?build?>` directives as untrusted.
-Plan 2606101546's wiring assumes trusted input;
-this plan closes the gap so cloning a
-strange repo and running `mdsmith fix` does
-not detonate.
+The threat model treats `.mdsmith.yml` and
+`<?build?>` directives as untrusted. Plan
+2606101546 assumes trusted input; this plan
+closes the gap for freshly cloned repos.
 
 ## Design
 
@@ -72,6 +70,13 @@ The trust file is per-clone (in
 `MDSMITH_TRUST_BUILD=1` instead of a file —
 they are presumed sandboxed.
 
+A workspace with no `<?build?>` directives
+never consults the gate — nothing executes.
+The gate covers `.mdsmith.yml` because it
+is the only file that can declare `build:`;
+if config ever spreads across files, the
+gate must widen with it.
+
 ### Hermetic execution environment
 
 Each recipe is invoked with:
@@ -91,12 +96,10 @@ Each recipe is invoked with:
 - Standard streams attached per plan 2606101547;
   this plan is process control only.
 
-On `--build-timeout` expiry, mdsmith
-signals the entire process group with
-SIGTERM, waits up to 5 s, then sends
-SIGKILL. This prevents a recipe that
-spawns daemons or workers from leaving
-zombies behind.
+On `--build-timeout` expiry, mdsmith sends
+SIGTERM to the process group, waits up to
+5 s, then sends SIGKILL. A recipe that
+spawns daemons cannot leave orphans behind.
 
 ### Atomic write hardening
 
@@ -120,27 +123,23 @@ by:
    prevents a hostile output dir from
    pre-creating a symlink at the temp name.
 4. Each declared output path maps to a
-   file inside the staging dir. The recipe
-   gets the staging path substituted for
-   `{outputs}` and any output-path params.
+   file inside the staging dir; mdsmith
+   pre-creates parent dirs there. Only
+   `{outputs}` is substituted with staging
+   paths; named params are never rewritten.
 5. After post-condition checks (below),
-   mdsmith renames each staged file out. It
-   first `Lstat`s the destination: a symlink
-   fails the build ("output path is a
-   symlink; refuse to replace"). Otherwise
-   it does an atomic replace — POSIX
-   `rename(2)` via `os.Rename`, or on Windows
+   mdsmith renames each staged file out,
+   `Lstat`ing the destination first: a
+   symlink fails the build. The replace is
+   atomic per file — POSIX `rename(2)`, or
    `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`
-   (which Go's `os.Rename` already wraps),
-   atomic for same-volume files. Multi-output
-   rename is *not* transactionally atomic:
-   per-file replace is atomic, but if rename
-   N+1 fails after N succeeded, mdsmith logs
-   the partial state, removes the staging
-   dir, and exits FAIL. The next `mdsmith
-   fix` reruns the recipe (the ActionID
-   still mismatches; no cache write
-   happened).
+   on Windows (what `os.Rename` wraps), for
+   same-volume paths. Multi-output rename
+   is *not* transactional: if rename N+1
+   fails after N, mdsmith logs the partial
+   state, removes staging, and exits FAIL;
+   the next `fix` reruns the recipe (no
+   cache write happened).
 6. On any pre-rename failure, the staging
    dir is removed; no declared output is
    touched.
@@ -272,7 +271,9 @@ no pass-through name is empty or contains
    post-conditions in
    `docs/guides/directives/build.md`.
    Include CI guidance for
-   `MDSMITH_TRUST_BUILD=1`.
+   `MDSMITH_TRUST_BUILD=1`. Export it in
+   `demo.tape`'s hidden setup so the build
+   demo (plan 2606101546) keeps running.
 
 ## Acceptance Criteria
 

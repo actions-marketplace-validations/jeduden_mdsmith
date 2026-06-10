@@ -84,9 +84,9 @@ passed literally as one argument.
 The basic contract (plan 2606101548 hardens it):
 
 1. mdsmith creates a per-target temp dir.
-2. The recipe is invoked with the temp
-   paths substituted for `{outputs}` and
-   any output-path params.
+2. The recipe is invoked with the staging
+   paths substituted for `{outputs}`; named
+   params pass through verbatim (plan 102).
 3. On success, mdsmith renames every temp
    file to its final location.
 4. On failure, the temp dir is removed; no
@@ -121,6 +121,18 @@ pass after the existing lint-fix pass:
 The build pass runs after lint-fix so that a
 freshly-edited `outputs:` list is built with
 its new value, not the old.
+
+### CLI-only surface
+
+The build pass lives in `cmd/mdsmith` and
+`internal/build/`. It is not part of the
+public `pkg/mdsmith` Session API and is
+excluded from the WASM bindings (plan 215):
+recipes exec processes, which the WASM and
+LSP in-memory fix paths must never do. The
+pre-merge-commit hook and the merge driver
+run fix with `--no-build` semantics, so a
+merge never executes recipes.
 
 ### `mdsmith fix` flags
 
@@ -159,7 +171,10 @@ lint-fix flags.
 4. Wire the build pass into `mdsmith fix`
    in `cmd/mdsmith/`. Add the five flags
    above. Print per-target summary;
-   non-zero exit on failure.
+   non-zero exit on failure. Keep the pass
+   out of `pkg/mdsmith`; the pre-merge-commit
+   hook and merge driver invoke fix with
+   `--no-build`.
 5. Integration tests:
 
   - `cp`-based single-output recipe runs
@@ -217,6 +232,10 @@ lint-fix flags.
       2606101546; delete it"
 - [ ] No built-in recipes ship; an unknown
       `recipe:` is a lint error (MDS039)
+- [ ] `pkg/mdsmith`, the WASM bindings, LSP
+      fix, the merge driver, and the
+      pre-merge-commit hook never run the
+      build pass
 - [ ] All tests pass: `go test ./...`
 - [ ] `go tool golangci-lint run` reports no
       issues

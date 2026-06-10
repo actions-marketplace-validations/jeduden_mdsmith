@@ -126,9 +126,6 @@ TIMEOUT book.html after 30s (pid 12345)
   sending SIGTERM to process group; SIGKILL in 5s
 ```
 
-This gives a chance to see what the
-recipe was doing before it was killed.
-
 ### `--build-explain TARGET`
 
 Prints the ActionID inputs for one target
@@ -195,8 +192,11 @@ Extends the build-pass flag set:
 ### Out of scope
 
 Persistent workers, remote cache sharing,
-IDE/LSP integration, structured JSON
-output (future, behind `--build-format json`).
+IDE/LSP integration, structured JSON output
+(future, behind `--build-format json`).
+Also out: the `mdsmith targets --json` side
+door from the [build
+spikes](../docs/research/build-orchestrator/go-only.md).
 
 ## Tasks
 

@@ -18,32 +18,30 @@ depends-on: [102, 2606101546]
 
 ## Goal
 
-The build pass inside `mdsmith fix` (plan 2606101546)
-runs only recipes whose inputs or recipe spec
-changed, or whose declared outputs are
-missing. mdsmith hashes one ActionID per
-target and stores it in JSON; the next `fix`
-skips fresh targets.
+The build pass inside `mdsmith fix` (plan
+2606101546) runs only recipes whose inputs
+or recipe spec changed, or whose outputs
+are missing. One ActionID per target,
+stored in JSON, decides.
 
 ## Context
 
 Plan 102 adds `inputs:` and `outputs:` to
 `<?build?>`. Plan 2606101546 wires the build pass
 into `mdsmith fix` and rebuilds every target
-unconditionally — wasting time and flooding
-git diffs with regenerated artifacts whose
-inputs did not change.
+unconditionally, wasting time and churning
+git diffs.
 
 ### Pattern borrowed from `cmd/go/internal/cache`
 
 Go's build cache hashes `(action description ‖
 input contents)` into an ActionID. mdsmith
 borrows the content-addressed input model but
-stores its cache as JSON (hundreds of targets,
-not millions) keyed by sorted `outputs` set,
-the ActionID *inside* each entry (see "Cache
-file" below). Content hashing beats mtime: git
-checkouts and CI restores rarely preserve it.
+stores its cache as JSON keyed by sorted
+`outputs` set, the ActionID *inside* each
+entry (see "Cache file" below). Content
+hashing beats mtime: git checkouts and CI
+restores rarely preserve it.
 
 ## Design
 
@@ -69,6 +67,14 @@ its effective input set computed as
 `{ demo.tape } ∪ directive.inputs`. Authors
 do not restate the recipe's own source file.
 
+A param named in `default-inputs` is a path
+param: its `{param}` token expands to the
+absolute root-joined path at exec time,
+like `{inputs}`, so the recipe finds the
+file from the staging cwd (plan
+2606101548). The ActionID hashes the
+declared relative value.
+
 ### ActionID
 
 The ActionID is sha256 over these fields,
@@ -93,12 +99,11 @@ cache.version
 ```
 
 Every field has an outer 8-byte big-endian
-length prefix; each key, value, and path
-inside the canonicalisations is itself
-length-framed. No separator byte is used.
-Two-layer framing prevents collisions even
-when param keys contain `=` or `\0` and
-when filenames contain control bytes from
+length prefix. Each inner key, value, and
+path is itself length-framed; no separator
+bytes are used. Two-layer framing prevents
+collisions when param keys contain `=` or
+`\0` or filenames carry control bytes from
 hostile globs.
 
 `cache.version` lets a future mdsmith
@@ -124,9 +129,8 @@ Per target, in order:
    regenerated externally).
 6. Otherwise → fresh; skip the recipe.
 
-Step 5 makes the cache *advisory* rather
-than authoritative — it catches poisoned
-cache entries and hand-edited artifacts.
+Step 5 makes the cache *advisory*: it catches
+poisoned entries and hand-edited artifacts.
 
 A target is identified in the cache by its
 sorted `outputs` list, length-framed and
@@ -149,11 +153,10 @@ entry has:
   at build time, used by staleness step 5.
 - `inputs[]`: sorted post-glob paths;
   informational (ActionID covers content).
-- `action-id`: length-framed sha256
-  serialized as `sha256-<64 lowercase hex>`.
-  Stored as entry metadata (*not* the JSON
-  map key); used as log filename
-  (`<action-id>.log`) and on the wire.
+- `action-id`: the ActionID serialized as
+  `sha256-<64 lowercase hex>`; stored as
+  entry metadata (*not* the JSON map key)
+  and used as the log filename stem.
 - `recipe`, `built-at`: informational only;
   neither is in the ActionID or consulted
   by staleness.
@@ -161,14 +164,12 @@ entry has:
 All paths are stored relative to the project
 root.
 
-Cache writes are atomic: write to
-`.mdsmith/build-cache.json.tmp` and rename. A
+Cache writes are atomic (temp + rename). A
 mid-build crash leaves the previous cache
 readable.
 
 `.mdsmith/` goes into a recommended
-`.gitignore` snippet — per-clone state, like
-`node_modules/`.
+`.gitignore` snippet — per-clone state.
 
 ### Flags on `mdsmith fix`
 
@@ -181,20 +182,19 @@ Extends plan 2606101546's build-pass flag set:
 | `--build-check-stale` | Print every stale target, exit non-zero if any are stale, run no recipe |
 | `--build-no-cache`    | Treat all targets as stale; do not read or write the cache (debugging)  |
 
-`--build-check-stale` makes "every artifact is
-up to date with its source" a CI signal a
-reviewer can trust. The lint-fix pass still
-runs unless combined with `--build-only`.
+`--build-check-stale` makes artifact
+freshness a CI signal a reviewer can trust.
+The lint-fix pass still runs unless
+combined with `--build-only`.
 
 ### Interaction with plan 2606101546
 
-- The build pass calls the staleness check
-  before `Builder.Build`; fresh targets are
-  skipped silently.
+- Staleness runs before `Builder.Build`;
+  fresh targets are skipped silently.
 - Per-target summary: `OK` (ran, succeeded),
   `FAIL` (ran, failed), `SKIP` (was fresh).
-- `--build-dry-run` (plan 2606101546) gains a per-
-  target verdict (`STALE | FRESH`).
+- `--build-dry-run` gains a `STALE | FRESH`
+  verdict per target.
 
 ### Out of scope
 

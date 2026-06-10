@@ -69,10 +69,10 @@ ActionID still covers recipe spec and
 output paths.
 
 Empty `inputs:` is *not* right for recipes
-depending on remote state. The cache key
-is unstable. Use a synthetic input file the
-author touches to force a rebuild, or run
-`--build-force` on a schedule.
+depending on remote state: the cache never
+invalidates. Use a synthetic input file the
+author touches, or `--build-force` on a
+schedule.
 
 Each entry in `outputs:` is a literal relative
 path. No globs. Every output must be a path the
@@ -97,10 +97,6 @@ stored as the section body.
 | ----------- | -------------------------------------------- |
 | `{output}`  | The current output path                      |
 | `{alt}`     | `"{recipe} output: {output}"` for that entry |
-
-With `outputs: [foo.png]` the body is one line.
-With `outputs: [a.png, b.png]` the body is two
-lines, in declared order.
 
 Any change to `outputs:` makes the rendered
 body diverge, and MDS039 reports `generated
@@ -203,21 +199,25 @@ validation error reported by MDS040, since
 list-expanding a fragment of a token has no
 well-defined semantics.
 
-A single-output recipe uses a named param:
-`command: "tool -o {dest}"` with the directive
-supplying `dest: foo.png` and `outputs:
-[foo.png]`. The author keeps both fields in
-sync; MDS039 does not auto-link them.
+`{outputs}` is the only token that receives
+output paths: plan 2606101546 substitutes
+the staging paths for it at exec time.
+Named params are opaque strings, never
+rewritten — a recipe taking its output path
+via a named param writes past the staging
+dir and fails plan 2606101548's
+post-conditions. A single-output recipe
+also uses `{outputs}` (one declared output
+expands to one argv): `command: "tool -o
+{outputs}"`. A multi-output recipe gets one
+argv per entry: `command: "magick convert
+in.svg {outputs}"` with `outputs: [a.png,
+b.png]`.
 
-A multi-output recipe uses `{outputs}`:
-`command: "magick convert in.svg {outputs}"`.
-The directive supplies `outputs: [a.png,
-b.png]`; argv expansion appends each as a
-separate argument.
-
-The actual argv expansion happens in plan 2606101546.
-Plan 102's MDS040 update only validates that
-the reserved names are not declared as params.
+The actual argv expansion happens in plan
+2606101546. Plan 102's MDS040 update only
+validates that the reserved names are not
+declared as params.
 
 ### Fixture and doc updates
 
