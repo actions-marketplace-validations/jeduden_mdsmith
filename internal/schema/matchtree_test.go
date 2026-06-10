@@ -307,3 +307,57 @@ func TestBuildMatchTree_Content(t *testing.T) {
 	assert.Equal(t, ContentKindCodeBlock, mt.Root.Children[0].Content[0].Entry.Kind)
 	assert.Equal(t, ContentKindList, mt.Root.Children[0].Content[1].Entry.Kind)
 }
+
+// A scope with `projection: blocks` captures its whole body on the
+// match (ProjectsBlocks set, Body populated with deeper headings
+// kept). Plan 246.
+func TestBuildMatchTree_ScopeBlocksBody(t *testing.T) {
+	body := "## Notes\n\npara\n\n### Sub\n\nx\n"
+	sch := &Schema{
+		RootLevel: 2,
+		Sections: []Scope{{
+			Heading:    "Notes",
+			Matcher:    &Matcher{Regex: "Notes"},
+			Projection: ProjectionBlocks,
+		}},
+	}
+	mt := BuildMatchTree(mtFile(t, body), sch, nil)
+	require.Len(t, mt.Root.Children, 1)
+	sm := mt.Root.Children[0]
+	assert.True(t, sm.ProjectsBlocks)
+	// para paragraph + the ### Sub heading (kept for section nesting)
+	// + the nested paragraph -> three body nodes.
+	require.Len(t, sm.Body, 3)
+}
+
+// A schema-level `projection: blocks` default sets ProjectsBlocks on
+// a matched scope that does not itself set a projection. Plan 246.
+func TestBuildMatchTree_SchemaBlocksDefault(t *testing.T) {
+	sch := &Schema{
+		RootLevel:  2,
+		Projection: ProjectionBlocks,
+		Sections:   []Scope{{Heading: "Notes", Matcher: &Matcher{Regex: "Notes"}}},
+	}
+	mt := BuildMatchTree(mtFile(t, "## Notes\n\npara\n"), sch, nil)
+	require.Len(t, mt.Root.Children, 1)
+	assert.True(t, mt.Root.Children[0].ProjectsBlocks)
+}
+
+func TestAnyScopeProjectsBlocks(t *testing.T) {
+	assert.False(t, anyScopeProjectsBlocks(nil))
+	assert.False(t, anyScopeProjectsBlocks([]Scope{{Heading: "A"}}))
+	assert.True(t, anyScopeProjectsBlocks([]Scope{{Projection: ProjectionBlocks}}))
+	// Nested scope projects blocks -> the recursive arm reports true.
+	parent := Scope{Heading: "P", Sections: []Scope{{Projection: ProjectionBlocks}}}
+	assert.True(t, anyScopeProjectsBlocks([]Scope{parent}))
+}
+
+func TestBodyBlocksInRange_KeepsHeadings(t *testing.T) {
+	f := mtFile(t, "## Notes\n\npara\n\n### Sub\n\nx\n")
+	blocks := topLevelBlocks(f, parseWithTableExt(f.Source))
+	// Range covering the whole document keeps the ### Sub heading,
+	// unlike blocksInRange which strips every heading.
+	body := bodyBlocksInRange(blocks, 1, len(f.Lines)+1)
+	stripped := blocksInRange(blocks, 1, len(f.Lines)+1)
+	assert.Greater(t, len(body), len(stripped))
+}

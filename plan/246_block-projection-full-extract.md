@@ -104,7 +104,7 @@ contract instead of prose.
    [`internal/extract`](../internal/extract) over the grammar
    table above, reusing plan 244's item shape and plan 245's
    `columns`/`rows` shape; paragraphs default to `text`.
-2. Accept `projection: blocks` on a scope; the `blocks` key
+2. [x] Accept `projection: blocks` on a scope; the `blocks` key
    joins the default-key set (`bind:`-renamable, collision-
    checked against declared content entries).
 3. Accept schema-level `projection: blocks`; project wildcard

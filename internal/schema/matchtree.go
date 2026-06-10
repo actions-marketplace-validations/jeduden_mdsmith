@@ -94,6 +94,20 @@ type ScopeMatch struct {
 
 	// Content are the matched content entries in declared order.
 	Content []ContentMatch
+
+	// ProjectsBlocks reports whether this match's whole body should be
+	// projected as a `blocks` list — set when the scope (or, by
+	// default, the schema) declares `projection: blocks`. The
+	// projector keys on this rather than len(Body) so an empty section
+	// still emits `blocks: []` for a stable shape. Plan 246.
+	ProjectsBlocks bool
+
+	// Body holds the section's whole body in document order — every
+	// top-level block node in the scope's line range, deeper headings
+	// included so the block walker can nest them as `section` blocks.
+	// Meaningful only when ProjectsBlocks is true; nil (empty body)
+	// otherwise. Plan 246.
+	Body []ast.Node
 }
 
 // ContentMatch pairs a schema ContentEntry with the AST node that
@@ -117,17 +131,38 @@ func BuildMatchTree(f *lint.File, sch *Schema, docFM map[string]any) *MatchTree 
 	rootLevel := sch.EffectiveRootLevel()
 	heads := skipBelow(ExtractDocHeadings(f), rootLevel)
 
+	// The body block scan feeds two consumers: per-entry content
+	// matching (anyScopeHasContent) and the whole-body `blocks`
+	// projection (a scope's or the schema's `projection: blocks`).
+	// Parse once when either needs it.
+	blocksDefault := sch.Projection == ProjectionBlocks
 	var blocks []contentBlock
-	if anyScopeHasContent(sch.Sections) {
+	if anyScopeHasContent(sch.Sections) || blocksDefault ||
+		anyScopeProjectsBlocks(sch.Sections) {
 		blocks = topLevelBlocks(f, parseWithTableExt(f.Source))
 	}
 
 	claimed := make(map[int]bool)
 	buildScopeMatches(
 		f, sch.Sections, heads, rootLevel, 1, len(f.Lines)+1,
-		claimed, blocks, docFM, mt.Root,
+		claimed, blocks, docFM, blocksDefault, mt.Root,
 	)
 	return mt
+}
+
+// anyScopeProjectsBlocks reports whether any scope in the tree sets a
+// scope-level `projection: blocks`, so BuildMatchTree knows to parse
+// the body block list even when no scope declares `content:`.
+func anyScopeProjectsBlocks(scopes []Scope) bool {
+	for i := range scopes {
+		if scopes[i].Projection == ProjectionBlocks {
+			return true
+		}
+		if anyScopeProjectsBlocks(scopes[i].Sections) {
+			return true
+		}
+	}
+	return false
 }
 
 // buildScopeMatches mirrors walkContentScopes: pair each scope with
@@ -139,7 +174,7 @@ func buildScopeMatches(
 	f *lint.File, scopes []Scope, heads []DocHeading,
 	expectedLevel, parentStart, parentEnd int,
 	claimed map[int]bool, blocks []contentBlock,
-	docFM map[string]any, parent *ScopeMatch,
+	docFM map[string]any, blocksDefault bool, parent *ScopeMatch,
 ) {
 	for i := range scopes {
 		sc := &scopes[i]
@@ -165,15 +200,41 @@ func buildScopeMatches(
 				Captures: scopeCaptures(sc, dh, docFM),
 			}
 			collectContent(sc, blocks, dh.Line+1, end, sm)
+			// A scope-level `projection: blocks`, or a schema-level
+			// default, captures the section's whole body (deeper
+			// headings kept) so the projector can emit the `blocks`
+			// list. The per-scope setting overrides the default off,
+			// matching the parser's per-scope-wins contract.
+			if sc.Projection == ProjectionBlocks ||
+				(blocksDefault && sc.Projection == "") {
+				sm.ProjectsBlocks = true
+				sm.Body = bodyBlocksInRange(blocks, dh.Line+1, end)
+			}
 			if len(sc.Sections) > 0 {
 				buildScopeMatches(
 					f, sc.Sections, heads, expectedLevel+1, dh.Line, end,
-					claimed, blocks, docFM, sm,
+					claimed, blocks, docFM, blocksDefault, sm,
 				)
 			}
 			parent.Children = append(parent.Children, sm)
 		}
 	}
+}
+
+// bodyBlocksInRange returns the block nodes whose start line is in
+// [startLine, endLine), in document order, with headings KEPT (unlike
+// blocksInRange). The block walker turns a deeper heading into a
+// nested `section` block, so the projection needs the headings the
+// content validator filters out. Plan 246.
+func bodyBlocksInRange(blocks []contentBlock, startLine, endLine int) []ast.Node {
+	var out []ast.Node
+	for _, b := range blocks {
+		if b.line < startLine || b.line >= endLine {
+			continue
+		}
+		out = append(out, b.node)
+	}
+	return out
 }
 
 // scopeCaptures merges the regex named captures with the `{field}`

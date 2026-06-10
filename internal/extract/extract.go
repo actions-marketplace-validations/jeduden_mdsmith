@@ -188,7 +188,8 @@ func (p *projector) hoistGroup(group []*schema.ScopeMatch, obj map[string]any) {
 
 // projectScopeObject builds the object value for one matched scope:
 // its captured placeholders (name: value), then its child scopes,
-// then its content entries.
+// then its content entries, then — when the scope (or the schema)
+// projects `blocks` — its whole body under a `blocks` key.
 func (p *projector) projectScopeObject(sm *schema.ScopeMatch) map[string]any {
 	obj := map[string]any{}
 	for name, val := range sm.Captures {
@@ -196,6 +197,15 @@ func (p *projector) projectScopeObject(sm *schema.ScopeMatch) map[string]any {
 	}
 	p.projectChildren(sm.Children, obj)
 	p.projectContent(sm.Content, obj)
+	// The whole-body `blocks` list (plan 246) joins the default-key
+	// set: setKey routes it through the same collision check, so a
+	// declared content entry that binds to `blocks` is reported rather
+	// than silently overwritten. An empty section still emits
+	// `blocks: []` (keyed on ProjectsBlocks, not len(Body)) for a
+	// stable shape.
+	if sm.ProjectsBlocks {
+		p.setKey(obj, "blocks", p.blocksFromNodes(sm.Body))
+	}
 	return obj
 }
 

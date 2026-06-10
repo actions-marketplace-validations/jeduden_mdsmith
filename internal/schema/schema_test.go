@@ -578,6 +578,61 @@ func TestParseInline_ProjectionOnUnlistedRejected(t *testing.T) {
 		"projection is not allowed on kind: unlisted")
 }
 
+// TestParseInline_ScopeProjectionBlocks accepts `projection: blocks`
+// on a scope and records it on the Scope (plan 246).
+func TestParseInline_ScopeProjectionBlocks(t *testing.T) {
+	sch, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":    "Notes",
+			"projection": "blocks",
+		}},
+	}, "kind x")
+	require.NoError(t, err)
+	require.Len(t, sch.Sections, 1)
+	assert.Equal(t, ProjectionBlocks, sch.Sections[0].Projection)
+}
+
+// TestParseInline_ScopeProjectionUnknownRejected rejects a scope-level
+// projection value other than `blocks` (the only scope projection).
+func TestParseInline_ScopeProjectionUnknownRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":    "Notes",
+			"projection": "tree",
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocks")
+}
+
+// TestParseInline_ScopeProjectionOnPreambleRejected rejects
+// `projection:` on a preamble — the projector hoists a preamble's
+// content, so a blocks key would have no scope object to live on.
+func TestParseInline_ScopeProjectionOnPreambleRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":    nil,
+			"projection": "blocks",
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "preamble")
+}
+
+// TestParseInline_ScopeProjectionOnSlotRejected rejects `projection:`
+// on a wildcard slot — the per-scope blocks projection skips slots
+// (schema-level projection covers them instead).
+func TestParseInline_ScopeProjectionOnSlotRejected(t *testing.T) {
+	_, err := ParseInline(map[string]any{
+		"sections": []any{map[string]any{
+			"heading":    map[string]any{"regex": ".+", "repeat": map[string]any{"min": 0}},
+			"projection": "blocks",
+		}},
+	}, "kind x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "slot")
+}
+
 func TestParseInline_ContentUnknownKind(t *testing.T) {
 	_, err := ParseInline(map[string]any{
 		"sections": []any{map[string]any{

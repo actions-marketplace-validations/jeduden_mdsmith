@@ -349,8 +349,10 @@ func validateScopeShape(sc Scope, m map[string]any, path string) error {
 		// `bind:` is meaningless on a preamble: it has no key to
 		// rename (its content hoists into the parent), and the
 		// empty form is redundant with that default. Plan 167.
+		// `projection:` is rejected for the same reason — a preamble
+		// has no scope object to carry a `blocks` key. Plan 246.
 		return rejectKeys(m, path, "preamble (`heading: null`)",
-			"sections", "bind")
+			"sections", "bind", "projection")
 	}
 	// After applyScopeFields succeeds, either Preamble is true
 	// (handled above) or Matcher is set by setScopeHeading; a
@@ -364,20 +366,27 @@ func validateScopeShape(sc Scope, m map[string]any, path string) error {
 	// projector skips slot scopes entirely so a bind would be
 	// unreachable (plan 167).
 	if isSlotMatcher(sc.Matcher) {
+		// `projection:` joins the rejected set: the per-scope blocks
+		// projection skips slots, so a scope-level `projection: blocks`
+		// here would be unreachable. Schema-level `projection: blocks`
+		// covers slots instead (plan 246).
 		return rejectKeys(m, path, "slot (`regex: '.+', repeat: { min: 0 }`)",
-			"sections", "rules", "content", "closed", "bind")
+			"sections", "rules", "content", "closed", "bind", "projection")
 	}
 	// A non-slot broad matcher (`regex: '.+'` with a non-zero
-	// `min`) is also skipped by the projector. `bind:` on such a
-	// scope is unreachable — surface it at parse time rather than
-	// silently dropping the override at extract time (plan 167).
+	// `min`) is also skipped by the projector. `bind:` and
+	// `projection:` on such a scope are unreachable — surface them at
+	// parse time rather than silently dropping at extract time (plans
+	// 167, 246).
 	if isBroadMatcher(sc.Matcher) {
-		if _, ok := m["bind"]; ok {
-			return fmt.Errorf(
-				"%s: `bind:` is not allowed on a broad-match scope "+
-					"(`regex: '.+'`) — the projector skips broad "+
-					"matchers so the override would be unreachable",
-				path)
+		for _, k := range []string{"bind", "projection"} {
+			if _, ok := m[k]; ok {
+				return fmt.Errorf(
+					"%s: `%s:` is not allowed on a broad-match scope "+
+						"(`regex: '.+'`) — the projector skips broad "+
+						"matchers so it would be unreachable",
+					path, k)
+			}
 		}
 	}
 	return nil
@@ -444,6 +453,8 @@ func applyScopeFields(m map[string]any, sc *Scope, path string) error {
 			err = setScopeContent(sc, vv, path)
 		case "bind":
 			err = setScopeBind(sc, vv, path)
+		case "projection":
+			err = setScopeProjection(sc, vv, path)
 		default:
 			return fmt.Errorf("%s: unknown scope key %q", path, k)
 		}
@@ -464,6 +475,29 @@ func setScopeBind(sc *Scope, v any, path string) error {
 		return fmt.Errorf("%s.bind must be a string, got %T", path, v)
 	}
 	sc.Bind = &s
+	return nil
+}
+
+// setScopeProjection reads the optional scope-level `projection:`
+// mode. The only legal value is `blocks` — the whole-body block
+// projection (plan 246). The content-entry projections (`text`,
+// `inline`, `tree`, `records`, `rows`) belong on a `content:` entry,
+// not a scope, so they are rejected here with a pointer to the right
+// surface. validateScopeShape rejects `projection:` outright on
+// preamble, slot, and broad scopes (the projector skips those), so
+// this setter handles only ordinary named scopes.
+func setScopeProjection(sc *Scope, v any, path string) error {
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("%s.projection must be a string, got %T", path, v)
+	}
+	if s != ProjectionBlocks {
+		return fmt.Errorf(
+			"%s.projection: a scope only projects `blocks` "+
+				"(content-entry projections like text/inline/tree/records/rows "+
+				"go on a `content:` entry), not %q", path, s)
+	}
+	sc.Projection = s
 	return nil
 }
 
