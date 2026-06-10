@@ -62,9 +62,9 @@ flips.
   divergence class) and a fuzz run (`go test -fuzz=FuzzParsePath`) with
   zero divergences.
 - **First in-house cut diverged systematically from CUE; corrected in
-  review round 1.** The committed parser (`cac2a7d`) used an ASCII-only
+  review round 1.** The committed parser (`3969eed`) used an ASCII-only
   ident class and `strconv.Unquote`, validated only against a curated
-  28-case corpus chosen to avoid known divergences. Fuzzing against
+  corpus (`ef7626d`) chosen to avoid known divergences. Fuzzing against
   `cue.ParsePath` found systematic disagreement. The realignment:
   - identifiers accept Unicode letters/digits and `$` (CUE's class), not
     just `[a-zA-Z]`;
@@ -77,17 +77,24 @@ flips.
     tokens are tolerated, matching `cue.ParsePath`.
 - **Behavior change vs the old CUE-backed `fieldinterp`.** The previous
   `fieldinterp` called `cue.ParsePath` then `Selector.Unquoted()`
-  unguarded, so an index/definition/hidden selector (`{123}`, `a[0]`,
-  `#foo`) **panicked**. The string-label-only `cuelite.ParsePath` now
-  rejects those with a clear kind-naming error, which
-  `ParseCUEPath` maps to "no path" — a graceful diagnostic in place of a
-  panic. For every string-label path the two agree (verified by the
-  harness), so the realignment is parity-preserving where it mattered.
-- **`cuelite.ParsePath` is string-label-only by design.** CUE accepts
-  index/definition/hidden selectors as valid paths; `cuelite.Path` is
-  `[]string`-backed and the phase-2 consumers (`fieldinterp`, `query`)
-  need only string labels, so `ParsePath` documents and rejects the
-  non-string kinds rather than representing them.
+  unguarded, so an INDEX or DEFINITION selector (`{123}`, `a[0]`, `#foo`)
+  **panicked** — `cue.ParsePath` parses those as valid non-string labels
+  and `Unquoted()` panics on a non-string selector. A HIDDEN label (`_foo`)
+  did NOT panic: `cue.ParsePath` itself REJECTS it ("hidden label `_foo`
+  not allowed"), so the old `ParseCUEPath` already returned nil gracefully
+  there. The string-label-only `cuelite.ParsePath` now rejects all three
+  kinds with a clear kind-naming error, which `ParseCUEPath` maps to "no
+  path" — a graceful diagnostic in place of the panic on the index and
+  definition cases. For every string-label path the two agree (verified by
+  the harness), so the realignment is parity-preserving where it mattered.
+- **`cuelite.ParsePath` is string-label-only by design.** The hidden-label
+  rejection (`_foo`) is PARITY with CUE — `cue.ParsePath` rejects it too
+  ("hidden label `_foo` not allowed"), so it is not a valid CUE path. The
+  index- and definition-label rejections are the deliberate STRING-LABEL
+  NARROWING: CUE accepts those as valid paths, but `cuelite.Path` is
+  `[]string`-backed and the phase-2 consumers (`fieldinterp`, `query`) need
+  only string labels, so `ParsePath` documents and rejects them rather than
+  representing them.
 - **The `len(segs) == 0` dead branch in `ParseCUEPath` was removed.**
   `cuelite.ParsePath` never returns a nil error with zero segments (it
   rejects the empty and whitespace-only expression), so the guard was
