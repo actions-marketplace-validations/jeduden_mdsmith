@@ -444,6 +444,40 @@ func TestIsSeparatorContentDegenerate(t *testing.T) {
 	assert.True(t, isSeparatorContent([]byte(":-: | ---")))
 }
 
+// TestIsSepCellBytes exercises every branch of the bytes-native
+// separator-cell validator that replaces sepCellRe.MatchString.
+func TestIsSepCellBytes(t *testing.T) {
+	// Empty input returns false.
+	assert.False(t, isSepCellBytes([]byte{}))
+	// Leading colon only (no dash) returns false.
+	assert.False(t, isSepCellBytes([]byte(":")))
+	// No dash at all returns false.
+	assert.False(t, isSepCellBytes([]byte("x")))
+	// Minimal valid: single dash.
+	assert.True(t, isSepCellBytes([]byte("-")))
+	// Leading colon + dash.
+	assert.True(t, isSepCellBytes([]byte(":-")))
+	// Leading colon + dashes + trailing colon.
+	assert.True(t, isSepCellBytes([]byte(":---:")))
+	// Trailing colon only.
+	assert.True(t, isSepCellBytes([]byte("---:")))
+	// Trailing colon not at end returns false.
+	assert.False(t, isSepCellBytes([]byte("---:x")))
+}
+
+// TestFindUnescapedPipe exercises the escaped-pipe skip path and
+// the not-found return in findUnescapedPipe.
+func TestFindUnescapedPipe(t *testing.T) {
+	// No pipe at all.
+	assert.Equal(t, -1, findUnescapedPipe([]byte("abc")))
+	// Plain pipe found at index 1.
+	assert.Equal(t, 1, findUnescapedPipe([]byte("a|b")))
+	// Escaped pipe \| is skipped; real pipe found after.
+	assert.Equal(t, 2, findUnescapedPipe([]byte(`\||`)))
+	// Only escaped pipe → not found.
+	assert.Equal(t, -1, findUnescapedPipe([]byte(`\|`)))
+}
+
 func TestDetectPrefixIndentedBlockquote(t *testing.T) {
 	assert.Equal(t, "  > ", structureDetectPrefix([]byte("  > | a |")))
 	assert.Equal(t, ">", structureDetectPrefix([]byte(">")))

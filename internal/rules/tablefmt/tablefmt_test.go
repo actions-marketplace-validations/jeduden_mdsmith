@@ -47,6 +47,19 @@ func TestSplitRow_SingleColumn(t *testing.T) {
 	assertCells(t, want, cells)
 }
 
+// TestSplitRowBytes_EscapedPipe exercises the \| skip path in
+// splitRowBytes, which is distinct from the string-based splitRow.
+func TestSplitRowBytes_EscapedPipe(t *testing.T) {
+	cells := splitRowBytes([]byte(`| a \| b | c |`))
+	want := []string{`a \| b`, "c"}
+	assertCells(t, want, cells)
+}
+
+func TestSplitRowBytes_Basic(t *testing.T) {
+	cells := splitRowBytes([]byte("| a | b | c |"))
+	assertCells(t, []string{"a", "b", "c"}, cells)
+}
+
 // --- Display width tests ---
 
 func TestDisplayWidth_ASCII(t *testing.T) {
