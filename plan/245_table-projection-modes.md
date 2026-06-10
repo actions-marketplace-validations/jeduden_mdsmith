@@ -1,7 +1,7 @@
 ---
 id: 245
 title: "Table projection modes: `records` and `rows`"
-status: "🔲"
+status: "🔳"
 summary: >-
   Name the current header-keyed object projection
   `projection: records`, add `projection: rows` emitting a
