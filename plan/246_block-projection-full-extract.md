@@ -110,7 +110,7 @@ contract instead of prose.
 3. [x] Accept schema-level `projection: blocks`; project wildcard
    and unlisted scopes under their slug with a `heading` text
    field; repeating matches project as arrays.
-4. Write the `#Block` / `#Span` CUE definitions; add the
+4. [x] Write the `#Block` / `#Span` CUE definitions; add the
    differential test validating all extract fixtures against
    them.
 5. [x] Offer a paragraph option for inline spans inside blocks
