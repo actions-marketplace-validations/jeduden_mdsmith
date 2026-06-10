@@ -753,7 +753,7 @@ func TestValidatePathEntry_UnderMdsmithDir(t *testing.T) {
 }
 
 func TestValidatePathEntry_OutputsRejectGlobChars(t *testing.T) {
-	for _, p := range []string{"out*.png", "out?.png", "out[1].png"} {
+	for _, p := range []string{"out*.png", "out?.png", "out[1].png", "out{a,b}.png"} {
 		assert.NotEmpty(t, validatePathEntry(p, false), "path %q should be rejected for outputs", p)
 	}
 }

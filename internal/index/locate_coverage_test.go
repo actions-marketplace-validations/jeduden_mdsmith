@@ -270,3 +270,14 @@ func TestLocateBuildDirectiveInputsLiteral(t *testing.T) {
 	assert.Equal(t, "inputs", res.DirectiveArg)
 	assert.Equal(t, "src.svg", res.DirectiveTargetFile)
 }
+
+// TestLocateBuildDirectiveInputsBraceGlob: brace-expansion inputs must not set DirectiveTargetFile.
+func TestLocateBuildDirectiveInputsBraceGlob(t *testing.T) {
+	t.Parallel()
+	src := "# T\n\n<?build\nrecipe: render\noutputs:\n  - \"out.png\"\ninputs:\n  - \"{a,b}.md\"\n?>\n<?/build?>\n"
+	res := Locator{Path: "a.md"}.Locate([]byte(src), 8, 5)
+	assert.Equal(t, TokenDirectiveArg, res.Tag)
+	assert.Equal(t, "build", res.DirectiveName)
+	assert.Equal(t, "inputs", res.DirectiveArg)
+	assert.Empty(t, res.DirectiveTargetFile, "brace-expansion input must not set DirectiveTargetFile")
+}
