@@ -553,9 +553,11 @@ func isRawStringStart(expr string, pos int) bool {
 // bytes consumed, and any error. A raw string is delimited by N '#' + '"'
 // … '"' + N '#'; inside it, the escape introducer is '\' + N '#', so at
 // level N a backslash NOT followed by exactly N '#' is a literal backslash,
-// and '\' + N '#' + c decodes the escape c exactly as a regular quoted
-// string would (\n \t \" \uXXXX …). This matches cue.ParsePath's raw-string
-// label handling. An unterminated string or an unknown escape is rejected.
+// and '\' + N '#' + c decodes the escape c with the same SELECTOR set a
+// regular quoted string uses (\n \t \" \uXXXX …) — but a surrogate PAIR must
+// carry the '\#…' introducer on BOTH halves (the low half is '\#u…', not a
+// plain '\u…'). This matches cue.ParsePath's raw-string label handling. An
+// unterminated string or an unknown escape is rejected.
 func parseRawStringSegment(expr string, pos int) (string, int, error) {
 	hashes := 0
 	for pos+hashes < len(expr) && expr[pos+hashes] == '#' {

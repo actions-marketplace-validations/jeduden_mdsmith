@@ -96,6 +96,11 @@ func TestParsePath_accepted(t *testing.T) {
 		{"raw-string literal backslash-n", `#"a\nb"#`, []string{`a\nb`}},
 		{"raw-string escaped newline", "#\"a\\#nb\"#", []string{"a\nb"}},
 		{"raw-string embedded quotes", `#"say "hi""#`, []string{`say "hi"`}},
+		// Raw-string surrogate pairing: at hash level N, BOTH halves must use
+		// the hash-level escape introducer (\#u…). A valid \#u high + \#u low
+		// pair combines into one astral rune, matching cue.ParsePath.
+		{"raw-string paired surrogate escapes", "#\"\\#uD800\\#uDC00\"#", []string{"𐀀"}},
+		{"double-hash raw-string paired surrogate escapes", "##\"\\##uD800\\##uDC00\"##", []string{"𐀀"}},
 		// A leading BOM is skipped (offset 0 only).
 		{"leading BOM skipped", "\ufeffa", []string{"a"}},
 	}
@@ -178,6 +183,17 @@ func TestParsePath_rejected(t *testing.T) {
 		{"bracket malformed quoted", `a["\z"]`},
 		{"bracket malformed raw-string", `a[#"a\##nb"#]`},
 		{"raw-string truncated escape", `#"a\#"#`},
+		// Raw-string surrogate mis-pairing: a \#u high half followed by a
+		// PLAIN \u low half leaves the high lone (the \u is literal text in a
+		// raw string), so CUE decodes an empty string the empty-segment check
+		// rejects. Both arms reject.
+		{"raw-string high then plain-u low", "#\"\\#uD800\\uDC00\"#"},
+		{"double-hash raw-string high then plain-u low", "##\"\\##uD800\\uDC00\"##"},
+		// A \#u high half that is the last escape before the closing delimiter
+		// (the byte after it is a backslash that opens the closing run) leaves
+		// the high lone; CUE decodes empty and rejects. This is the former
+		// out-of-bounds-panic input.
+		{"raw-string lone high before close", "#\"\\#uD800\\\"#"},
 		{"multiline raw-string opener", `##"""##`},
 		{"single-hash multiline raw opener", `#"""#`},
 		{"raw newline in raw-string", "#\"\n\"#"},

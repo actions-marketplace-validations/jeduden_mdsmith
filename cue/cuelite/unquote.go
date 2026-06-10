@@ -54,7 +54,7 @@ func cueUnquote(body string) (string, error) {
 		case '\r':
 			return "", fmt.Errorf("illegal carriage return in string")
 		case '\\':
-			r, width, err := decodeEscapeAt(body, i)
+			r, width, err := decodeEscapeAt(body, i, 0)
 			if err != nil {
 				return "", err
 			}
@@ -74,23 +74,30 @@ func cueUnquote(body string) (string, error) {
 	return b.String(), nil
 }
 
-// decodeEscapeAt decodes the backslash escape at body[i] (body[i]=='\\')
-// and returns the decoded rune, the number of body bytes consumed
-// (including the backslash), and any error. It handles CUE's UTF-16
-// surrogate-pairing rule: when a \u/\U escape decodes to a HIGH surrogate
-// and an immediately-following \u/\U escape decodes to a LOW surrogate, the
-// two combine into the single astral rune (utf16.DecodeRune) and the
-// consumed width spans both escapes. A lone surrogate half is rejected,
-// matching cue.ParsePath. Non-unicode escapes delegate to decodeEscape.
+// decodeEscapeAt decodes the backslash escape at body[i] and returns the
+// decoded rune, the number of body bytes consumed (including the backslash
+// and any hash-introducer run), and any error. hashes is the raw-string
+// hash level: 0 for a normal quoted string, where the escape introducer is a
+// bare '\'; N>0 for a raw string at hash level N, where the introducer is
+// '\' followed by exactly N '#' (so the escape selector sits at
+// body[i+1+hashes]). It handles CUE's UTF-16 surrogate-pairing rule: when a
+// \u/\U (or \#u/\#U at level N) escape decodes to a HIGH surrogate and an
+// immediately-following low-surrogate escape WRITTEN WITH THE SAME
+// INTRODUCER decodes to a LOW surrogate, the two combine into the single
+// astral rune (utf16.DecodeRune) and the consumed width spans both escapes.
+// A lone surrogate half is rejected, matching cue.ParsePath. Non-unicode
+// escapes delegate to decodeEscape.
 //
-// Precondition: i < len(body) and body[i]=='\\'.
-func decodeEscapeAt(body string, i int) (rune, int, error) {
-	c := body[i+escBackslash : i+escBackslash+1]
+// Precondition: body[i]=='\\' and body[i+1 : i+1+hashes] is the '#' run, so
+// the selector byte body[i+1+hashes] is in range.
+func decodeEscapeAt(body string, i, hashes int) (rune, int, error) {
+	sel := i + escBackslash + hashes
+	c := body[sel : sel+1]
 	if c != "u" && c != "U" {
-		r, w, err := decodeEscape(body[i:])
+		r, w, err := decodeEscape(body[i:], hashes)
 		return r, w, err
 	}
-	hi, hiWidth, err := decodeUnicodeCodePoint(body[i:])
+	hi, hiWidth, err := decodeUnicodeCodePoint(body[i:], hashes)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -98,9 +105,10 @@ func decodeEscapeAt(body string, i int) (rune, int, error) {
 		return rune(hi), hiWidth, nil
 	}
 	// A high surrogate may pair with an immediately-following low-surrogate
-	// escape. Anything else (a lone high, a bare low, or a high followed by
-	// a non-low) is rejected.
-	r, w, ok := combineSurrogate(body, i, hi, hiWidth)
+	// escape that uses the SAME introducer. Anything else (a lone high, a
+	// bare low, a high followed by a non-low, or — in a raw string — a low
+	// half written with a different introducer) is rejected.
+	r, w, ok := combineSurrogate(body, i, hashes, hi, hiWidth)
 	if !ok {
 		return 0, 0, fmt.Errorf("lone surrogate U+%04X in \\u/\\U escape", hi)
 	}
@@ -108,25 +116,38 @@ func decodeEscapeAt(body string, i int) (rune, int, error) {
 }
 
 // escBackslash is the one-byte width of the leading "\\" of an escape, used
-// to index the escape's selector byte (body[i+escBackslash]).
+// to index past the backslash to the (hash run and) selector byte.
 const escBackslash = 1
 
-// combineSurrogate tries to join the high surrogate hi (already decoded
-// from body[i:], hiWidth bytes wide) with an immediately-following
-// low-surrogate \u/\U escape. It returns the combined astral rune, the
-// total width of both escapes, and ok=true on success; ok=false when no
-// low-surrogate escape follows. utf16.DecodeRune yields the real rune for a
-// valid pair, so combineSurrogate is reached only with a genuine high half.
-func combineSurrogate(body string, i int, hi uint32, hiWidth int) (rune, int, bool) {
+// combineSurrogate tries to join the high surrogate hi (already decoded from
+// body[i:], hiWidth bytes wide, at raw hash level hashes) with an
+// immediately-following low-surrogate escape that uses the SAME introducer —
+// '\' + hashes '#' + 'u'/'U'. It returns the combined astral rune, the total
+// width of both escapes, and ok=true on success; ok=false when no matching
+// low-surrogate escape follows. In a raw string the low half MUST also carry
+// the '\#…' introducer: a plain '\u' there is literal text, so the high half
+// stays lone and is rejected, matching cue.ParsePath. utf16.DecodeRune
+// yields the real rune for a valid pair, so combineSurrogate is reached only
+// with a genuine high half.
+func combineSurrogate(body string, i, hashes int, hi uint32, hiWidth int) (rune, int, bool) {
 	next := i + hiWidth
-	if next >= len(body) || body[next] != '\\' {
+	// The low half must be '\' + hashes '#' + a 'u'/'U' selector. Bounds-check
+	// the whole introducer (backslash, hash run, selector byte) before reading
+	// it: a high half at the very end of the body — e.g. a raw '\#uD800' whose
+	// next byte is the backslash that opens the closing delimiter run — leaves
+	// too few bytes for a second escape, so there is no pairing.
+	if next+escBackslash+hashes >= len(body) || body[next] != '\\' {
 		return 0, 0, false
 	}
-	c := body[next+escBackslash : next+escBackslash+1]
+	if hashes > 0 && body[next+escBackslash:next+escBackslash+hashes] != strings.Repeat("#", hashes) {
+		return 0, 0, false
+	}
+	sel := next + escBackslash + hashes
+	c := body[sel : sel+1]
 	if c != "u" && c != "U" {
 		return 0, 0, false
 	}
-	lo, loWidth, err := decodeUnicodeCodePoint(body[next:])
+	lo, loWidth, err := decodeUnicodeCodePoint(body[next:], hashes)
 	if err != nil || !utf16.IsSurrogate(rune(lo)) {
 		return 0, 0, false
 	}
@@ -140,57 +161,63 @@ func combineSurrogate(body string, i int, hi uint32, hiWidth int) (rune, int, bo
 }
 
 // decodeEscape decodes a single non-unicode backslash escape at the start
-// of s (s[0] is '\\', s[1] is not 'u'/'U') and returns the decoded rune,
-// the number of bytes consumed (including the backslash), and any error. It
+// of s (s[0] is '\\', then a hashes-long '#' run, then a selector that is
+// not 'u'/'U') and returns the decoded rune, the number of bytes consumed
+// (the backslash, the '#' run, and the selector), and any error. It
 // implements exactly CUE's escape set; an unsupported or malformed escape
-// is an error so the quoted segment is rejected.
+// is an error so the segment is rejected. hashes is the raw-string hash
+// level (0 for a normal quoted string).
 //
-// Precondition: len(s) >= 2, i.e. the backslash is never the last byte of
-// the body. parseQuotedSegment guarantees this — on a backslash it skips
-// two bytes, so a trailing backslash would consume the closing quote and
-// leave the string unterminated (rejected before cueUnquote runs), and the
-// closing quote is therefore never preceded by an unescaped backslash.
-func decodeEscape(s string) (rune, int, error) {
-	switch s[1] {
+// Precondition: len(s) >= 2+hashes, i.e. the selector byte is in range. For
+// a quoted string parseQuotedSegment guarantees the backslash is never the
+// last body byte; for a raw string rawUnquote only enters here after
+// confirming the '\' + hashes '#' introducer plus a following selector.
+func decodeEscape(s string, hashes int) (rune, int, error) {
+	sel := 1 + hashes
+	w := 2 + hashes
+	switch s[sel] {
 	case 'a':
-		return '\a', 2, nil
+		return '\a', w, nil
 	case 'b':
-		return '\b', 2, nil
+		return '\b', w, nil
 	case 'f':
-		return '\f', 2, nil
+		return '\f', w, nil
 	case 'n':
-		return '\n', 2, nil
+		return '\n', w, nil
 	case 'r':
-		return '\r', 2, nil
+		return '\r', w, nil
 	case 't':
-		return '\t', 2, nil
+		return '\t', w, nil
 	case 'v':
-		return '\v', 2, nil
+		return '\v', w, nil
 	case '\\':
-		return '\\', 2, nil
+		return '\\', w, nil
 	case '"':
-		return '"', 2, nil
+		return '"', w, nil
 	case '/':
-		return '/', 2, nil
+		return '/', w, nil
 	default:
-		return 0, 0, fmt.Errorf("unknown escape sequence \\%c", s[1])
+		return 0, 0, fmt.Errorf("unknown escape sequence \\%c", s[sel])
 	}
 }
 
 // decodeUnicodeCodePoint decodes a \u (4 hex) or \U (8 hex) escape at the
-// start of s (s[0]=='\\', s[1]=='u' or 'U') into its raw code point. It
-// requires exactly the right number of hex digits and rejects an
-// out-of-range code point, but — unlike a final rune — it ALLOWS a
-// surrogate-half value through, so decodeEscapeAt can pair two halves via
+// start of s (s[0]=='\\', then a hashes-long '#' run, then 'u'/'U') into its
+// raw code point. It requires exactly the right number of hex digits and
+// rejects an out-of-range code point, but — unlike a final rune — it ALLOWS
+// a surrogate-half value through, so decodeEscapeAt can pair two halves via
 // utf16.DecodeRune before deciding accept/reject. A surrogate that never
-// pairs is rejected by decodeEscapeAt.
-func decodeUnicodeCodePoint(s string) (uint32, int, error) {
+// pairs is rejected by decodeEscapeAt. hashes is the raw-string hash level
+// (0 for a normal quoted string).
+func decodeUnicodeCodePoint(s string, hashes int) (uint32, int, error) {
+	sel := 1 + hashes // index of the 'u'/'U' selector
 	n := 4
-	if s[1] == 'U' {
+	if s[sel] == 'U' {
 		n = 8
 	}
-	if len(s) < 2+n {
-		return 0, 0, fmt.Errorf("truncated \\%c escape", s[1])
+	digits := sel + 1 // first hex digit
+	if len(s) < digits+n {
+		return 0, 0, fmt.Errorf("truncated \\%c escape", s[sel])
 	}
 	// Accumulate into a uint32 so an 8-digit \U escape such as \U80000000
 	// does not overflow rune (an int32) into a negative value that would
@@ -198,16 +225,16 @@ func decodeUnicodeCodePoint(s string) (uint32, int, error) {
 	// code point.
 	var v uint32
 	for j := 0; j < n; j++ {
-		d, ok := hexVal(s[2+j])
+		d, ok := hexVal(s[digits+j])
 		if !ok {
-			return 0, 0, fmt.Errorf("invalid hex digit %q in \\%c escape", s[2+j], s[1])
+			return 0, 0, fmt.Errorf("invalid hex digit %q in \\%c escape", s[digits+j], s[sel])
 		}
 		v = v<<4 | uint32(d)
 	}
 	if v > utf8.MaxRune {
-		return 0, 0, fmt.Errorf("invalid code point U+%04X in \\%c escape", v, s[1])
+		return 0, 0, fmt.Errorf("invalid code point U+%04X in \\%c escape", v, s[sel])
 	}
-	return v, 2 + n, nil
+	return v, digits + n, nil
 }
 
 // hexVal returns the value of a single hex digit and whether c was one.
@@ -228,9 +255,14 @@ func hexVal(c byte) (int, bool) {
 // the opening N '#' + '"' and the closing '"' + N '#') given the hash count
 // hashes. In a raw string the escape introducer is '\' followed by exactly
 // `hashes` '#'; a backslash NOT followed by that many '#' is a literal
-// backslash, and '\' + hashes-of-'#' + c decodes the escape c exactly as a
-// regular quoted string does (\n \t \" \uXXXX surrogate pairs …). This
-// mirrors cue.ParsePath's raw-string handling. An unknown escape after the
+// backslash. The escape SELECTOR set after the '\#…' introducer matches a
+// regular quoted string (\#n \#t \#" \#uXXXX …), but a \u/\U surrogate PAIR
+// must be written with BOTH halves carrying the same '\#…' introducer: the
+// low half of a pair is itself a '\#u…' escape, not a plain '\u…'. A high
+// half followed by a plain '\u…' (which is literal text in a raw string), or
+// by nothing (the closing delimiter's backslash), stays lone and is
+// rejected — matching cue.ParsePath, which decodes such a label to the empty
+// string the empty-segment check then rejects. An unknown escape after the
 // '\#…' introducer is rejected. A raw newline or CR is rejected, matching
 // cueUnquote: CUE errors on a raw newline in a single-line raw string and
 // decodes a raw CR to the empty string the empty-segment check then rejects,
@@ -249,10 +281,13 @@ func rawUnquote(body string, hashes int) (string, error) {
 			return "", fmt.Errorf("illegal carriage return in raw string")
 		}
 		if body[i] == '\\' && strings.HasPrefix(body[i+1:], hashRun) {
-			// '\' + hashes '#' introduces an escape; the escape char follows.
-			// Rewrite into the regular "\c" form so decodeEscapeAt — which
-			// also handles \u/\U surrogate pairing — can decode it.
-			r, width, err := decodeRawEscape(body, i, hashes)
+			// '\' + hashes '#' introduces an escape; the selector follows. The
+			// selector byte must be present — a '\#…' run with nothing after it
+			// (the closing delimiter ate the rest) is a truncated escape.
+			if i+1+hashes >= len(body) {
+				return "", fmt.Errorf("truncated raw-string escape")
+			}
+			r, width, err := decodeEscapeAt(body, i, hashes)
 			if err != nil {
 				return "", err
 			}
@@ -265,26 +300,4 @@ func rawUnquote(body string, hashes int) (string, error) {
 		i += size
 	}
 	return b.String(), nil
-}
-
-// decodeRawEscape decodes a raw-string escape at body[i] — a '\' followed by
-// `hashes` '#' and then the escape selector — and returns the decoded rune
-// and the number of body bytes consumed (the '\', the '#' run, and the
-// escape payload). It reuses the regular escape decoder by splicing the
-// backslash directly onto the payload (dropping the '#' run), so \u/\U
-// surrogate-pair handling and the accepted-escape set match a quoted label.
-func decodeRawEscape(body string, i, hashes int) (rune, int, error) {
-	payloadStart := i + 1 + hashes // past '\' and the '#' run
-	if payloadStart >= len(body) {
-		return 0, 0, fmt.Errorf("truncated raw-string escape")
-	}
-	// Form "\<rest>" so decodeEscapeAt sees a normal escape at offset 0.
-	spliced := "\\" + body[payloadStart:]
-	r, width, err := decodeEscapeAt(spliced, 0)
-	if err != nil {
-		return 0, 0, err
-	}
-	// width counts the spliced '\' (1 byte) plus the payload bytes consumed;
-	// the real consumption is the '\', the '#' run, and those payload bytes.
-	return r, 1 + hashes + (width - 1), nil
 }
