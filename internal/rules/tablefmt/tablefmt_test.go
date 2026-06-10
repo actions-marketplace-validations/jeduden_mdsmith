@@ -47,6 +47,41 @@ func TestSplitRow_SingleColumn(t *testing.T) {
 	assertCells(t, want, cells)
 }
 
+// TestSplitRowBytes_EscapedPipe exercises the \| skip path in
+// splitRowBytes, which is distinct from the string-based splitRow.
+// The escape rule mirrors tablefmt's GFM semantics: \| is kept as a
+// literal in the current cell; a real | is a cell delimiter; \\|
+// means the second \ escapes the pipe (same as \|), so \\| is also
+// not a delimiter — matching GitHub's renderer behaviour.
+func TestSplitRowBytes_EscapedPipe(t *testing.T) {
+	tests := []struct {
+		desc  string
+		input string
+		want  []string
+	}{
+		{"single \\| in cell middle", `| a \| b | c |`, []string{`a \| b`, "c"}},
+		{"multiple \\| in one cell", `| a \| b \| c | d |`, []string{`a \| b \| c`, "d"}},
+		{"\\| at cell start", `| \| text | other |`, []string{`\| text`, "other"}},
+		{"\\| at cell end", `| text \| | other |`, []string{`text \|`, "other"}},
+		{"\\\\| second \\ escapes the |", `| a \\| b |`, []string{`a \\| b`}},
+		{"\\| between real pipes in multi-cell row", `| a | b \| c | d |`, []string{"a", `b \| c`, "d"}},
+		{"only \\| — single cell no real delimiter", `| \| |`, []string{`\|`}},
+		{"\\| in every cell", `| a \| x | b \| y | c \| z |`, []string{`a \| x`, `b \| y`, `c \| z`}},
+		{"backslash not before pipe kept verbatim", `| a\b | c |`, []string{`a\b`, "c"}},
+		{"trailing backslash no following pipe", `| a\ | b |`, []string{`a\`, "b"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			assertCells(t, tt.want, splitRowBytes([]byte(tt.input)))
+		})
+	}
+}
+
+func TestSplitRowBytes_Basic(t *testing.T) {
+	cells := splitRowBytes([]byte("| a | b | c |"))
+	assertCells(t, []string{"a", "b", "c"}, cells)
+}
+
 // --- Display width tests ---
 
 func TestDisplayWidth_ASCII(t *testing.T) {

@@ -307,23 +307,23 @@ func TestConsistentTrailingPipeOnly(t *testing.T) {
 // --- cell-count edge cases ---
 
 func TestCountCellsDegenerate(t *testing.T) {
-	assert.Equal(t, 0, countCells(""))
-	assert.Equal(t, 0, countCells("|"))
-	assert.Equal(t, 1, countCells("|  |"))
-	assert.Equal(t, 2, countCells("a | b"))
+	assert.Equal(t, 0, countCells([]byte("")))
+	assert.Equal(t, 0, countCells([]byte("|")))
+	assert.Equal(t, 1, countCells([]byte("|  |")))
+	assert.Equal(t, 2, countCells([]byte("a | b")))
 }
 
 func TestCountUnescapedPipes(t *testing.T) {
-	assert.Equal(t, 0, countUnescapedPipes(""))
-	assert.Equal(t, 0, countUnescapedPipes("text"))
-	assert.Equal(t, 1, countUnescapedPipes("a|b"))
-	assert.Equal(t, 2, countUnescapedPipes("a|b|c"))
+	assert.Equal(t, 0, countUnescapedPipes([]byte("")))
+	assert.Equal(t, 0, countUnescapedPipes([]byte("text")))
+	assert.Equal(t, 1, countUnescapedPipes([]byte("a|b")))
+	assert.Equal(t, 2, countUnescapedPipes([]byte("a|b|c")))
 	// Escaped pipe \| is not a cell delimiter.
-	assert.Equal(t, 0, countUnescapedPipes(`\|`))
+	assert.Equal(t, 0, countUnescapedPipes([]byte(`\|`)))
 	// Escaped pipe followed by a real pipe: only the real one counts.
-	assert.Equal(t, 1, countUnescapedPipes(`\||`))
+	assert.Equal(t, 1, countUnescapedPipes([]byte(`\||`)))
 	// Multiple escaped pipes with no real pipe.
-	assert.Equal(t, 0, countUnescapedPipes(`\|\|`))
+	assert.Equal(t, 0, countUnescapedPipes([]byte(`\|\|`)))
 }
 
 func TestEscapedPipeIsOneCell(t *testing.T) {
@@ -439,9 +439,43 @@ func TestSameLinePipeAndColumnDiagnostics(t *testing.T) {
 }
 
 func TestIsSeparatorContentDegenerate(t *testing.T) {
-	assert.False(t, isSeparatorContent("|"))
-	assert.False(t, isSeparatorContent("- | x"))
-	assert.True(t, isSeparatorContent(":-: | ---"))
+	assert.False(t, isSeparatorContent([]byte("|")))
+	assert.False(t, isSeparatorContent([]byte("- | x")))
+	assert.True(t, isSeparatorContent([]byte(":-: | ---")))
+}
+
+// TestIsSepCellBytes exercises every branch of the bytes-native
+// separator-cell validator that replaces sepCellRe.MatchString.
+func TestIsSepCellBytes(t *testing.T) {
+	// Empty input returns false.
+	assert.False(t, isSepCellBytes([]byte{}))
+	// Leading colon only (no dash) returns false.
+	assert.False(t, isSepCellBytes([]byte(":")))
+	// No dash at all returns false.
+	assert.False(t, isSepCellBytes([]byte("x")))
+	// Minimal valid: single dash.
+	assert.True(t, isSepCellBytes([]byte("-")))
+	// Leading colon + dash.
+	assert.True(t, isSepCellBytes([]byte(":-")))
+	// Leading colon + dashes + trailing colon.
+	assert.True(t, isSepCellBytes([]byte(":---:")))
+	// Trailing colon only.
+	assert.True(t, isSepCellBytes([]byte("---:")))
+	// Trailing colon not at end returns false.
+	assert.False(t, isSepCellBytes([]byte("---:x")))
+}
+
+// TestFindUnescapedPipe exercises the escaped-pipe skip path and
+// the not-found return in findUnescapedPipe.
+func TestFindUnescapedPipe(t *testing.T) {
+	// No pipe at all.
+	assert.Equal(t, -1, findUnescapedPipe([]byte("abc")))
+	// Plain pipe found at index 1.
+	assert.Equal(t, 1, findUnescapedPipe([]byte("a|b")))
+	// Escaped pipe \| is skipped; real pipe found after.
+	assert.Equal(t, 2, findUnescapedPipe([]byte(`\||`)))
+	// Only escaped pipe → not found.
+	assert.Equal(t, -1, findUnescapedPipe([]byte(`\|`)))
 }
 
 func TestDetectPrefixIndentedBlockquote(t *testing.T) {
@@ -507,11 +541,11 @@ func TestContainsUnescapedPipe(t *testing.T) {
 	// Tablefmt-aligned: `\|` is the only escape; `\\|` reads as a
 	// literal backslash followed by an escaped pipe, so no unescaped
 	// pipe is reported.
-	assert.True(t, containsUnescapedPipe("a|b"))
-	assert.False(t, containsUnescapedPipe("a\\|b"))
-	assert.False(t, containsUnescapedPipe("a\\\\|b"))
-	assert.True(t, containsUnescapedPipe("a\\|b|c"))
-	assert.False(t, containsUnescapedPipe("plain text"))
+	assert.True(t, containsUnescapedPipe([]byte("a|b")))
+	assert.False(t, containsUnescapedPipe([]byte("a\\|b")))
+	assert.False(t, containsUnescapedPipe([]byte("a\\\\|b")))
+	assert.True(t, containsUnescapedPipe([]byte("a\\|b|c")))
+	assert.False(t, containsUnescapedPipe([]byte("plain text")))
 }
 
 func TestSplitCells_EscapedPipe(t *testing.T) {
@@ -566,12 +600,12 @@ func TestBarePipeNotHeader(t *testing.T) {
 }
 
 func TestIsATXHeading(t *testing.T) {
-	assert.True(t, isATXHeading("# Title"))
-	assert.True(t, isATXHeading("###### Six"))
-	assert.True(t, isATXHeading("##")) // empty heading
-	assert.False(t, isATXHeading("#1 | Title"))
-	assert.False(t, isATXHeading("####### Seven")) // >6 hashes
-	assert.False(t, isATXHeading("text"))
+	assert.True(t, isATXHeading([]byte("# Title")))
+	assert.True(t, isATXHeading([]byte("###### Six")))
+	assert.True(t, isATXHeading([]byte("##"))) // empty heading
+	assert.False(t, isATXHeading([]byte("#1 | Title")))
+	assert.False(t, isATXHeading([]byte("####### Seven"))) // >6 hashes
+	assert.False(t, isATXHeading([]byte("text")))
 }
 
 func TestParseRowIgnoresPostPrefixIndent(t *testing.T) {
