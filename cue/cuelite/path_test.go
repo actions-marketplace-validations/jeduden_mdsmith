@@ -54,7 +54,7 @@ func TestParsePath_accepted(t *testing.T) {
 		{"quoted key with backslash escape", `"a\\b"`, []string{`a\b`}},
 		{"quoted key with lower-hex unicode escape", `"\u00ff"`, []string{"ÿ"}},
 		{"quoted key with upper-hex unicode escape", `"\u00FF"`, []string{"ÿ"}},
-		{"quoted key with unicode escape", `"A"`, []string{"A"}},
+		{"quoted key with unicode escape", `"\u0041"`, []string{"A"}},
 		{"quoted key with big unicode escape", `"\U0001F600"`, []string{"😀"}},
 		{"numeric-looking quoted segment", `"123"`, []string{"123"}},
 		{"quoted key with unicode", `"über"`, []string{"über"}},
@@ -74,6 +74,30 @@ func TestParsePath_accepted(t *testing.T) {
 		{"trailing line comment", "a//comment", []string{"a"}},
 		{"line comment after dot", "a.//c\nb", []string{"a", "b"}},
 		{"line comment then trailing newline", "a//c\n", []string{"a"}},
+		// Paired surrogate escapes combine into one astral rune.
+		{"paired backslash-u surrogate escapes", `"\uD83D\uDE00"`, []string{"😀"}},
+		{"paired backslash-U surrogate escapes", `"\U0000D800\U0000DC00"`, []string{"𐀀"}},
+		{"mixed surrogate escape forms", `"\uD83D\U0000DE00"`, []string{"😀"}},
+		// Bracket string-index selectors yield string labels.
+		{"bracket string index", `a["b"]`, []string{"a", "b"}},
+		{"chained bracket string index", `a["b"]["c"]`, []string{"a", "b", "c"}},
+		{"bracket index with inner spaces", `a[ "b" ]`, []string{"a", "b"}},
+		{"bracket index leading newline", "a[\n\"b\"]", []string{"a", "b"}},
+		{"bracket index then dot", `a["b"].c`, []string{"a", "b", "c"}},
+		{"dot then bracket index", `a.b["c"]`, []string{"a", "b", "c"}},
+		{"bracket numeric-looking string", `a["0"]`, []string{"a", "0"}},
+		{"space before bracket index", `a ["b"]`, []string{"a", "b"}},
+		// Multi-hash raw-string labels (head and bracket positions).
+		{"raw-string head label", `#"b"#`, []string{"b"}},
+		{"double-hash raw-string label", `##"b"##`, []string{"b"}},
+		{"raw-string label in bracket", `a[#"b"#]`, []string{"a", "b"}},
+		{"raw-string head then dot ident", `#"a"#.b`, []string{"a", "b"}},
+		{"raw-string with dot inside", `#"a.b"#`, []string{"a.b"}},
+		{"raw-string literal backslash-n", `#"a\nb"#`, []string{`a\nb`}},
+		{"raw-string escaped newline", "#\"a\\#nb\"#", []string{"a\nb"}},
+		{"raw-string embedded quotes", `#"say "hi""#`, []string{`say "hi"`}},
+		// A leading BOM is skipped (offset 0 only).
+		{"leading BOM skipped", "\ufeffa", []string{"a"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -87,6 +111,8 @@ func TestParsePath_accepted(t *testing.T) {
 // TestParsePath_rejected covers inputs ParsePath rejects. ParsePath
 // returns a plain error (not a *PathError): a syntax error in a path
 // EXPRESSION has no data-tree field path to tag.
+//
+//nolint:funlen // table-driven reject cases, one row per grammar class.
 func TestParsePath_rejected(t *testing.T) {
 	cases := []struct {
 		name string
@@ -132,6 +158,33 @@ func TestParsePath_rejected(t *testing.T) {
 		{"max-overflow big unicode escape", `"\UFFFFFFFF"`},
 		{"raw newline in quotes", "\"a\nb\""},
 		{"raw CR in quotes", "\"a\rb\""},
+		{"lone high surrogate escape", `"\uD800"`},
+		{"lone low surrogate escape", `"\uDC00"`},
+		{"high surrogate then non-low", `"\uD83DA"`},
+		{"low then high surrogate", `"\uDC00\uD800"`},
+		{"raw-string after dot", `a.#"b"#`},
+		{"empty raw-string label", `#""#`},
+		{"unterminated raw-string", `#"b"`},
+		{"raw-string unknown escape", `#"a\##nb"#`},
+		{"bracket bare numeric index", `a[0]`},
+		{"bracket bare ident", `a[b]`},
+		{"bracket trailing newline", "a[\"b\"\n]"},
+		{"leading bracket", `["b"]`},
+		{"empty bracket", `a[]`},
+		{"unterminated bracket", `a["b"`},
+		{"interior BOM in ident", "a\ufeffb"},
+		{"BOM inside quotes", "\"a\ufeffb\""},
+		{"BOM in comment", "a//\ufeff"},
+		{"bracket malformed quoted", `a["\z"]`},
+		{"bracket malformed raw-string", `a[#"a\##nb"#]`},
+		{"raw-string truncated escape", `#"a\#"#`},
+		{"multiline raw-string opener", `##"""##`},
+		{"single-hash multiline raw opener", `#"""#`},
+		{"raw newline in raw-string", "#\"\n\"#"},
+		{"raw CR in raw-string", "#\"\r\"#"},
+		{"high surrogate then BMP escape", `"\uD83DA"`},
+		{"high surrogate then non-unicode escape", "\"\\uD83D\\n\""},
+		{"high surrogate then truncated escape", `"\uD83D\u12"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
