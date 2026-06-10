@@ -166,6 +166,8 @@ func exprCorpus() []ExprCase {
 		// Field selection and indexing.
 		{Name: "fm struct access", Expr: `"\(fm.id)"`, ScopeJSON: `{"id":"MDS001"}`},
 		{Name: "fm quoted key", Expr: `fm["my-key"]`, ScopeJSON: `{"my-key":"value"}`},
+		{Name: "fm quoted selector", Expr: `fm."my-key"`, ScopeJSON: `{"my-key":"value"}`},
+		{Name: "fm quoted selector ident form", Expr: `fm."id"`, ScopeJSON: `{"id":"MDS001"}`},
 		{Name: "fm list index", Expr: `"\(fm.xs[0].id)"`, ScopeJSON: `{"xs":[{"id":"MD013"}]}`},
 		{Name: "selector on absent field", Expr: `"\(m.absent)"`, ScopeJSON: `{"m":{"id":"X"}}`},
 		{Name: "list index out of range", Expr: `xs[5]`, ScopeJSON: `{"xs":["a"]}`},
@@ -254,6 +256,7 @@ func FuzzExpr(f *testing.F) {
 		{`[if x == y {"T"}, if x != y {"F"}][0]`, `{"x":{"k":1},"y":{"k":1}}`},
 		{`[if x == y {"T"}, if x != y {"F"}][0]`, `{"x":[2],"y":[2.0]}`},
 		{`"\(len(s))"`, `{"s":"café"}`},
+		{`fm."my-key"`, `{"my-key":"value"}`},
 	} {
 		f.Add(seed.expr, seed.scope)
 	}

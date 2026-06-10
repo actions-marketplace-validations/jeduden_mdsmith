@@ -372,3 +372,25 @@ func TestRender_LenOfMultibyteEmoji(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "4", got)
 }
+
+// --- item 5: quoted selectors (fm."my-key") ---
+
+func TestRender_QuotedSelectorOnFM(t *testing.T) {
+	got, err := renderRow(t, `fm."my-key"`, map[string]any{"my-key": "value"})
+	require.NoError(t, err)
+	assert.Equal(t, "value", got)
+}
+
+func TestRender_QuotedSelectorLiteralQuestionMark(t *testing.T) {
+	// A literal "?" key must select the "?" field, not fall through to a
+	// fabricated fallback label.
+	got, err := renderRow(t, `fm."?"`, map[string]any{"?": "qval"})
+	require.NoError(t, err)
+	assert.Equal(t, "qval", got)
+}
+
+func TestRender_QuotedSelectorMatchesIdentForm(t *testing.T) {
+	got, err := renderRow(t, `fm."id"`, map[string]any{"id": "MDS001"})
+	require.NoError(t, err)
+	assert.Equal(t, "MDS001", got)
+}

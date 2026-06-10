@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 
+	"cuelang.org/go/cue/ast"
+	"cuelang.org/go/cue/token"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -357,4 +359,14 @@ func TestRender_IfClauseBodyError(t *testing.T) {
 // `.inf` to.
 func mustInf() float64 {
 	return math.Inf(1)
+}
+
+// TestRowSelectorName_UnquoteError covers rowSelectorName's unquote-error
+// branch via a constructed malformed string-label node. The CUE parser never
+// produces this shape for a selector, so the branch is reached only by a direct
+// AST construction.
+func TestRowSelectorName_UnquoteError(t *testing.T) {
+	_, err := rowSelectorName(&ast.BasicLit{Kind: token.STRING, Value: `"\x"`})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "selector label")
 }

@@ -377,8 +377,35 @@ func evalRowSelector(n *ast.SelectorExpr, scope *rowScope) (*engineValue, error)
 	if err != nil {
 		return nil, err
 	}
-	name := selectorName(n.Sel)
+	name, err := rowSelectorName(n.Sel)
+	if err != nil {
+		return nil, err
+	}
 	return selectField(base, name)
+}
+
+// rowSelectorName resolves a selector's member label to the field name to read.
+// A bare identifier (`fm.id`) names the field directly. A quoted string label
+// (`fm."my-key"`) is the same member selection CUE allows on a struct, so it
+// decodes to its string value — `fm."?"` selects the literal `?` key, not the
+// "?" placeholder the schema-path selectorName falls back to.
+//
+// The CUE parser only ever produces an *ast.Ident or a STRING *ast.BasicLit for
+// a selector member: a numeric or bytes member is a parse error
+// ("expected selector"), so those AST shapes never reach here. A `\(…)` escape
+// in the quoted label is impossible (a selector label is not an interpolation),
+// so literal.Unquote on a parser-validated STRING token cannot fail; its error
+// is returned for completeness but is unreachable from the parser.
+func rowSelectorName(l ast.Label) (string, error) {
+	if id, ok := l.(*ast.Ident); ok {
+		return id.Name, nil
+	}
+	bl := l.(*ast.BasicLit)
+	s, err := literal.Unquote(bl.Value)
+	if err != nil {
+		return "", fmt.Errorf("cuelite: selector label %s: %w", bl.Value, err)
+	}
+	return s, nil
 }
 
 // selectField reads a named member out of a struct value, erroring when the
