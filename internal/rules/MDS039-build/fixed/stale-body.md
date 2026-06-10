@@ -3,7 +3,8 @@
 <?build
 recipe: render
 source: diagram.svg
-output: docs/diagram.png
+outputs:
+  - docs/diagram.png
 ?>
 ![render output: docs/diagram.png](docs/diagram.png)
 <?/build?>

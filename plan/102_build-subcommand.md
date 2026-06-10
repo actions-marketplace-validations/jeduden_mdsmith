@@ -1,7 +1,7 @@
 ---
 id: 102
 title: Multi-output `<?build?>` directive
-status: "🔲"
+status: "✅"
 summary: >-
   Replace `output:` (singular) with `outputs:`
   (list) on the `<?build?>` directive. Add
@@ -269,47 +269,47 @@ call-hierarchy gain real build edges.
 
 ## Acceptance Criteria
 
-- [ ] `<?build?>` requires `outputs:` (list,
+- [x] `<?build?>` requires `outputs:` (list,
       non-empty); `output:` is rejected as an
       unknown param
-- [ ] `<?build?>` accepts optional `inputs:`
+- [x] `<?build?>` accepts optional `inputs:`
       (list of paths or globs)
-- [ ] Each `outputs:` and `inputs:` entry
+- [x] Each `outputs:` and `inputs:` entry
       passes the path-shape rules: no NUL,
       no newline, no leading/trailing
       whitespace, no Windows drive letters,
       no UNC prefix, no NTFS ADS, no reserved
       device names, no `..` after `Clean`,
       nothing under `.mdsmith/`
-- [ ] An empty `outputs:` list, or any empty
+- [x] An empty `outputs:` list, or any empty
       or whitespace-only entry inside either
       list, is a diagnostic
-- [ ] `outputs:` entries reject glob
+- [x] `outputs:` entries reject glob
       characters (`*`, `?`, `[`); `inputs:`
       accepts full doublestar globs
       (including leading `**/`)
-- [ ] An `inputs:` glob that resolves to
+- [x] An `inputs:` glob that resolves to
       more than 10 000 files is a build error
-- [ ] A symlinked output or input that
+- [x] A symlinked output or input that
       escapes the project root is a build
       error
-- [ ] `body-template` renders once per
+- [x] `body-template` renders once per
       `outputs` entry, joined with newlines,
       in declared order
-- [ ] `{output}` in `body-template` refers to
+- [x] `{output}` in `body-template` refers to
       the current output in each render
       iteration
-- [ ] MDS040 rejects a recipe declaring
+- [x] MDS040 rejects a recipe declaring
       `inputs` or `outputs` in
       `params.required` or `params.optional`
-- [ ] All MDS039 fixtures use the new
+- [x] All MDS039 fixtures use the new
       directive shape
-- [ ] `mdsmith deps` lists one build edge
+- [x] `mdsmith deps` lists one build edge
       per `inputs:` entry; `--incoming` on
       an input names the directive's file
-- [ ] `docs/guides/directives/build.md`
+- [x] `docs/guides/directives/build.md`
       describes `outputs:` and `inputs:`; no
       singular-form prose remains
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no
       issues

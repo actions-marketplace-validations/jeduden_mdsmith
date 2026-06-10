@@ -12,7 +12,8 @@ settings:
 <?build
 recipe: vhs
 source: demo.tape
-output: demo.gif
+outputs:
+  - demo.gif
 ?>
 ![demo](demo.gif)
 <?/build?>

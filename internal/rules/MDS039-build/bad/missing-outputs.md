@@ -2,22 +2,19 @@
 settings:
   recipes:
     render:
-      body-template: "![{alt}]({output})"
       params:
         required:
           - source
 diagnostics:
   - line: 3
     column: 1
-    message: "generated section is out of date"
+    message: 'build directive missing required "outputs" list'
 ---
-# Stale Body
+# Missing Outputs
 
 <?build
 recipe: render
 source: diagram.svg
-outputs:
-  - docs/diagram.png
 ?>
-outdated content here
+content
 <?/build?>

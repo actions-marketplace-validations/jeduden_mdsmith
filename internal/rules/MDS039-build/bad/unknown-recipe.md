@@ -8,7 +8,8 @@ diagnostics:
 
 <?build
 recipe: nonexistent
-output: out.png
+outputs:
+  - out.png
 ?>
 content
 <?/build?>
