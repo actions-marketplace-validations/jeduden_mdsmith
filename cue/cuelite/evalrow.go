@@ -246,46 +246,79 @@ func evalRowIdent(n *ast.Ident, scope *rowScope) (*engineValue, error) {
 // verbatim, a number/bool by its CUE textual form). A non-stringable embedded
 // value (null, list, struct) is rejected, matching CUE's
 // "invalid interpolation".
+//
+// It ports CUE's own compileInterpolation (internal/core/compile): the OUTER
+// quote dialect is parsed once from the first and last fragment via
+// literal.ParseQuotes, so the plain (`"…"`), raw (`#"…"#`), and multiline
+// (`"""…"""`) string dialects all decode through the same QuoteInfo.Unquote the
+// CUE compiler uses — fixing the prior fragment arithmetic that fit only the
+// double-quote dialect and silently corrupted the others. A BYTES dialect
+// (`'…'`), which ParseQuotes reports as not-double, produces CUE bytes rather
+// than a row string and is rejected loudly as out-of-subset (the cross-engine
+// fuzzer's strict-subset hatch keys on the "unsupported" wording). The Unquote
+// error is never discarded.
 func evalRowInterpolation(n *ast.Interpolation, scope *rowScope) (*engineValue, error) {
+	// n.Elts always has an odd length ≥ 3 here: the parser only emits an
+	// *ast.Interpolation when at least one `\(…)` is present, interleaving
+	// string fragments (even indices) and embedded expressions (odd indices),
+	// so the first and last elements are always string fragments.
+	first := n.Elts[0].(*ast.BasicLit)
+	last := n.Elts[len(n.Elts)-1].(*ast.BasicLit)
+	info, prefixLen, _, err := literal.ParseQuotes(first.Value, last.Value)
+	if err != nil {
+		return nil, fmt.Errorf("cuelite: invalid interpolation: %w", err)
+	}
+	if !info.IsDouble() {
+		// ParseQuotes marks a single-quote dialect as not-double: it is a CUE
+		// bytes interpolation, a distinct type the row subset (which has no bytes
+		// kind) does not carry.
+		return nil, fmt.Errorf("cuelite: unsupported bytes interpolation (bytes are not in the subset)")
+	}
 	var b strings.Builder
+	prefix := ""
 	for i, elt := range n.Elts {
-		// The parser interleaves string fragments and embedded expressions, so an
-		// EVEN index is always a partial-quote string literal and an ODD index is
-		// always an embedded expression (the Elts shape ast.Interpolation
-		// documents).
-		if i%2 == 0 {
-			b.WriteString(interpFragment(elt.(*ast.BasicLit), i, len(n.Elts)))
+		if i%2 == 1 {
+			s, exprErr := evalInterpExpr(elt, scope)
+			if exprErr != nil {
+				return nil, exprErr
+			}
+			b.WriteString(s)
 			continue
 		}
-		s, exprErr := evalInterpExpr(elt, scope)
-		if exprErr != nil {
-			return nil, exprErr
+		frag, fragErr := interpFragment(elt.(*ast.BasicLit), info, prefix, prefixLen)
+		if fragErr != nil {
+			return nil, fragErr
 		}
-		b.WriteString(s)
+		b.WriteString(frag)
+		// After the first fragment the opening delimiter is replaced by the `)`
+		// that closes the preceding interpolation — a single byte, matching CUE's
+		// `prefix = ")"; prefixLen = 1`.
+		prefix = ")"
+		prefixLen = 1
 	}
 	return &engineValue{kind: kString, str: b.String()}, nil
 }
 
-// interpFragment decodes one string fragment of an interpolation. The first
-// fragment carries the opening `"` and a trailing `\(`; the last carries a
-// leading `)` and the closing `"`; a middle fragment carries `)` … `\(`. The
-// inner bytes are re-wrapped in double quotes and unquoted, so escapes decode
-// exactly as in a plain string literal. The parser already validated every
-// escape of the whole interpolation, so re-wrapping a fragment in `"…"` and
-// unquoting it never fails — the only string dialect the row subset's
-// interpolation grammar admits is the double-quote one.
-func interpFragment(bl *ast.BasicLit, i, total int) string {
-	raw := bl.Value
-	// Strip the leading delimiter — the opening `"` on the first fragment, else
-	// the `)` that closes the preceding interpolation — and the trailing
-	// delimiter — the closing `"` on the last fragment, else the `\(` that opens
-	// the next interpolation.
-	end := len(raw) - 2
-	if i == total-1 {
-		end = len(raw) - 1
+// interpFragment decodes one string fragment of an interpolation through the
+// interpolation's QuoteInfo, exactly as CUE's parseString does. The fragment's
+// leading delimiter is `prefix` (the opening quote dialect on the first
+// fragment — already consumed by prefixLen — else the `)` that closes the
+// preceding interpolation); after stripping prefixLen bytes, the remaining
+// bytes (which still carry the trailing `\(` introducer the next interpolation
+// opens with, or the closing quote on the last fragment) are decoded by
+// QuoteInfo.Unquote. A fragment whose leading bytes do not match the expected
+// prefix is a malformed interpolation, and an Unquote failure is surfaced —
+// never discarded.
+func interpFragment(bl *ast.BasicLit, info literal.QuoteInfo, prefix string, prefixLen int) (string, error) {
+	if !strings.HasPrefix(bl.Value, prefix) {
+		return "", fmt.Errorf("cuelite: invalid interpolation: unmatched ')'")
 	}
-	dec, _ := literal.Unquote(`"` + raw[1:end] + `"`)
-	return dec
+	s := bl.Value[prefixLen:]
+	dec, err := info.Unquote(s)
+	if err != nil {
+		return "", fmt.Errorf("cuelite: invalid interpolation: %w", err)
+	}
+	return dec, nil
 }
 
 // evalInterpExpr evaluates one embedded interpolation expression and renders

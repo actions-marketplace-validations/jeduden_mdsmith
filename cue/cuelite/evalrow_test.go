@@ -435,3 +435,40 @@ func TestRender_IntTimesIntIsError(t *testing.T) {
 	_, err := renderRow(t, `2 * 3`, nil)
 	require.Error(t, err)
 }
+
+// --- item 1: interpolation dialects (multiline, raw, bytes) ---
+
+func TestRender_MultilineInterpolation(t *testing.T) {
+	expr := "\"\"\"\n  a\\(id)b\n  \"\"\""
+	got, err := renderRow(t, expr, map[string]any{"id": "X"})
+	require.NoError(t, err)
+	assert.Equal(t, "aXb", got)
+}
+
+func TestRender_RawStringInterpolation(t *testing.T) {
+	got, err := renderRow(t, `#"a\#(id)b"#`, map[string]any{"id": "X"})
+	require.NoError(t, err)
+	assert.Equal(t, "aXb", got)
+}
+
+func TestRender_RawMultilineInterpolation(t *testing.T) {
+	expr := "#\"\"\"\n  a\\#(id)b\n  \"\"\"#"
+	got, err := renderRow(t, expr, map[string]any{"id": "X"})
+	require.NoError(t, err)
+	assert.Equal(t, "aXb", got)
+}
+
+func TestRender_BytesInterpolationIsRejected(t *testing.T) {
+	// A bytes interpolation ('…') produces CUE bytes, not a string; it is
+	// out-of-subset and must reject loudly.
+	_, err := renderRow(t, `'a\(id)b'`, map[string]any{"id": "X"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported")
+}
+
+func TestRender_MultilineInterpolationMultibyte(t *testing.T) {
+	expr := "\"\"\"\n  héllo \\(id)\n  \"\"\""
+	got, err := renderRow(t, expr, map[string]any{"id": "Z"})
+	require.NoError(t, err)
+	assert.Equal(t, "héllo Z", got)
+}

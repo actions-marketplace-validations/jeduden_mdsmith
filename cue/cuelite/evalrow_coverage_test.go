@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"cuelang.org/go/cue/ast"
+	"cuelang.org/go/cue/literal"
 	"cuelang.org/go/cue/token"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -392,4 +393,69 @@ func TestRowLen_StructIsRejected(t *testing.T) {
 	_, err := renderRow(t, `"\(len(m))"`, map[string]any{"m": map[string]any{"k": "v"}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported len of a struct")
+}
+
+
+// TestEvalRowInterpolation_ParseQuotesError covers the ParseQuotes-error branch
+// via a constructed interpolation whose first/last fragments are not valid
+// quote delimiters. The CUE parser never emits this shape.
+func TestEvalRowInterpolation_ParseQuotesError(t *testing.T) {
+	rs, err := newRowScope(nil)
+	require.NoError(t, err)
+	n := &ast.Interpolation{Elts: []ast.Expr{
+		&ast.BasicLit{Kind: token.STRING, Value: `not-a-quote`},
+		&ast.Ident{Name: "x"},
+		&ast.BasicLit{Kind: token.STRING, Value: `also-not`},
+	}}
+	_, err = evalRowInterpolation(n, rs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid interpolation")
+}
+
+// TestEvalRowInterpolation_FragmentError covers evalRowInterpolation's
+// fragment-error propagation: a five-element interpolation whose first and last
+// fragments parse as valid quotes (so ParseQuotes succeeds) but whose middle
+// continuation fragment lacks the leading `)` interpFragment expects. The
+// parser never emits this shape.
+func TestEvalRowInterpolation_FragmentError(t *testing.T) {
+	rs, err := newRowScope(map[string]any{"x": "v"})
+	require.NoError(t, err)
+	n := &ast.Interpolation{Elts: []ast.Expr{
+		&ast.BasicLit{Kind: token.STRING, Value: `"a\(`},
+		&ast.Ident{Name: "x"},
+		&ast.BasicLit{Kind: token.STRING, Value: `BAD\(`}, // missing leading ')'
+		&ast.Ident{Name: "x"},
+		&ast.BasicLit{Kind: token.STRING, Value: `)c"`},
+	}}
+	_, err = evalRowInterpolation(n, rs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmatched ')'")
+}
+
+// doubleQuoteInfo returns a plain double-quote QuoteInfo for the fragment
+// coverage tests below.
+func doubleQuoteInfo(t *testing.T) literal.QuoteInfo {
+	t.Helper()
+	info, _, _, err := literal.ParseQuotes(`"a\(`, `)b"`)
+	require.NoError(t, err)
+	return info
+}
+
+// TestInterpFragment_UnmatchedPrefix covers interpFragment's unmatched-')'
+// branch: a continuation fragment that does not start with the expected `)`.
+// The parser always emits a leading `)` on a continuation fragment, so this is
+// reachable only by direct construction.
+func TestInterpFragment_UnmatchedPrefix(t *testing.T) {
+	_, err := interpFragment(&ast.BasicLit{Kind: token.STRING, Value: `Xb"`}, doubleQuoteInfo(t), ")", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmatched ')'")
+}
+
+// TestInterpFragment_UnquoteError covers interpFragment's Unquote-error branch
+// via a fragment carrying an escape the dialect rejects. The parser validates
+// escapes, so this is reachable only by direct construction.
+func TestInterpFragment_UnquoteError(t *testing.T) {
+	_, err := interpFragment(&ast.BasicLit{Kind: token.STRING, Value: `)a\x"`}, doubleQuoteInfo(t), ")", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid interpolation")
 }

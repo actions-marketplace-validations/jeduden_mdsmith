@@ -130,6 +130,17 @@ func exprCorpus() []ExprCase {
 		{Name: "interpolate bool", Expr: `"on=\(flag)"`, ScopeJSON: `{"flag":true}`},
 		{Name: "nested interpolation", Expr: `"\("\(id)")"`, ScopeJSON: `{"id":"X"}`},
 		{Name: "interpolation with tab escape", Expr: `"a\tb \(id)"`, ScopeJSON: `{"id":"Z"}`},
+		// Interpolation dialects (item 1): multiline, raw, raw-multiline, bytes.
+		{Name: "multiline interpolation", Expr: "\"\"\"\n  a\\(id)b\n  \"\"\"", ScopeJSON: `{"id":"X"}`},
+		{Name: "raw string interpolation", Expr: `#"a\#(id)b"#`, ScopeJSON: `{"id":"X"}`},
+		{
+			Name:      "raw multiline interpolation",
+			Expr:      "#\"\"\"\n  a\\#(id)b\n  \"\"\"#",
+			ScopeJSON: `{"id":"X"}`,
+		},
+		{Name: "bytes interpolation rejected", Expr: `'a\(id)b'`, ScopeJSON: `{"id":"X"}`},
+		{Name: "multiline interpolation multibyte", Expr: "\"\"\"\n  héllo \\(id)\n  \"\"\"", ScopeJSON: `{"id":"Z"}`},
+
 		{Name: "interpolate null is rejected", Expr: `"\(x)"`, ScopeJSON: `{"x":null}`},
 		{Name: "interpolate list is rejected", Expr: `"\(x)"`, ScopeJSON: `{"x":[1,2]}`},
 		{Name: "interpolate struct is rejected", Expr: `"\(x)"`, ScopeJSON: `{"x":{"a":1}}`},
@@ -271,6 +282,9 @@ func FuzzExpr(f *testing.F) {
 		{`"" * 0`, ``},
 		{`"ab" * 3`, ``},
 		{`3 * "ab"`, ``},
+		{"\"\"\"\n  a\\(id)b\n  \"\"\"", `{"id":"X"}`},
+		{`#"a\#(id)b"#`, `{"id":"X"}`},
+		{`'a\(id)b'`, `{"id":"X"}`},
 	} {
 		f.Add(seed.expr, seed.scope)
 	}
