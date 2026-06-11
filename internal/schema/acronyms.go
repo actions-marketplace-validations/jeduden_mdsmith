@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	"github.com/jeduden/mdsmith/internal/lint"
+	"github.com/jeduden/mdsmith/internal/setutil"
 )
 
 // acronymToken matches all-caps alphanumeric tokens of length 2-6.
@@ -36,10 +37,11 @@ func ValidateAcronyms(
 		return nil
 	}
 	a := sch.Acronyms
-	known := buildKnownSet(a.KnownSafe)
+	known := setutil.FromStrings(a.KnownSafe)
 
-	headingLines := documentHeadingLines(f)
-	ranges := acronymRanges(f, sch, a.Scope, docFM)
+	heads := ExtractDocHeadings(f)
+	headingLines := documentHeadingLines(heads)
+	ranges := acronymRanges(heads, f, sch, a.Scope, docFM)
 	var diags []lint.Diagnostic
 	for _, rng := range ranges {
 		diags = append(diags, checkAcronymsInRange(f, rng, known, headingLines, mkDiag)...)
@@ -48,23 +50,14 @@ func ValidateAcronyms(
 }
 
 // documentHeadingLines returns the set of 1-based line numbers
-// occupied by Markdown headings in f. Used to skip heading lines
+// occupied by Markdown headings. Used to skip heading lines
 // during acronym scans so a "## OIDC configuration" heading does
 // not consume the "first use" slot before the body's
 // parenthesised expansion.
-func documentHeadingLines(f *lint.File) map[int]struct{} {
-	heads := ExtractDocHeadings(f)
+func documentHeadingLines(heads []DocHeading) map[int]struct{} {
 	out := make(map[int]struct{}, len(heads))
 	for _, h := range heads {
 		out[h.Line] = struct{}{}
-	}
-	return out
-}
-
-func buildKnownSet(list []string) map[string]struct{} {
-	out := make(map[string]struct{}, len(list))
-	for _, s := range list {
-		out[s] = struct{}{}
 	}
 	return out
 }
@@ -83,18 +76,14 @@ type lineRange struct {
 // unbounded) contributes a range for each matched heading, so a
 // scope name like "Diagnosis" applied to two `## Diagnosis`
 // sections scans both bodies for first-use acronyms.
-func acronymRanges(f *lint.File, sch *Schema, scope []string, docFM map[string]any) []lineRange {
+func acronymRanges(heads []DocHeading, f *lint.File, sch *Schema, scope []string, docFM map[string]any) []lineRange {
 	if len(scope) == 0 {
 		return []lineRange{{Start: 1, End: len(f.Lines) + 1}}
 	}
-	heads := ExtractDocHeadings(f)
 	rootLevel := sch.EffectiveRootLevel()
 	body := skipBelow(heads, rootLevel)
 
-	matchSet := make(map[string]struct{}, len(scope))
-	for _, s := range scope {
-		matchSet[s] = struct{}{}
-	}
+	matchSet := setutil.FromStrings(scope)
 
 	var out []lineRange
 	walkRanges(sch.Sections, body, rootLevel, 1, len(f.Lines)+1, docFM,

@@ -826,6 +826,8 @@ func resolveGlobMatchesFrom(res globResolution, f *lint.File, params map[string]
 		base = ""
 	}
 
+	// 8 is a rough heuristic: each glob pattern typically matches several
+	// files, so pre-sizing avoids the first few growth doublings.
 	seen := make(map[string]struct{}, len(res.includes)*8)
 	var files []string
 	for _, pattern := range res.includes {

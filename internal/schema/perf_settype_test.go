@@ -20,10 +20,11 @@ func TestDocumentHeadingLinesReturnsStructSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	heads := ExtractDocHeadings(f)
 	// Compile-time check: the blank func call enforces the exact type without
 	// triggering QF1011; if documentHeadingLines returned map[int]bool, this
 	// would not compile.
-	got := documentHeadingLines(f)
+	got := documentHeadingLines(heads)
 	func(_ map[int]struct{}) {}(got)
 	if _, ok := got[1]; !ok {
 		t.Fatal("expected line 1 (# Title) in heading-line set")
@@ -33,21 +34,6 @@ func TestDocumentHeadingLinesReturnsStructSet(t *testing.T) {
 	}
 	if _, ok := got[2]; ok {
 		t.Fatal("did not expect blank line 2 in heading-line set")
-	}
-}
-
-func TestBuildKnownSetReturnsStructSet(t *testing.T) {
-	got := buildKnownSet([]string{"A", "B"})
-	// Compile-time check (see package doc above).
-	func(_ map[string]struct{}) {}(got)
-	if _, ok := got["A"]; !ok {
-		t.Fatal("expected A in known set")
-	}
-	if _, ok := got["B"]; !ok {
-		t.Fatal("expected B in known set")
-	}
-	if _, ok := got["C"]; ok {
-		t.Fatal("did not expect C in known set")
 	}
 }
 
