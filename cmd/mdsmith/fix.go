@@ -39,15 +39,57 @@ func runFix(args []string) int {
 	return fixDiscovered(opts)
 }
 
-// register wires the --build-* flag group onto fs. A method on
-// buildPassOpts so parseFixFlags stays under the funlen limit and the
-// flag descriptions sit next to their defaults.
-func (b *buildPassOpts) register(fs *flag.FlagSet) {
+// buildFixFlags holds the flag variables for the --build-* group.
+// Separating them keeps parseFixFlags under the funlen limit and
+// co-locates the build-flag descriptions with their defaults.
+type buildFixFlags struct {
+	noBuild    bool
+	buildOnly  bool
+	dryRun     bool
+	force      bool
+	checkStale bool
+	noCache    bool
+	recipe     string
+	timeout    time.Duration
+}
+
+func (b *buildFixFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&b.noBuild, "no-build", false, "Run the lint-fix pass only; skip the build pass")
 	fs.BoolVar(&b.buildOnly, "build-only", false, "Run the build pass only; skip the lint-fix pass")
 	fs.StringVar(&b.recipe, "build-recipe", "", "Only build <?build?> directives whose recipe matches NAME")
-	fs.BoolVar(&b.dryRun, "build-dry-run", false, "Enumerate build targets without running any recipe")
+	fs.BoolVar(&b.dryRun, "build-dry-run", false,
+		"Enumerate build targets with a STALE | FRESH verdict; run no recipe")
+	fs.BoolVar(&b.force, "build-force", false, "Rebuild every target; refresh all cache entries")
+	fs.BoolVar(&b.checkStale, "build-check-stale", false,
+		"Print stale targets and exit non-zero if any are stale; run no recipe")
+	fs.BoolVar(&b.noCache, "build-no-cache", false,
+		"Treat all targets as stale; do not read or write the build cache")
 	fs.DurationVar(&b.timeout, "build-timeout", 30*time.Second, "Per-recipe timeout (e.g. 30s, 2m)")
+}
+
+// conflict returns a non-empty message when the build-flag combination is
+// a usage error, or "" when the flags are compatible.
+func (b buildFixFlags) conflict() string {
+	if b.noBuild && b.buildOnly {
+		return "--no-build and --build-only are mutually exclusive"
+	}
+	if b.force && (b.checkStale || b.noCache) {
+		return "--build-force cannot be combined with --build-check-stale or --build-no-cache"
+	}
+	return ""
+}
+
+func (b buildFixFlags) toPassOpts() buildPassOpts {
+	return buildPassOpts{
+		noBuild:    b.noBuild,
+		buildOnly:  b.buildOnly,
+		recipe:     b.recipe,
+		dryRun:     b.dryRun,
+		force:      b.force,
+		checkStale: b.checkStale,
+		noCache:    b.noCache,
+		timeout:    b.timeout,
+	}
 }
 
 // setFixUsage wires the usage message for the fix subcommand onto fs.
@@ -74,7 +116,7 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 		configPath, format, maxInputSize                                      string
 		noColor, quiet, verbose, noGitignore, followSymlinks, explain, dryRun bool
 	)
-	var bp buildPassOpts
+	var bf buildFixFlags
 
 	fs.StringVarP(&configPath, "config", "c", "", "Override config file path")
 	fs.StringVarP(&format, "format", "f", "text", "Output format: text, json")
@@ -90,7 +132,7 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 	fs.BoolVar(&dryRun, "dry-run", false,
 		"Preview which files would change without writing; "+
 			"per-file output lists the rules that would fire and their counts")
-	bp.register(fs)
+	bf.register(fs)
 	setFixUsage(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -103,8 +145,8 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 		verbose = false
 	}
 
-	if bp.noBuild && bp.buildOnly {
-		fmt.Fprintf(os.Stderr, "mdsmith: fix: --no-build and --build-only are mutually exclusive\n")
+	if msg := bf.conflict(); msg != "" {
+		fmt.Fprintf(os.Stderr, "mdsmith: fix: %s\n", msg)
 		return fixCLIOpts{}, nil, false, 2
 	}
 
@@ -123,7 +165,7 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 		maxInputSize: maxInputSize,
 		explain:      explain,
 		dryRun:       dryRun,
-		build:        bp,
+		build:        bf.toPassOpts(),
 	}, fileArgs, hasStdin, -1
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,8 +12,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	buildexec "github.com/jeduden/mdsmith/internal/build"
 	"github.com/jeduden/mdsmith/internal/config"
 )
+
+// mockBuilder is a test-only Builder whose Build fn is injected per test.
+type mockBuilder struct {
+	fn func(ctx context.Context, target buildexec.Target) error
+}
+
+func (m *mockBuilder) Build(ctx context.Context, target buildexec.Target) error {
+	return m.fn(ctx, target)
+}
 
 // buildPassCfg returns a minimal *config.Config with the given recipe
 // YAML snippet (already indented under recipes:) for buildpass unit tests.
@@ -79,7 +90,7 @@ func TestRunBuildPass_DryRun(t *testing.T) {
 	var buf strings.Builder
 	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{dryRun: true, timeout: time.Second}, &buf)
 	assert.Equal(t, 0, code)
-	assert.Contains(t, buf.String(), "DRY-RUN")
+	assert.Contains(t, buf.String(), "STALE")
 }
 
 func TestRunBuildPass_NoTargets(t *testing.T) {
@@ -277,4 +288,274 @@ func TestCollectBuildTargets_MalformedDirectiveSkipped(t *testing.T) {
 	targets, errs := collectBuildTargets([]string{p}, root, "", 0)
 	assert.Empty(t, errs)
 	assert.Empty(t, targets, "directive with non-string recipe param must be skipped")
+}
+
+// --- resolveDefaultInputs ---
+
+func TestResolveDefaultInputs_ParamToken_Resolved(t *testing.T) {
+	out := resolveDefaultInputs([]string{"{tape}"}, map[string]string{"tape": "demo.tape"})
+	assert.Equal(t, []string{"demo.tape"}, out)
+}
+
+func TestResolveDefaultInputs_ParamToken_NotInParams_PassesThrough(t *testing.T) {
+	// A {token} whose name is absent from params falls through as a literal.
+	out := resolveDefaultInputs([]string{"{unknown}"}, map[string]string{})
+	assert.Equal(t, []string{"{unknown}"}, out)
+}
+
+func TestResolveDefaultInputs_LiteralEntry(t *testing.T) {
+	out := resolveDefaultInputs([]string{"assets/logo.svg"}, map[string]string{"tape": "demo.tape"})
+	assert.Equal(t, []string{"assets/logo.svg"}, out)
+}
+
+func TestResolveDefaultInputs_Empty(t *testing.T) {
+	assert.Nil(t, resolveDefaultInputs(nil, nil))
+	assert.Nil(t, resolveDefaultInputs([]string{}, nil))
+}
+
+// --- loadBuildCache ---
+
+func TestLoadBuildCache_NoCacheFlag_ReturnsEmpty(t *testing.T) {
+	root := t.TempDir()
+	var buf strings.Builder
+	c := loadBuildCache(root, buildPassOpts{noCache: true}, &buf)
+	assert.Empty(t, c.Entries)
+	assert.Empty(t, buf.String(), "noCache must not print anything")
+}
+
+func TestLoadBuildCache_CorruptFile_ReturnsEmptyAndWarns(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".mdsmith"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".mdsmith", "build-cache.json"), []byte("{bad json"), 0o644))
+	var buf strings.Builder
+	c := loadBuildCache(root, buildPassOpts{}, &buf)
+	assert.Empty(t, c.Entries, "corrupt cache should yield empty cache")
+	assert.Contains(t, buf.String(), "stale")
+}
+
+// --- refreshCacheEntry ---
+
+func TestRefreshCacheEntry_NoCache_IsNoop(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "out.txt"), []byte("x"), 0o644))
+	stin := buildexec.StalenessInput{
+		Target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"src.txt"},
+			Outputs: []string{"out.txt"},
+		},
+		Command: "cp {inputs} {outputs}",
+	}
+	cache := buildexec.NewCache()
+	err := refreshCacheEntry(stin, cache, buildPassOpts{noCache: true})
+	require.NoError(t, err)
+	assert.Empty(t, cache.Entries, "noCache must not write to cache")
+}
+
+// --- targetVerdict with force + error ---
+
+func TestTargetVerdict_ForceAndMissingInput_ReturnsError(t *testing.T) {
+	root := t.TempDir()
+	// No src.txt on disk; --build-force still resolves inputs to catch errors.
+	stin := buildexec.StalenessInput{
+		Target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"absent.txt"},
+			Outputs: []string{"out.txt"},
+		},
+		Command: "cp {inputs} {outputs}",
+	}
+	_, err := targetVerdict(stin, buildexec.NewCache(), buildPassOpts{force: true})
+	require.Error(t, err, "--build-force must still surface missing-input errors")
+}
+
+func TestTargetVerdict_NoCacheAndMissingInput_ReturnsError(t *testing.T) {
+	root := t.TempDir()
+	stin := buildexec.StalenessInput{
+		Target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"absent.txt"},
+			Outputs: []string{"out.txt"},
+		},
+		Command: "cp {inputs} {outputs}",
+	}
+	_, err := targetVerdict(stin, buildexec.NewCache(), buildPassOpts{noCache: true})
+	require.Error(t, err, "--build-no-cache must still surface missing-input errors")
+}
+
+// --- dispatchTargets exit-code paths ---
+
+func TestRunBuildPass_RebuildNoCache_ExitsZero(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	var buf strings.Builder
+	// --build-no-cache + success: must exit 0, must not write cache.
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{noCache: true, timeout: time.Second}, &buf)
+	assert.Equal(t, 0, code)
+	assert.Contains(t, buf.String(), "OK")
+	_, err := os.Stat(filepath.Join(root, ".mdsmith", "build-cache.json"))
+	assert.True(t, os.IsNotExist(err), "cache must not be written when --build-no-cache is set")
+}
+
+func TestRunBuildPass_CheckStale_FreshTarget_ExitsZero(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	// Run once to build and prime the cache.
+	var buf strings.Builder
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{timeout: time.Second}, &buf)
+	require.Equal(t, 0, code)
+
+	// Now check-stale: target is fresh, so exit 0.
+	buf.Reset()
+	code = runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{checkStale: true, timeout: time.Second}, &buf)
+	assert.Equal(t, 0, code)
+	assert.NotContains(t, buf.String(), "STALE")
+}
+
+func TestRunBuildPass_CheckStale_StaleTarget_ExitsTwo(t *testing.T) {
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	// No prior run — target is stale.
+	var buf strings.Builder
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{checkStale: true, timeout: time.Second}, &buf)
+	assert.Equal(t, 2, code)
+	assert.Contains(t, buf.String(), "STALE")
+}
+
+func TestRunBuildPass_SaveCacheError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("touch and chmod not reliable on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	// Create .mdsmith dir and make it unwritable so cache.Save fails.
+	mdsmithDir := filepath.Join(root, ".mdsmith")
+	require.NoError(t, os.MkdirAll(mdsmithDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(mdsmithDir, 0o755) })
+
+	var buf strings.Builder
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{timeout: time.Second}, &buf)
+	// Recipe ran (OK) but cache.Save failed → exit 2.
+	assert.Equal(t, 2, code)
+}
+
+// TestRunBuildPass_ReadErrorWithSuccessfulBuild_ExitsTwo covers the
+// len(errs) > 0 && code == 0 path: one file fails to read (goes into errs),
+// another file's target builds successfully (code == 0), so the function
+// returns 2 rather than masking the read error.
+func TestRunBuildPass_ReadErrorWithSuccessfulBuild_ExitsTwo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	var buf strings.Builder
+	// p is a valid file with a target; the nonexistent path becomes an error.
+	// The build succeeds (code == 0), but len(errs) > 0 triggers return 2.
+	code := runBuildPass(cfg, cfgPath, []string{p, "/nonexistent/ghost.md"},
+		buildPassOpts{noCache: true, timeout: time.Second}, &buf)
+	assert.Equal(t, 2, code)
+	assert.Contains(t, buf.String(), "OK")
+	assert.Contains(t, buf.String(), "reading")
+}
+
+// TestRunBuildPass_OverlappingOutputsReturnsTwo covers the detectOverlap error
+// branch: two directives writing the same output file returns exit 2 before
+// any recipe runs.
+func TestRunBuildPass_OverlappingOutputsReturnsTwo(t *testing.T) {
+	root := t.TempDir()
+	cfg := buildPassCfg("    cp:\n      command: cp {inputs} {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := "# A\n\n" +
+		"<?build\nrecipe: cp\noutputs:\n  - out.txt\n?>\n[out.txt](out.txt)\n<?/build?>\n\n" +
+		"# B\n\n" +
+		"<?build\nrecipe: cp\noutputs:\n  - out.txt\n?>\n[out.txt](out.txt)\n<?/build?>\n"
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	var buf strings.Builder
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{timeout: time.Second}, &buf)
+	assert.Equal(t, 2, code)
+	assert.Contains(t, buf.String(), "overlap")
+}
+
+// TestDispatchOne_RefreshCacheEntryError covers the refreshCacheEntry error
+// path inside dispatchOne. The mock builder creates the declared output and
+// then replaces the input with a directory; when refreshCacheEntry calls
+// RecordBuild it tries to hash the input and fails.
+func TestDispatchOne_RefreshCacheEntryError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("content"), 0o644))
+
+	cfg := buildPassCfg("    cp:\n      command: cp {inputs} {outputs}\n")
+	bt := buildTarget{
+		file: "test.md",
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"src.txt"},
+			Outputs: []string{"out.txt"},
+		},
+	}
+
+	builder := &mockBuilder{fn: func(_ context.Context, target buildexec.Target) error {
+		// Create the declared output so RecordBuild's resolveOutputs passes.
+		_ = os.WriteFile(filepath.Join(root, "out.txt"), []byte("result"), 0o644)
+		// Replace the input with a directory so hashFile fails inside RecordBuild.
+		_ = os.Remove(filepath.Join(root, "src.txt"))
+		_ = os.MkdirAll(filepath.Join(root, "src.txt"), 0o755)
+		return nil
+	}}
+
+	cache := buildexec.NewCache()
+	var buf strings.Builder
+	outcome := dispatchOne(builder, bt, cfg, buildPassOpts{}, cache, time.Second, &buf)
+	assert.Equal(t, outcomeFailed, outcome)
+	assert.Contains(t, buf.String(), "FAIL")
 }

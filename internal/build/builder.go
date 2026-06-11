@@ -25,6 +25,12 @@ import (
 	buildrule "github.com/jeduden/mdsmith/internal/rules/build"
 )
 
+// mkdirTempFn is the os.MkdirTemp implementation; tests may replace it.
+var mkdirTempFn = os.MkdirTemp
+
+// builderGlobCapFn is the CheckGlobMatchCap implementation; tests may replace it.
+var builderGlobCapFn = buildrule.CheckGlobMatchCap
+
 // RecipeSpec is the resolved command and tokenized argv for one
 // user-declared recipe. Tokenization happens once at construction so a
 // param value containing whitespace can never re-split.
@@ -87,7 +93,7 @@ func (b *CustomBuilder) Build(ctx context.Context, target Target) error {
 		return err
 	}
 
-	stageDir, err := os.MkdirTemp("", "mdsmith-build-")
+	stageDir, err := mkdirTempFn("", "mdsmith-build-")
 	if err != nil {
 		return fmt.Errorf("creating staging dir: %w", err)
 	}
@@ -136,7 +142,7 @@ func (b *CustomBuilder) resolveInputs(target Target) ([]string, error) {
 			if err != nil {
 				return nil, fmt.Errorf("inputs glob %q: %w", entry, err)
 			}
-			if err := buildrule.CheckGlobMatchCap(len(matches)); err != nil {
+			if err := builderGlobCapFn(len(matches)); err != nil {
 				return nil, err
 			}
 			for _, m := range matches {

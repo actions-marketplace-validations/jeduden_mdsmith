@@ -244,6 +244,111 @@ func TestValidateBuildConfig_OptionalParam_Allowed(t *testing.T) {
 	assert.NoError(t, ValidateBuildConfig(cfg))
 }
 
+// --- default-inputs ---
+
+func TestLoad_RecipeDefaultInputs(t *testing.T) {
+	yml := []byte("build:\n  recipes:\n    vhs:\n      command: vhs {tape}\n" +
+		"      params:\n        required: [tape]\n      default-inputs: [\"{tape}\"]\n")
+	cfg, err := loadFromBytes(yml, "", false)
+	require.NoError(t, err)
+	require.Contains(t, cfg.Build.Recipes, "vhs")
+	assert.Equal(t, []string{"{tape}"}, cfg.Build.Recipes["vhs"].DefaultInputs)
+}
+
+func TestValidateBuildConfig_DefaultInputsParamToken_Allowed(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Recipes: map[string]RecipeCfg{
+				"vhs": {
+					Command:       "vhs {tape}",
+					Params:        ParamCfg{Required: []string{"tape"}},
+					DefaultInputs: []string{"{tape}"},
+				},
+			},
+		},
+	}
+	assert.NoError(t, ValidateBuildConfig(cfg))
+}
+
+func TestValidateBuildConfig_DefaultInputsLiteralPath_Allowed(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Recipes: map[string]RecipeCfg{
+				"x": {
+					Command:       "tool {outputs}",
+					DefaultInputs: []string{"assets/header.css"},
+				},
+			},
+		},
+	}
+	assert.NoError(t, ValidateBuildConfig(cfg))
+}
+
+func TestValidateBuildConfig_DefaultInputsUndeclaredParam_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Recipes: map[string]RecipeCfg{
+				"x": {
+					Command:       "tool {outputs}",
+					DefaultInputs: []string{"{missing}"},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default-inputs")
+	assert.Contains(t, err.Error(), "missing")
+}
+
+func TestValidateBuildConfig_DefaultInputsReservedParam_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Recipes: map[string]RecipeCfg{
+				"x": {
+					Command:       "tool {outputs}",
+					DefaultInputs: []string{"{inputs}"},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default-inputs")
+}
+
+func TestValidateBuildConfig_DefaultInputsAbsolutePath_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Recipes: map[string]RecipeCfg{
+				"x": {
+					Command:       "tool {outputs}",
+					DefaultInputs: []string{"/etc/passwd"},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default-inputs")
+}
+
+func TestValidateBuildConfig_DefaultInputsParentEscape_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Recipes: map[string]RecipeCfg{
+				"x": {
+					Command:       "tool {outputs}",
+					DefaultInputs: []string{"../secret.txt"},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default-inputs")
+}
+
 // --- InjectBuildConfig ---
 
 func TestInjectBuildConfig_Nil(t *testing.T) {
@@ -545,6 +650,96 @@ func TestCopyBuildConfig_MutationDoesNotAliasOriginal(t *testing.T) {
 func TestCopyBuildConfig_Empty(t *testing.T) {
 	cp := copyBuildConfig(BuildConfig{})
 	assert.Empty(t, cp.Recipes)
+}
+
+// --- defaultInputPathShape branch coverage ---
+
+func TestDefaultInputPathShape_EmptyString(t *testing.T) {
+	assert.Equal(t, "must not be empty", defaultInputPathShape(""))
+}
+
+func TestDefaultInputPathShape_WhitespaceOnly(t *testing.T) {
+	assert.Equal(t, "must not be empty", defaultInputPathShape("   "))
+}
+
+func TestDefaultInputPathShape_LeadingWhitespace(t *testing.T) {
+	assert.Equal(t, "must not have leading or trailing whitespace", defaultInputPathShape(" valid/path"))
+}
+
+func TestDefaultInputPathShape_TrailingWhitespace(t *testing.T) {
+	assert.Equal(t, "must not have leading or trailing whitespace", defaultInputPathShape("valid/path "))
+}
+
+func TestDefaultInputPathShape_NULByte(t *testing.T) {
+	assert.Equal(t, "must not contain NUL, newline, or carriage return", defaultInputPathShape("pa\x00th"))
+}
+
+func TestDefaultInputPathShape_Newline(t *testing.T) {
+	assert.Equal(t, "must not contain NUL, newline, or carriage return", defaultInputPathShape("pa\nth"))
+}
+
+func TestDefaultInputPathShape_CarriageReturn(t *testing.T) {
+	assert.Equal(t, "must not contain NUL, newline, or carriage return", defaultInputPathShape("pa\rth"))
+}
+
+func TestDefaultInputPathShape_Backslash(t *testing.T) {
+	assert.Equal(t, "must use forward-slash separators only", defaultInputPathShape(`path\file`))
+}
+
+func TestDefaultInputPathShape_TildePrefix(t *testing.T) {
+	assert.Equal(t, "must be a relative path", defaultInputPathShape("~/home/file"))
+}
+
+func TestDefaultInputPathShape_JustDotDot(t *testing.T) {
+	assert.NotEmpty(t, defaultInputPathShape(".."))
+}
+
+func TestDefaultInputPathShape_EmbeddedDotDot(t *testing.T) {
+	assert.NotEmpty(t, defaultInputPathShape("a/../../b"))
+}
+
+func TestDefaultInputPathShape_SuffixDotDot(t *testing.T) {
+	assert.NotEmpty(t, defaultInputPathShape("a/b/.."))
+}
+
+func TestDefaultInputPathShape_ValidPath(t *testing.T) {
+	assert.Equal(t, "", defaultInputPathShape("assets/logo.svg"))
+}
+
+func TestValidateBuildConfig_DefaultInputsReservedAlt_Rejected(t *testing.T) {
+	// {alt} is in reservedParams (not collectivePlaceholders) — hits the
+	// reservedParams branch in validateDefaultInputs.
+	cfg := &Config{
+		Build: BuildConfig{
+			Recipes: map[string]RecipeCfg{
+				"x": {
+					Command:       "tool {outputs}",
+					DefaultInputs: []string{"{alt}"},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default-inputs")
+	assert.Contains(t, err.Error(), "alt")
+}
+
+// --- serializeRecipes DefaultInputs ---
+
+func TestSerializeRecipes_WithDefaultInputs(t *testing.T) {
+	out := serializeRecipes(map[string]RecipeCfg{
+		"vhs": {
+			Command:       "vhs {tape}",
+			Params:        ParamCfg{Required: []string{"tape"}},
+			DefaultInputs: []string{"{tape}"},
+		},
+	})
+	m, ok := out["vhs"].(map[string]any)
+	require.True(t, ok)
+	di, hasDI := m["default-inputs"]
+	require.True(t, hasDI, "default-inputs must be serialized")
+	assert.Equal(t, []any{"{tape}"}, di)
 }
 
 // --- Build survives Merge ---

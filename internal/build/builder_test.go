@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -240,12 +241,21 @@ func TestBuild_EmptyCommandErrors(t *testing.T) {
 }
 
 func TestBuild_GlobCapExceeded(t *testing.T) {
-	// A glob cap breach is a build error. We simulate by setting a tiny
-	// cap is not possible (const), so instead verify the helper wiring by
-	// matching a directory with many files would be too slow; instead we
-	// confirm a normal small glob does not error (covered elsewhere) and
-	// trust CheckGlobMatchCap unit tests in the rules/build package.
-	t.Skip("cap breach exercised via rules/build unit tests; 10k files too slow here")
+	old := builderGlobCapFn
+	builderGlobCapFn = func(_ int) error { return errors.New("cap exceeded") }
+	defer func() { builderGlobCapFn = old }()
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o644))
+	b := NewCustomBuilder(map[string]RecipeSpec{"r": recipeCmd("echo hi")})
+	err := b.Build(context.Background(), Target{
+		Recipe:  "r",
+		Root:    root,
+		Inputs:  []string{"*.txt"},
+		Outputs: []string{"out.txt"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cap exceeded")
 }
 
 func TestArgvExpansion_ListsExpandPerEntry(t *testing.T) {
@@ -471,4 +481,34 @@ func TestSubstituteParams_EmbeddedListPlaceholder(t *testing.T) {
 	// token) must pass through literally — the MDS040 validator rejects such
 	// commands; here we verify the substituteParams passthrough.
 	assert.Equal(t, "prefix-{inputs}-suffix", substituteParams("prefix-{inputs}-suffix", nil))
+}
+
+func TestBuild_MkdirTempError(t *testing.T) {
+	old := mkdirTempFn
+	mkdirTempFn = func(_, _ string) (string, error) { return "", errors.New("no temp dir") }
+	defer func() { mkdirTempFn = old }()
+
+	root := t.TempDir()
+	b := NewCustomBuilder(map[string]RecipeSpec{"r": recipeCmd("echo hi")})
+	err := b.Build(context.Background(), Target{
+		Recipe:  "r",
+		Root:    root,
+		Outputs: []string{"out.txt"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "staging dir")
+}
+
+func TestCommitOutputs_StatError(t *testing.T) {
+	root := t.TempDir()
+	// Create a regular file at the same path as the expected staging dir so
+	// os.Stat on "notadir/out0" fails with ENOTDIR — a non-ENOENT error that
+	// hits the "staging output" error branch rather than the "did not produce"
+	// branch.
+	notadir := filepath.Join(root, "notadir")
+	require.NoError(t, os.WriteFile(notadir, []byte("x"), 0o644))
+
+	err := commitOutputs(root, []string{"out.txt"}, []string{filepath.Join(notadir, "out0")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "staging output")
 }

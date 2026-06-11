@@ -21,12 +21,15 @@ import (
 // never runs from pkg/mdsmith, the WASM bindings, the LSP fix path, or
 // the merge driver.
 type buildPassOpts struct {
-	noBuild   bool          // --no-build: skip the build pass entirely
-	buildOnly bool          // --build-only: run only the build pass
-	recipe    string        // --build-recipe: only this recipe's directives
-	dryRun    bool          // --build-dry-run: enumerate targets, run nothing
-	timeout   time.Duration // --build-timeout: per-recipe timeout
-	maxBytes  int64         // file-size cap inherited from the fix run
+	noBuild    bool          // --no-build: skip the build pass entirely
+	buildOnly  bool          // --build-only: run only the build pass
+	recipe     string        // --build-recipe: only this recipe's directives
+	dryRun     bool          // --build-dry-run: enumerate targets, run nothing
+	force      bool          // --build-force: rebuild every target
+	checkStale bool          // --build-check-stale: report stale targets, run nothing
+	noCache    bool          // --build-no-cache: ignore and do not write the cache
+	timeout    time.Duration // --build-timeout: per-recipe timeout
+	maxBytes   int64         // file-size cap inherited from the fix run
 }
 
 // buildTarget pairs a resolved build.Target with the file and line it
@@ -70,6 +73,12 @@ func runBuildPass(
 		_, _ = fmt.Fprintf(w, "mdsmith: %v\n", err)
 	}
 
+	// Overlapping outputs across directives is a hard error: run no recipe.
+	if err := detectOverlap(targets); err != nil {
+		_, _ = fmt.Fprintf(w, "mdsmith: %v\n", err)
+		return 2
+	}
+
 	if len(targets) == 0 {
 		if len(errs) > 0 {
 			return 2
@@ -83,25 +92,203 @@ func runBuildPass(
 		timeout = 30 * time.Second
 	}
 
-	failed := false
+	cache := loadBuildCache(root, opts, w)
+	code := dispatchTargets(builder, targets, cfg, root, opts, cache, timeout, w)
+	if len(errs) > 0 && code == 0 {
+		return 2
+	}
+	return code
+}
+
+// detectOverlap maps the collected targets to OverlapTargets and runs the
+// build package's overlap detector.
+func detectOverlap(targets []buildTarget) error {
+	ot := make([]buildexec.OverlapTarget, 0, len(targets))
 	for _, bt := range targets {
-		label := fmt.Sprintf("%s:%d (%s)", bt.file, bt.line, bt.target.Recipe)
-		if opts.dryRun {
-			_, _ = fmt.Fprintf(w, "build %s: DRY-RUN\n", label)
-			continue
+		ot = append(ot, buildexec.OverlapTarget{
+			File:    bt.file,
+			Line:    bt.line,
+			Outputs: bt.target.Outputs,
+		})
+	}
+	return buildexec.DetectOutputOverlap(ot)
+}
+
+// loadBuildCache loads the build cache unless --build-no-cache is set. A
+// corrupt cache is reported but treated as empty so the run can proceed
+// (every target then rebuilds).
+func loadBuildCache(root string, opts buildPassOpts, w io.Writer) *buildexec.Cache {
+	if opts.noCache {
+		return buildexec.NewCache()
+	}
+	cache, err := buildexec.LoadCache(root)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "mdsmith: %v; treating all targets as stale\n", err)
+		return buildexec.NewCache()
+	}
+	return cache
+}
+
+// stalenessFor builds the StalenessInput for one target, resolving the
+// recipe's default-inputs (param tokens to their relative path values).
+func stalenessFor(bt buildTarget, cfg *config.Config) buildexec.StalenessInput {
+	recipeCfg := cfg.Build.Recipes[bt.target.Recipe]
+	defaults := resolveDefaultInputs(recipeCfg.DefaultInputs, bt.target.Params)
+	return buildexec.StalenessInput{
+		Target:        bt.target,
+		Command:       recipeCfg.Command,
+		DefaultInputs: defaults,
+	}
+}
+
+// resolveDefaultInputs maps each default-inputs entry to a relative path.
+// A {param} token resolves to the param's value (the relative path it
+// supplies); a literal entry passes through unchanged.
+func resolveDefaultInputs(entries []string, params map[string]string) []string {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if len(e) > 2 && e[0] == '{' && e[len(e)-1] == '}' {
+			name := e[1 : len(e)-1]
+			if v, ok := params[name]; ok {
+				out = append(out, v)
+				continue
+			}
 		}
-		if err := runOneTarget(builder, bt, timeout); err != nil {
-			_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, err)
+		out = append(out, e)
+	}
+	return out
+}
+
+// targetOutcome is the per-target result of one dispatch loop iteration.
+type targetOutcome int
+
+const (
+	outcomeNeutral targetOutcome = iota // reported, no state change (dry-run, skip, fresh-stale-report)
+	outcomeFailed                       // a failure was reported
+	outcomeStale                        // --build-check-stale found this target stale
+	outcomeRebuilt                      // recipe ran and the cache entry was refreshed
+)
+
+// dispatchTargets runs the staleness check, dispatch, and cache refresh
+// loop. It returns the build pass exit code.
+func dispatchTargets(
+	builder buildexec.Builder, targets []buildTarget, cfg *config.Config,
+	root string, opts buildPassOpts, cache *buildexec.Cache,
+	timeout time.Duration, w io.Writer,
+) int {
+	failed := false
+	anyStale := false
+	rebuilt := false
+	for _, bt := range targets {
+		switch dispatchOne(builder, bt, cfg, opts, cache, timeout, w) {
+		case outcomeFailed:
 			failed = true
-			continue
+		case outcomeStale:
+			anyStale = true
+		case outcomeRebuilt:
+			rebuilt = true
+		case outcomeNeutral:
 		}
-		_, _ = fmt.Fprintf(w, "build %s: OK\n", label)
 	}
 
-	if failed || len(errs) > 0 {
+	if opts.checkStale {
+		if anyStale {
+			return 2
+		}
+		return 0
+	}
+	if rebuilt && !opts.noCache {
+		if err := cache.Save(root); err != nil {
+			_, _ = fmt.Fprintf(w, "mdsmith: saving build cache: %v\n", err)
+			return 2
+		}
+	}
+	if failed {
 		return 2
 	}
 	return 0
+}
+
+// dispatchOne handles a single target: staleness verdict, then report or
+// rebuild per the active flags. It returns the outcome the caller folds
+// into the run-level state.
+func dispatchOne(
+	builder buildexec.Builder, bt buildTarget, cfg *config.Config,
+	opts buildPassOpts, cache *buildexec.Cache, timeout time.Duration, w io.Writer,
+) targetOutcome {
+	label := fmt.Sprintf("%s:%d (%s)", bt.file, bt.line, bt.target.Recipe)
+	stin := stalenessFor(bt, cfg)
+
+	verdict, serr := targetVerdict(stin, cache, opts)
+	if serr != nil {
+		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, serr)
+		return outcomeFailed
+	}
+
+	if opts.checkStale {
+		if verdict == buildexec.Stale {
+			_, _ = fmt.Fprintf(w, "build %s: STALE\n", label)
+			return outcomeStale
+		}
+		return outcomeNeutral
+	}
+	if opts.dryRun {
+		_, _ = fmt.Fprintf(w, "build %s: %s\n", label, verdict)
+		return outcomeNeutral
+	}
+	if verdict == buildexec.Fresh {
+		_, _ = fmt.Fprintf(w, "build %s: SKIP\n", label)
+		return outcomeNeutral
+	}
+	if err := runOneTarget(builder, bt, timeout); err != nil {
+		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, err)
+		return outcomeFailed
+	}
+	if err := refreshCacheEntry(stin, cache, opts); err != nil {
+		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, err)
+		return outcomeFailed
+	}
+	_, _ = fmt.Fprintf(w, "build %s: OK\n", label)
+	return outcomeRebuilt
+}
+
+// targetVerdict returns the staleness verdict for one target, honouring
+// --build-force and --build-no-cache (both force a Stale verdict).
+func targetVerdict(
+	stin buildexec.StalenessInput, cache *buildexec.Cache, opts buildPassOpts,
+) (buildexec.Verdict, error) {
+	if opts.force || opts.noCache {
+		// Still resolve inputs so a missing input or empty glob is an error.
+		if _, err := buildexec.CheckStaleness(stin, buildexec.NewCache()); err != nil {
+			return buildexec.Stale, err
+		}
+		return buildexec.Stale, nil
+	}
+	res, err := buildexec.CheckStaleness(stin, cache)
+	if err != nil {
+		return buildexec.Stale, err
+	}
+	return res.Verdict, nil
+}
+
+// refreshCacheEntry records a rebuilt target's cache entry, stamping
+// built-at. With --build-no-cache it is a no-op.
+func refreshCacheEntry(
+	stin buildexec.StalenessInput, cache *buildexec.Cache, opts buildPassOpts,
+) error {
+	if opts.noCache {
+		return nil
+	}
+	entry, err := buildexec.RecordBuild(stin)
+	if err != nil {
+		return err
+	}
+	entry.BuiltAt = time.Now().UTC().Format(time.RFC3339)
+	cache.Put(entry)
+	return nil
 }
 
 // runOneTarget dispatches a single target with a per-recipe timeout.
