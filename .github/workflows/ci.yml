@@ -554,8 +554,9 @@ jobs:
   # informational (continue-on-error) rather than gating: it surfaces the
   # exact build errors in the log without blocking PRs on work not yet
   # done. TestTinyGoWASMArtifactSizeBudget records the same failure and
-  # skips. When the os.* calls are build-tagged out of the wasm graph,
-  # drop continue-on-error so the 8 MiB budget gates.
+  # skips. Build-tagging the os.* calls out of the wasm graph is
+  # scheduled as plan 247 (plan/247_tinygo-wasm-build.md); that plan
+  # drops continue-on-error so the 8 MiB budget gates.
   tinygo-wasm:
     runs-on: ubuntu-latest
     continue-on-error: true

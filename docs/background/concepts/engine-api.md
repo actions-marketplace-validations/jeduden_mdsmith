@@ -280,8 +280,9 @@ budget is not yet reachable.
   reached transitively through `internal/schema` (atomic index writes),
   `internal/fix`, `internal/githooks`, and the cross-file rule packages
   that `pkg/mdsmith` pulls in. Making the tinygo build succeed needs
-  those calls build-tagged out of the wasm graph, which is follow-up
-  work. The 8 MB tinygo budget is therefore unverified.
+  those calls build-tagged out of the wasm graph; that work is
+  scheduled as plan 247. The 8 MB tinygo budget is therefore
+  unverified, not CI-verified.
 
 So the shipping artifact is the standard Go WASM build; a smaller tinygo
 binary is not yet available.

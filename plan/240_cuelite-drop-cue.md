@@ -123,7 +123,8 @@ above the `sonnet` band.
       `internal/schema`, `internal/lsp`, and the cross-file rule
       packages — all reached transitively from `pkg/mdsmith`. Making the
       tinygo build succeed needs those calls build-tagged out of the
-      wasm graph (a multi-package change), which is follow-up work.
+      wasm graph (a multi-package change), scheduled as plan 247
+      ([247_tinygo-wasm-build.md](247_tinygo-wasm-build.md)).
       `size_test.go`'s `TestTinyGoWASMArtifactSizeBudget` now records the
       build failure and skips rather than faking a pass; the 8 MB budget
       is unverified.
