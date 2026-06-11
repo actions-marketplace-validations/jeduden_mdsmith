@@ -4,8 +4,6 @@ import (
 	stderrors "errors"
 	"fmt"
 	"regexp"
-	"strconv"
-	"strings"
 
 	"github.com/jeduden/mdsmith/cue/cuelite/syntax"
 )
@@ -364,7 +362,7 @@ func compileBasicLit(n *syntax.BasicLit) (*engineValue, error) {
 		}
 		return &engineValue{kind: kString, str: s}, nil
 	case syntax.INT:
-		i, err := strconv.ParseInt(stripUnderscores(n.Value), 0, 64)
+		i, err := syntax.ParseIntLiteral(n.Value)
 		if err != nil {
 			// The in-house engine represents integers as int64 and parses only the
 			// plain integer grammar; CUE uses arbitrary-precision big.Int and also
@@ -376,7 +374,7 @@ func compileBasicLit(n *syntax.BasicLit) (*engineValue, error) {
 		}
 		return &engineValue{kind: kInt, i: i}, nil
 	case syntax.FLOAT:
-		f, err := strconv.ParseFloat(stripUnderscores(n.Value), 64)
+		f, err := syntax.ParseFloatLiteral(n.Value)
 		if err != nil {
 			// The in-house engine represents floats as float64 and parses only the
 			// plain float grammar; CUE keeps a big.Float and accepts SI suffixes.
@@ -394,21 +392,6 @@ func compileBasicLit(n *syntax.BasicLit) (*engineValue, error) {
 	default:
 		return nil, fmt.Errorf("cuelite: unsupported literal kind %s", n.Kind)
 	}
-}
-
-// stripUnderscores removes the digit-group separators CUE allows in number
-// literals (1_234_567) so strconv can parse them.
-func stripUnderscores(s string) string {
-	if strings.IndexByte(s, '_') < 0 {
-		return s
-	}
-	out := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		if s[i] != '_' {
-			out = append(out, s[i])
-		}
-	}
-	return string(out)
 }
 
 // checkEmbeddedThunkRefs rejects an embedded thunk (a free comparison like

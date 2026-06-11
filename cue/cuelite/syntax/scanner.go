@@ -52,6 +52,11 @@ type tok struct {
 	text  string
 	op    Token
 	bytes bool // a string/interpolation using the single-quote (bytes) dialect
+	// newlineBefore reports whether trivia skipped before this token crossed a
+	// newline. The parser reads it to enforce CUE's declaration-separator rule:
+	// two declarations must be parted by a comma or a newline, so `a: 1 b: 2` on
+	// one line is rejected while a newline-separated pair is accepted.
+	newlineBefore bool
 }
 
 // scanner walks the source bytes producing tokens on demand. interpStack
@@ -100,30 +105,41 @@ func newScanner(src string) (*scanner, error) {
 // error is recorded on s.err and returned as a tEOF so the parser stops; the
 // parser checks s.err after the stream ends.
 func (s *scanner) next() tok {
-	s.skipTrivia()
+	nl := s.skipTrivia()
 	if s.err != nil || s.pos >= len(s.src) {
-		return tok{kind: tEOF}
+		return tok{kind: tEOF, newlineBefore: nl}
 	}
 	c := s.src[s.pos]
+	var t tok
 	switch {
 	case isIdentStart(c):
-		return s.scanIdent()
+		t = s.scanIdent()
 	case c >= '0' && c <= '9':
-		return s.scanNumber()
+		t = s.scanNumber()
 	case c == '"' || c == '\'' || c == '#':
-		return s.scanString()
+		t = s.scanString()
+	default:
+		t = s.scanPunct()
 	}
-	return s.scanPunct()
+	t.newlineBefore = nl
+	return t
 }
 
-// skipTrivia advances past whitespace and `//` line comments. CUE's other
-// comment and attribute forms are outside the subset; a `/*` is left for
-// scanPunct to reject as an unexpected character.
-func (s *scanner) skipTrivia() {
+// skipTrivia advances past whitespace and `//` line comments, returning whether
+// it crossed a newline. CUE's other comment and attribute forms are outside the
+// subset; a `/*` is left for scanPunct to reject as an unexpected character. The
+// crossed-newline result feeds the parser's declaration-separator rule (a `//`
+// line comment ends at a newline the loop then crosses, so a comment between
+// declarations counts as a separator like the newline that terminates it).
+func (s *scanner) skipTrivia() bool {
+	newline := false
 	for s.pos < len(s.src) {
 		c := s.src[s.pos]
 		switch {
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+		case c == '\n':
+			newline = true
+			s.pos++
+		case c == ' ' || c == '\t' || c == '\r':
 			s.pos++
 		case c == '/' && s.pos+1 < len(s.src) && s.src[s.pos+1] == '/':
 			s.pos += 2
@@ -131,9 +147,10 @@ func (s *scanner) skipTrivia() {
 				s.pos++
 			}
 		default:
-			return
+			return newline
 		}
 	}
+	return newline
 }
 
 // isIdentStart reports whether c can start an identifier: a letter or
@@ -177,26 +194,47 @@ func (s *scanner) scanNumber() tok {
 	for s.pos < len(s.src) && (isDigitByte(s.src[s.pos]) || s.src[s.pos] == '_') {
 		s.pos++
 	}
-	isFloat := s.scanFraction() || s.scanExponent()
-	if isFloat {
-		return tok{kind: tFloat, text: s.src[start:s.pos]}
+	// A float may carry a fraction, an exponent, or both (1.5e-2), so scan each
+	// independently — a fraction does NOT preclude a following exponent.
+	hasFraction := s.scanFraction()
+	hasExponent := s.scanExponent()
+	isFloat := hasFraction || hasExponent
+	text := s.src[start:s.pos]
+	// CUE rejects a leading-zero decimal integer (010 is NOT octal) and a `_`
+	// that is not immediately followed by a digit; the greedy scan above admits
+	// both, so validate the captured text and fail the scan on a violation.
+	if err := validateNumber(text, isFloat); err != nil {
+		s.fail("%v", err)
+		return tok{kind: tEOF}
 	}
-	return tok{kind: tInt, text: s.src[start:s.pos]}
+	if isFloat {
+		return tok{kind: tFloat, text: text}
+	}
+	return tok{kind: tInt, text: text}
 }
 
 // scanBasePrefixInt scans a 0x/0o/0b-prefixed integer literal when the current
-// position starts with `0` followed by a base letter. It advances past the
-// prefix and the base digits (hex digits for all three bases) and returns the
-// tInt token and ok=true. It returns ok=false when the byte after `0` is not a
-// recognised base letter, leaving s.pos unchanged.
+// position starts with `0` followed by a base letter. CUE accepts `0x`/`0X`
+// (hex, either case) but only the lowercase `0o`/`0b` for octal/binary; an
+// uppercase `0O`/`0B` is NOT a base prefix (CUE scans it as `0` then an
+// identifier, which the parser rejects as a missing separator). It advances
+// past the prefix and the base digits (hex digits for all three bases) and
+// returns the tInt token and ok=true, validating the `_` separator rule. It
+// returns ok=false when the byte after `0` is not a recognised base letter,
+// leaving s.pos unchanged so the decimal path runs.
 func (s *scanner) scanBasePrefixInt(start int) (tok, bool) {
 	switch s.src[s.pos+1] {
-	case 'x', 'X', 'o', 'O', 'b', 'B':
+	case 'x', 'X', 'o', 'b':
 		s.pos += 2
 		for s.pos < len(s.src) && (isHexDigit(s.src[s.pos]) || s.src[s.pos] == '_') {
 			s.pos++
 		}
-		return tok{kind: tInt, text: s.src[start:s.pos]}, true
+		text := s.src[start:s.pos]
+		if err := validateNumber(text, false); err != nil {
+			s.fail("%v", err)
+			return tok{kind: tEOF}, true
+		}
+		return tok{kind: tInt, text: text}, true
 	}
 	return tok{}, false
 }

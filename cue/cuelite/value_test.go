@@ -92,6 +92,14 @@ func TestCompileJSON(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `"a"`)
 	})
+	t.Run("duplicate key in a deeply nested array element rejected", func(t *testing.T) {
+		// A re-pinned FuzzValidate crasher (plan 240 round 1): a duplicate object
+		// key two array levels deep must still be caught before the lift, matching
+		// CUE's reject of `a.0.0.k: conflicting values 2 and 1`.
+		_, err := CompileJSON([]byte(`{"a":[[{"k":1,"k":2}]]}`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"k"`)
+	})
 	t.Run("same key in different objects accepted", func(t *testing.T) {
 		v, err := CompileJSON([]byte(`{"x":{"a":1},"y":{"a":2}}`))
 		require.NoError(t, err)

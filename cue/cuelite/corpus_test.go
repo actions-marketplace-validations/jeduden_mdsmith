@@ -40,6 +40,13 @@ func schemaCorpus() []schemaCase {
 		{"literal reject", `{status: "✅"}`, `{"status": "🔲"}`, false},
 		{"regex ok", `{slug: =~"^[a-z]+$"}`, `{"slug": "abc"}`, true},
 		{"regex reject", `{slug: =~"^[a-z]+$"}`, `{"slug": "AB1"}`, false},
+		// Raw-string dialect (`#"..."#`): the canonical regex idiom spares the
+		// backslashes, and a plain raw literal matches verbatim. These pin the
+		// item-1 raw-string round-trip fix.
+		{"raw regex ok", `{n: =~#"^\d+$"#}`, `{"n": "123"}`, true},
+		{"raw regex reject", `{n: =~#"^\d+$"#}`, `{"n": "12a"}`, false},
+		{"raw literal ok", `{p: #"a\b"#}`, `{"p": "a\\b"}`, true},
+		{"raw literal reject", `{p: #"a\b"#}`, `{"p": "axb"}`, false},
 		{"nested reject", `{meta: {status: "✅"}}`, `{"meta": {"status": "x"}}`, false},
 		{"multi-leaf reject", `{a: "x", b: "y"}`, `{"a": "p", "b": "q"}`, false},
 		{"string-where-int reject", `{a: string, b: int}`, `{"a": "ok", "b": "x"}`, false},
@@ -75,6 +82,12 @@ func schemaCorpus() []schemaCase {
 		{"command-windows default", `close({cw: string | *""})`, `{"cw": "b.ps1"}`, true},
 		{"platforms list ok", `close({platforms: [...string] | *[]})`, `{"platforms": ["linux"]}`, true},
 		{"unlisted bool ok", `close({unlisted: bool | *false})`, `{"unlisted": true}`, true},
+		// FuzzValidate crashers re-pinned (plan 240 round 1): a chained ordered
+		// comparison whose inner result is bool (`0>0>A`, `0>A>0`) is rejected at
+		// schema compile — CUE: "invalid operands ... to '>' (type bool and int)".
+		{"chained compare bool-left reject", `{B:0>0>A,A:0}`, `0`, false},
+		{"chained compare bool-inner reject", `{B:0>A>0,A:0}`, `0`, false},
+
 		{"ternary push ok", ternarySchemaSrc, `{"mechanism": "push", "registry": "npm"}`, true},
 		{"ternary push empty rejects", ternarySchemaSrc, `{"mechanism": "push", "registry": ""}`, false},
 		{"ternary pull empty ok", ternarySchemaSrc, `{"mechanism": "pull", "registry": ""}`, true},

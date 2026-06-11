@@ -94,9 +94,11 @@ func (p *parser) resume() {
 }
 
 // parseDecls parses declarations until the closing token `end` (tEOF for a
-// file, tRBrace for a struct). Declarations are separated by commas or
-// newlines; the scanner drops newlines, so a comma is optional between decls
-// and the loop simply parses until `end`.
+// file, tRBrace for a struct). CUE requires consecutive declarations to be
+// parted by a comma or a newline; the scanner records a crossed newline on each
+// token (tok.newlineBefore), so the loop accepts a comma OR a newline as the
+// separator and rejects two run-together declarations on one line (`a: 1 b: 2`),
+// matching CUE's "missing ',' in struct literal".
 func (p *parser) parseDecls(end tokKind) ([]Decl, error) {
 	var decls []Decl
 	for p.cur.kind != end && p.cur.kind != tEOF {
@@ -105,11 +107,19 @@ func (p *parser) parseDecls(end tokKind) ([]Decl, error) {
 			return nil, err
 		}
 		decls = append(decls, d)
-		// A separating comma is consumed when present; a newline-separated decl
-		// has none (the scanner dropped the newline), so the next iteration sees
-		// the next decl's first token directly.
+		// A separating comma is consumed when present. After it (or after a
+		// newline-separated decl with no comma) the loop continues; a following
+		// declaration with neither a comma nor a leading newline is run-together
+		// and rejected.
 		if p.cur.kind == tComma {
 			p.advance()
+			continue
+		}
+		if p.cur.kind == end || p.cur.kind == tEOF {
+			break
+		}
+		if !p.cur.newlineBefore {
+			return nil, fmt.Errorf("cuelite: missing ',' or newline between declarations")
 		}
 	}
 	return decls, nil
@@ -132,7 +142,11 @@ func (p *parser) parseDecl() (Decl, error) {
 		}
 	}
 	// A field starts with a label (ident or string) followed by `:` or `?:`.
-	if lbl, isField := p.tryFieldLabel(); isField {
+	lbl, isField, err := p.tryFieldLabel()
+	if err != nil {
+		return nil, err
+	}
+	if isField {
 		return p.parseFieldRest(lbl)
 	}
 	// Otherwise the declaration is an embedded expression.
@@ -148,10 +162,13 @@ func (p *parser) parseDecl() (Decl, error) {
 // returns false WITHOUT consuming anything beyond a label it can put back.
 // Because the parser has single-token lookahead and labels may be a string or
 // ident, it commits to the field form only after seeing the `:`/`?:`, so a
-// label-shaped expression (`status` as an embed) is not misread as a field.
-func (p *parser) tryFieldLabel() (Label, bool) {
+// label-shaped expression (`status` as an embed) is not misread as a field. A
+// label followed by a `?` that is NOT part of a `?:` is a syntax error (CUE
+// rejects `id ?`), returned via the error result rather than silently dropping
+// the `?`.
+func (p *parser) tryFieldLabel() (Label, bool, error) {
 	if p.cur.kind != tIdent && p.cur.kind != tString {
-		return nil, false
+		return nil, false, nil
 	}
 	lblTok := p.cur
 	// Look ahead one token. The scanner is stateless across peeks, so save and
@@ -161,25 +178,24 @@ func (p *parser) tryFieldLabel() (Label, bool) {
 	p.advance()
 	switch p.cur.kind {
 	case tColon:
-		return labelFromTok(lblTok), true
+		return labelFromTok(lblTok), true, nil
 	case tQuestion:
 		// `?:` optional field — confirm the `:` follows.
 		p.advance()
 		if p.cur.kind == tColon {
 			// Encode the optional marker by returning a label and letting
 			// parseFieldRest read the constraint; signal optional via a wrapper.
-			return optionalLabel{labelFromTok(lblTok)}, true
+			return optionalLabel{labelFromTok(lblTok)}, true, nil
 		}
-		// A `?` not followed by `:` is not a field; this shape does not occur in
-		// the subset, so report it.
-		p.pending = true
-		p.pendingTok = lblTok
-		return nil, false
+		// A `?` not forming a `?:` optional marker is a stray token. CUE rejects
+		// `id ?`; report it rather than discard the `?` and reparse the label as
+		// an embed.
+		return nil, false, fmt.Errorf("cuelite: stray '?' after label (expected '?:' for an optional field)")
 	default:
 		// Not a field: stash the label token so parseExpr's primary reads it.
 		p.pending = true
 		p.pendingTok = lblTok
-		return nil, false
+		return nil, false, nil
 	}
 }
 
@@ -219,7 +235,11 @@ func (p *parser) parseFieldRest(lbl Label) (Decl, error) {
 	// CUE's nested-field shorthand: `a: b: c` desugars to `a: {b: c}`. When the
 	// value position itself starts another `label:` field, build the implicit
 	// single-field struct rather than parsing it as an expression.
-	if inner, ok := p.tryFieldLabel(); ok {
+	inner, ok, err := p.tryFieldLabel()
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		nested, err := p.parseFieldRest(inner)
 		if err != nil {
 			return nil, err

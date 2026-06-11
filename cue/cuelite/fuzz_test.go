@@ -129,6 +129,12 @@ func extraSchemaFuzzSeeds() []struct{ schema, data string } {
 		{`{string | +""}`, `0`},
 		{`{a: *string | *""}`, `{}`},
 		{`{x: 0&1 | 1&0}`, `{"x":0}`},
+		// Re-pinned FuzzValidate crashers (plan 240 round 1): chained ordered
+		// comparisons whose inner result is bool, and a deep array-element
+		// duplicate key.
+		{`{B:0>0>A,A:0}`, `0`},
+		{`{B:0>A>0,A:0}`, `0`},
+		{`{a: [...]}`, `{"a":[[{"k":1,"k":2}]]}`},
 		{``, ``},
 		{`{`, `{`},
 		{`{a:`, `{"a"`},

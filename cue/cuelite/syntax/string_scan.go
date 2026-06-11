@@ -22,6 +22,7 @@ import (
 // (`'…'`) is scanned as a string so the parser/compiler can reject it as
 // out-of-subset with the raw text; only its delimiter shape is recognised here.
 func (s *scanner) scanString() tok {
+	litStart := s.pos
 	hashes := 0
 	for s.pos < len(s.src) && s.src[s.pos] == '#' {
 		hashes++
@@ -59,7 +60,7 @@ func (s *scanner) scanString() tok {
 		}
 		d.whitespace = ws
 	}
-	return s.scanStringBody(d, hashes, numChar, bodyStart, true)
+	return s.scanStringBody(d, hashes, numChar, litStart, bodyStart, true)
 }
 
 // scanStringBody scans from bodyStart to the next interpolation introducer or
@@ -67,8 +68,11 @@ func (s *scanner) scanString() tok {
 // fragment (so the returned token carries the opening delimiter for a complete
 // string, or is a tInterpStart for a fragment). It returns a tString (complete
 // literal, raw quoted text) or a tInterpStart (decoded first fragment) and
-// pushes the dialect onto interpStack on an interpolation.
-func (s *scanner) scanStringBody(d quoteDialect, hashes, numChar, bodyStart int, opening bool) tok {
+// pushes the dialect onto interpStack on an interpolation. litStart is the
+// index of the literal's first delimiter byte (the leading `#` run for a raw
+// string), so the complete-literal branch returns the RAW source including the
+// opening hashes; it is meaningful only when opening is true.
+func (s *scanner) scanStringBody(d quoteDialect, hashes, numChar, litStart, bodyStart int, opening bool) tok {
 	closeRun := s.closingRun(d)
 	i := bodyStart
 	for i < len(s.src) {
@@ -87,8 +91,10 @@ func (s *scanner) scanStringBody(d quoteDialect, hashes, numChar, bodyStart int,
 		// A closing delimiter run ends the literal.
 		if strings.HasPrefix(s.src[i:], closeRun) {
 			if opening {
-				// Complete literal: return the RAW quoted source for unquoteCUEString.
-				raw := s.src[s.pos : i+len(closeRun)]
+				// Complete literal: return the RAW quoted source for unquoteCUEString,
+				// including the opening `#` run (litStart precedes the quote) so the
+				// raw-string dialect round-trips.
+				raw := s.src[litStart : i+len(closeRun)]
 				s.pos = i + len(closeRun)
 				return tok{kind: tString, text: raw}
 			}
@@ -221,7 +227,9 @@ func (s *scanner) skipNestedString(i int) int {
 // the stack until the closing delimiter), scanning to the next `\(` or close.
 func (s *scanner) resumeInterp() tok {
 	d := s.interpStack[len(s.interpStack)-1]
-	t := s.scanStringBody(d, d.hashes, d.numChar, s.pos, false)
+	// A resumed fragment is never the literal's opening, so litStart (the raw
+	// complete-literal start) is unused; pass s.pos as a harmless placeholder.
+	t := s.scanStringBody(d, d.hashes, d.numChar, s.pos, s.pos, false)
 	// A complete fragment (kind tString) ends the literal: pop the dialect.
 	if t.kind == tString {
 		s.interpStack = s.interpStack[:len(s.interpStack)-1]
@@ -322,7 +330,11 @@ func decodeMultiline(frag string, d quoteDialect, pos fragPos) (string, error) {
 		default:
 			return "", fmt.Errorf("opening quote of multiline string must be followed by newline")
 		}
-		body = strings.TrimPrefix(body, d.whitespace)
+		stripped, err := stripIndent(body, d.whitespace)
+		if err != nil {
+			return "", err
+		}
+		body = stripped
 	}
 	var b strings.Builder
 	b.Grow(len(body))
@@ -335,9 +347,13 @@ func decodeMultiline(frag string, d quoteDialect, pos fragPos) (string, error) {
 		}
 		if c == '\n' {
 			b.WriteByte('\n')
-			rest := body[i+1:]
-			// Strip the closing-line whitespace prefix that follows the newline.
-			rest = strings.TrimPrefix(rest, d.whitespace)
+			// Each interior line must carry the closing-line whitespace prefix
+			// (CUE: "invalid whitespace"); an under-indented line is an error, not
+			// a silent no-op strip. A blank line (a bare newline) is exempt.
+			rest, err := stripIndent(body[i+1:], d.whitespace)
+			if err != nil {
+				return "", err
+			}
 			i = len(body) - len(rest)
 			continue
 		}
@@ -361,6 +377,25 @@ func decodeMultiline(frag string, d quoteDialect, pos fragPos) (string, error) {
 		out = strings.TrimSuffix(out, "\n")
 	}
 	return out, nil
+}
+
+// stripIndent removes the multiline whitespace prefix ws from the start of a
+// line (the bytes just after an interior newline). A blank line — empty, or one
+// that begins with another newline — carries no content and needs no prefix, so
+// it is returned unchanged. A non-blank line that does NOT begin with the full
+// prefix is under-indented; CUE rejects it as "invalid whitespace", returned as
+// an error rather than the silent no-op a bare TrimPrefix would do.
+func stripIndent(line, ws string) (string, error) {
+	if line == "" || line[0] == '\n' || line[0] == '\r' {
+		return line, nil
+	}
+	if ws == "" {
+		return line, nil
+	}
+	if !strings.HasPrefix(line, ws) {
+		return "", fmt.Errorf("invalid whitespace in multiline string")
+	}
+	return line[len(ws):], nil
 }
 
 // isMultilineEscape reports whether a backslash escape (`\` + hashes `#` + a
@@ -426,6 +461,12 @@ func unquoteCUEString(raw string) (string, error) {
 		ws := end
 		for ws > 0 && (body[ws-1] == ' ' || body[ws-1] == '\t') {
 			ws--
+		}
+		// CUE requires the closing `"""` to sit on its own line: the byte before
+		// the closing-line whitespace must be a newline. Content on the closing
+		// line (`ok"""`) leaves a non-newline there and is rejected.
+		if ws == 0 || body[ws-1] != '\n' {
+			return "", fmt.Errorf("closing quote of multiline string must follow a newline")
 		}
 		d.whitespace = body[ws:end]
 	}
