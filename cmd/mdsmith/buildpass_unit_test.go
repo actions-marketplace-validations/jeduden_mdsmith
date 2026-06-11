@@ -79,7 +79,7 @@ func TestRunBuildPass_DryRun(t *testing.T) {
 	var buf strings.Builder
 	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{dryRun: true, timeout: time.Second}, &buf)
 	assert.Equal(t, 0, code)
-	assert.Contains(t, buf.String(), "DRY-RUN")
+	assert.Contains(t, buf.String(), "STALE")
 }
 
 func TestRunBuildPass_NoTargets(t *testing.T) {

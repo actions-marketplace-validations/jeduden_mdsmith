@@ -52,16 +52,6 @@ type StalenessResult struct {
 	Inputs  []string
 }
 
-// effectiveInputs returns the union of the directive inputs and the
-// recipe default-inputs as one slice (default-inputs stay literal; they
-// are not glob-expanded).
-func (in StalenessInput) effectiveInputs() []string {
-	out := make([]string, 0, len(in.Target.Inputs)+len(in.DefaultInputs))
-	out = append(out, in.Target.Inputs...)
-	out = append(out, in.DefaultInputs...)
-	return out
-}
-
 // resolveInputs resolves the effective input set against the project
 // root. Directive entries may be globs; default-inputs stay literal. The
 // result is sorted, de-duplicated, project-root-relative paths. A

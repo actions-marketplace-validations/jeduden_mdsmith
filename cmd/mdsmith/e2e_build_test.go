@@ -119,7 +119,7 @@ func TestE2E_Build_DryRunRunsNothing(t *testing.T) {
 
 	_, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-dry-run", "--build-only", "doc.md")
 	assert.Equal(t, 0, code)
-	assert.Contains(t, stderr, "DRY-RUN")
+	assert.Contains(t, stderr, "STALE", "--build-dry-run prints a STALE | FRESH verdict")
 	assert.NoFileExists(t, filepath.Join(dir, "dst.txt"), "--build-dry-run must not run the recipe")
 }
 
@@ -155,6 +155,37 @@ func TestE2E_Build_TimeoutKillsRecipe(t *testing.T) {
 	assert.Contains(t, stderr, "FAIL")
 }
 
+// --- Plan 103: staleness and dependency tracking ---
+
+// fileMTime returns the modification time of root/rel.
+func fileMTime(t *testing.T, root, rel string) (mtime int64) {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(root, rel))
+	require.NoError(t, err)
+	return info.ModTime().UnixNano()
+}
+
+func TestE2E_Build_SecondRunSkipsFresh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp is not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("hello"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	_, stderr1, code1 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code1, stderr1)
+	assert.Contains(t, stderr1, "OK")
+
+	// Capture the output's mtime, then run again: it must SKIP and not rewrite.
+	before := fileMTime(t, dir, "dst.txt")
+	_, stderr2, code2 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code2, stderr2)
+	assert.Contains(t, stderr2, "SKIP", "a fresh target must SKIP on the second run")
+	assert.NotContains(t, stderr2, ": OK")
+	assert.Equal(t, before, fileMTime(t, dir, "dst.txt"), "fresh target must not be rewritten")
+}
+
 func TestE2E_Build_LintDryRunSkipsBuildPass(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("cp is not available on Windows")
@@ -187,6 +218,232 @@ func TestE2E_Build_LintViolationsKeepNonZeroExit(t *testing.T) {
 	assert.Equal(t, 1, code, "lint violations must keep exit 1: %s", out)
 	assert.Contains(t, out, "OK", "the build pass still runs")
 	assert.FileExists(t, filepath.Join(dir, "dst.txt"))
+}
+
+func TestE2E_Build_RebuildsOnInputContentChange(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp is not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("v1"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	_, _, code1 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code1)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("v2"), 0o644))
+	_, stderr2, code2 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code2, stderr2)
+	assert.Contains(t, stderr2, "OK", "an input content change must trigger a rebuild")
+
+	got, err := os.ReadFile(filepath.Join(dir, "dst.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "v2", string(got))
+}
+
+func TestE2E_Build_MtimeOnlyChangeDoesNotRebuild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp is not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("same"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	_, _, code1 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code1)
+
+	// Rewrite identical content (bumps mtime, content unchanged).
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("same"), 0o644))
+	_, stderr2, code2 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code2, stderr2)
+	assert.Contains(t, stderr2, "SKIP", "an mtime-only change must not rebuild")
+}
+
+func TestE2E_Build_RecipeCommandChangeRebuilds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp/install not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("x"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	_, _, code1 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code1)
+
+	// Edit the recipe command; the ActionID changes, so the target rebuilds.
+	cfg := "rules: {}\nbuild:\n  recipes:\n    copy:\n      command: install {inputs} {outputs}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"), []byte(cfg), 0o644))
+	_, stderr2, code2 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code2, stderr2)
+	assert.Contains(t, stderr2, "OK", "a recipe command change must invalidate the target")
+}
+
+func TestE2E_Build_RebuildsWhenOneOutputDeleted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    dup:\n      command: touch {outputs}\n")
+	doc := "# Build\n\n" +
+		"<?build\nrecipe: dup\noutputs:\n  - a.txt\n  - b.txt\n?>\n" +
+		"[a.txt](a.txt)\n[b.txt](b.txt)\n" +
+		"<?/build?>\n"
+	writeFixture(t, dir, "doc.md", doc)
+
+	_, _, code1 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code1)
+
+	// Second run: both fresh → SKIP.
+	_, stderr2, _ := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	assert.Contains(t, stderr2, "SKIP")
+
+	// Delete one output → rebuild.
+	require.NoError(t, os.Remove(filepath.Join(dir, "b.txt")))
+	_, stderr3, code3 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code3, stderr3)
+	assert.Contains(t, stderr3, "OK", "a deleted output must trigger a rebuild")
+	assert.FileExists(t, filepath.Join(dir, "b.txt"))
+}
+
+func TestE2E_Build_GlobMatchingZeroFilesIsError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	doc := "# Build\n\n" +
+		"<?build\nrecipe: copy\ninputs:\n  - \"*.none\"\noutputs:\n  - dst.txt\n?>\n" +
+		"[dst.txt](dst.txt)\n<?/build?>\n"
+	writeFixture(t, dir, "doc.md", doc)
+
+	_, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	assert.Equal(t, 2, code, "a glob matching zero files is a build error")
+	assert.Contains(t, stderr, "FAIL")
+	assert.NoFileExists(t, filepath.Join(dir, "dst.txt"))
+}
+
+func TestE2E_Build_OverlappingOutputsIsError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    mk:\n      command: touch {outputs}\n")
+	// Two directives whose outputs overlap by directory prefix.
+	doc := "# Build\n\n" +
+		"<?build\nrecipe: mk\noutputs:\n  - book/\n?>\n[book/](book/)\n<?/build?>\n\n" +
+		"<?build\nrecipe: mk\noutputs:\n  - book/index.html\n?>\n" +
+		"[book/index.html](book/index.html)\n<?/build?>\n"
+	writeFixture(t, dir, "doc.md", doc)
+
+	_, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	assert.Equal(t, 2, code, "overlapping outputs is a build error")
+	assert.Contains(t, stderr, "overlap")
+}
+
+func TestE2E_Build_ForceRebuildsFresh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("x"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	_, _, code1 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code1)
+
+	// Fresh now, but --build-force rebuilds anyway.
+	_, stderr2, code2 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "--build-force", "doc.md")
+	require.Equal(t, 0, code2, stderr2)
+	assert.Contains(t, stderr2, "OK", "--build-force must rebuild even a fresh target")
+	assert.NotContains(t, stderr2, "SKIP")
+}
+
+func TestE2E_Build_CheckStaleNonZeroThenZero(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("x"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	checkArgs := []string{"fix", "--no-color", "--build-only", "--build-check-stale", "doc.md"}
+
+	// Stale before any build → exit non-zero, no recipe runs.
+	_, stderr1, code1 := runBinaryInDir(t, dir, "", checkArgs...)
+	assert.Equal(t, 2, code1)
+	assert.Contains(t, stderr1, "STALE")
+	assert.NoFileExists(t, filepath.Join(dir, "dst.txt"), "--build-check-stale must not run a recipe")
+
+	// Build it, then check-stale again → exit zero.
+	_, _, code2 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code2)
+	_, _, code3 := runBinaryInDir(t, dir, "", checkArgs...)
+	assert.Equal(t, 0, code3, "--build-check-stale exits zero when all fresh")
+}
+
+func TestE2E_Build_NoCacheRebuildsAndWritesNothing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("x"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	_, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "--build-no-cache", "doc.md")
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stderr, "OK")
+	assert.NoFileExists(t, filepath.Join(dir, ".mdsmith", "build-cache.json"),
+		"--build-no-cache must not write a cache file")
+}
+
+func TestE2E_Build_ForceWithCheckStaleIsUsageError(t *testing.T) {
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "", "dst.txt"))
+
+	_, stderr, code := runBinaryInDir(t, dir, "", "fix", "--build-force", "--build-check-stale", "doc.md")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "--build-force")
+}
+
+func TestE2E_Build_TamperedOutputRebuilds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("real"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	_, _, code1 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code1)
+
+	// Hand-edit the artifact: ActionID unchanged, output hash differs → rebuild.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dst.txt"), []byte("tampered"), 0o644))
+	_, stderr2, code2 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code2, stderr2)
+	assert.Contains(t, stderr2, "OK", "a hand-edited artifact must trigger a rebuild")
+	got, err := os.ReadFile(filepath.Join(dir, "dst.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "real", string(got), "rebuild restores the artifact")
+}
+
+func TestE2E_Build_CacheFileSchema(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("x"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	_, _, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	require.Equal(t, 0, code)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".mdsmith", "build-cache.json"))
+	require.NoError(t, err)
+	s := string(data)
+	assert.Contains(t, s, "\"version\": 1")
+	assert.Contains(t, s, "\"action-id\": \"sha256-")
+	assert.Contains(t, s, "\"built-at\"")
+	assert.Contains(t, s, "\"outputs\"")
+	assert.Contains(t, s, "\"dst.txt\"")
+	assert.Contains(t, s, "\"inputs\"")
+	assert.Contains(t, s, "\"recipe\": \"copy\"")
 }
 
 func TestE2E_Check_RunsNoRecipe(t *testing.T) {
