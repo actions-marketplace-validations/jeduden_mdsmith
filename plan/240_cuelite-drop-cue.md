@@ -1,7 +1,7 @@
 ---
 id: 240
 title: "cuelite phase 4 — drop cuelang.org and enable tinygo"
-status: "🔲"
+status: "🔳"
 model: opus
 summary: >-
   With every surface flipped, delete cue/cuelite's CUE
