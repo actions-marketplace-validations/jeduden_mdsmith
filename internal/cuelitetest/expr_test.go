@@ -209,7 +209,10 @@ func exprCorpus() []ExprCase {
 			Expr:      `[for len in xs {"\(len(len))"}][0]`,
 			ScopeJSON: `{"xs":[[1,2]]}`,
 		},
-		{Name: "strings key does not shadow namespace", Expr: `strings.Join(["a","b"], ",")`, ScopeJSON: `{"strings":"sv"}`},
+		{
+			Name: "strings key does not shadow namespace",
+			Expr: `strings.Join(["a","b"], ",")`, ScopeJSON: `{"strings":"sv"}`,
+		},
 
 		// Equality semantics (item 3): struct field-wise, list type-strict,
 		// scalar numeric-aware.
