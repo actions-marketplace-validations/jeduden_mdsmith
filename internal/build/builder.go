@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,6 +122,12 @@ func (b *CustomBuilder) Build(ctx context.Context, target Target) error {
 func (b *CustomBuilder) resolveInputs(target Target) ([]string, error) {
 	seen := make(map[string]struct{})
 	var out []string
+	add := func(rel string) {
+		if _, dup := seen[rel]; !dup {
+			seen[rel] = struct{}{}
+			out = append(out, rel)
+		}
+	}
 	root := target.Root
 	fsys := os.DirFS(root)
 	for _, entry := range target.Inputs {
@@ -137,10 +144,7 @@ func (b *CustomBuilder) resolveInputs(target Target) ([]string, error) {
 				if err != nil {
 					return nil, err
 				}
-				if _, dup := seen[rel]; !dup {
-					seen[rel] = struct{}{}
-					out = append(out, rel)
-				}
+				add(rel)
 			}
 			continue
 		}
@@ -148,10 +152,7 @@ func (b *CustomBuilder) resolveInputs(target Target) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, dup := seen[rel]; !dup {
-			seen[rel] = struct{}{}
-			out = append(out, rel)
-		}
+		add(rel)
 	}
 	sort.Strings(out)
 	return out, nil
@@ -288,11 +289,21 @@ func commitOutputs(root string, outputs, stagePaths []string) error {
 
 // copyFile copies src to dst, preserving nothing but content. Used as a
 // fallback when os.Rename fails across filesystems (the staging temp
-// dir may be on a different device than the project root).
+// dir may be on a different device than the project root). Content is
+// streamed so a large artifact never has to fit in memory.
 func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src) //nolint:gosec // src is a staged path under our temp dir
+	in, err := os.Open(src) //nolint:gosec // src is a staged path under our temp dir
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0o644) //nolint:gosec // output perms match a normal artifact
+	defer in.Close()                                                        //nolint:errcheck // read-only file
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644) //nolint:gosec // artifact perms
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close() // copy error takes precedence
+		return err
+	}
+	return out.Close()
 }

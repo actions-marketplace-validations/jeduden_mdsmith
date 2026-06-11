@@ -39,33 +39,15 @@ func runFix(args []string) int {
 	return fixDiscovered(opts)
 }
 
-// buildFixFlags holds the flag variables for the --build-* group.
-// Separating them keeps parseFixFlags under the funlen limit and
-// co-locates the build-flag descriptions with their defaults.
-type buildFixFlags struct {
-	noBuild   bool
-	buildOnly bool
-	dryRun    bool
-	recipe    string
-	timeout   time.Duration
-}
-
-func (b *buildFixFlags) register(fs *flag.FlagSet) {
+// register wires the --build-* flag group onto fs. A method on
+// buildPassOpts so parseFixFlags stays under the funlen limit and the
+// flag descriptions sit next to their defaults.
+func (b *buildPassOpts) register(fs *flag.FlagSet) {
 	fs.BoolVar(&b.noBuild, "no-build", false, "Run the lint-fix pass only; skip the build pass")
 	fs.BoolVar(&b.buildOnly, "build-only", false, "Run the build pass only; skip the lint-fix pass")
 	fs.StringVar(&b.recipe, "build-recipe", "", "Only build <?build?> directives whose recipe matches NAME")
 	fs.BoolVar(&b.dryRun, "build-dry-run", false, "Enumerate build targets without running any recipe")
 	fs.DurationVar(&b.timeout, "build-timeout", 30*time.Second, "Per-recipe timeout (e.g. 30s, 2m)")
-}
-
-func (b buildFixFlags) toPassOpts() buildPassOpts {
-	return buildPassOpts{
-		noBuild:   b.noBuild,
-		buildOnly: b.buildOnly,
-		recipe:    b.recipe,
-		dryRun:    b.dryRun,
-		timeout:   b.timeout,
-	}
 }
 
 // setFixUsage wires the usage message for the fix subcommand onto fs.
@@ -92,7 +74,7 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 		configPath, format, maxInputSize                                      string
 		noColor, quiet, verbose, noGitignore, followSymlinks, explain, dryRun bool
 	)
-	var bf buildFixFlags
+	var bp buildPassOpts
 
 	fs.StringVarP(&configPath, "config", "c", "", "Override config file path")
 	fs.StringVarP(&format, "format", "f", "text", "Output format: text, json")
@@ -108,7 +90,7 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 	fs.BoolVar(&dryRun, "dry-run", false,
 		"Preview which files would change without writing; "+
 			"per-file output lists the rules that would fire and their counts")
-	bf.register(fs)
+	bp.register(fs)
 	setFixUsage(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -121,7 +103,7 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 		verbose = false
 	}
 
-	if bf.noBuild && bf.buildOnly {
+	if bp.noBuild && bp.buildOnly {
 		fmt.Fprintf(os.Stderr, "mdsmith: fix: --no-build and --build-only are mutually exclusive\n")
 		return fixCLIOpts{}, nil, false, 2
 	}
@@ -141,7 +123,7 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 		maxInputSize: maxInputSize,
 		explain:      explain,
 		dryRun:       dryRun,
-		build:        bf.toPassOpts(),
+		build:        bp,
 	}, fileArgs, hasStdin, -1
 }
 
@@ -198,10 +180,12 @@ func runFixThroughSession(
 	cfg *config.Config, cfgPath string, opts fixCLIOpts,
 	logger *vlog.Logger, files []string, maxBytes int64,
 ) int {
-	files = orderFilesLeavesFirst(files, rootDirFromConfig(cfgPath), maxBytes)
-
 	lintCode := 0
 	if !opts.build.buildOnly {
+		// Leaves-first ordering is a lint-fix convergence optimisation;
+		// the build pass sorts its targets itself, so --build-only skips
+		// the workspace dependency-index build entirely.
+		files = orderFilesLeavesFirst(files, rootDirFromConfig(cfgPath), maxBytes)
 		sess := sessionForCLI(cfg, cfgPath)
 		fixResult := sess.FixPaths(files, mdsmith.BatchOptions{
 			Explain:       opts.explain,
