@@ -4,10 +4,10 @@ package requiredstructure
 
 import "os"
 
-// sameFile returns false on tinygo/wasm builds. os.SameFile is not
-// implemented on tinygo's wasm target; returning false lets isSchemaFile
-// fall through to its path-equality comparison, which is an accurate
-// substitute in the wasm sandbox (no hard links or symlinks).
+// sameFile always returns false on tinygo/wasm builds because
+// os.SameFile is not implemented for the wasm target. A false return
+// does not mean the files are distinct; callers that need a definitive
+// same-file answer should also compare resolved absolute paths.
 func sameFile(_, _ os.FileInfo) bool {
 	return false
 }

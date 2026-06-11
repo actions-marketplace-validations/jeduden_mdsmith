@@ -442,11 +442,15 @@ func TestAtomicWriteFile_ChmodError(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "out.md")
 
+	chmodFileMu.Lock()
 	orig := chmodFile
-	t.Cleanup(func() { chmodFile = orig })
-	chmodFile = func(_ string, _ os.FileMode) error {
-		return os.ErrPermission
-	}
+	chmodFile = func(_ string, _ os.FileMode) error { return os.ErrPermission }
+	chmodFileMu.Unlock()
+	t.Cleanup(func() {
+		chmodFileMu.Lock()
+		chmodFile = orig
+		chmodFileMu.Unlock()
+	})
 
 	err := atomicWriteFile(target, []byte("data"), 0o644)
 	require.ErrorIs(t, err, os.ErrPermission)
