@@ -92,7 +92,6 @@ func (b buildFixFlags) toPassOpts() buildPassOpts {
 	}
 }
 
-
 // setFixUsage wires the usage message for the fix subcommand onto fs.
 func setFixUsage(fs *flag.FlagSet) {
 	fs.Usage = func() {
