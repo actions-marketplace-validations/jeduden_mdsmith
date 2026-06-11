@@ -812,7 +812,22 @@ func evalRowComprehensionBody(body *ast.StructLit, scope *rowScope) (*engineValu
 // evalRowCall evaluates a row builtin call. The row subset has two builtins:
 // `strings.Join(list, sep)` and `len(string|list)`. Any other call target is
 // outside the subset.
+//
+// A bare-identifier call target resolves against SCOPE before the builtin
+// registry, matching CUE's lexical scoping: a scope key or for-variable named
+// `len` shadows the `len` builtin. Since no row value is callable, a shadowed
+// target is a "cannot call non-function" error, exactly as CUE rejects
+// `len(xs)` when `len` is bound to data. A package-qualified target
+// (`strings.Join`) is never a scope name (the `strings` namespace has no bare
+// alias and the row grammar binds no package), so it goes straight to the
+// builtin registry.
 func evalRowCall(n *ast.CallExpr, scope *rowScope) (*engineValue, error) {
+	if id, ok := n.Fun.(*ast.Ident); ok {
+		if shadow, bound := scope.vars[id.Name]; bound {
+			return nil, fmt.Errorf("cuelite: cannot call non-function %s (a %s binding shadows it)",
+				id.Name, shadow.describe())
+		}
+	}
 	name, err := rowCallName(n.Fun)
 	if err != nil {
 		return nil, err

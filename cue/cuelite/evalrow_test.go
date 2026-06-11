@@ -240,6 +240,45 @@ func TestRender_BuiltinArityError(t *testing.T) {
 	assert.Contains(t, err.Error(), "two arguments")
 }
 
+// --- builtin shadowing (a scope/for binding named `len` shadows the builtin) ---
+
+func TestRender_ScopeKeyShadowsLenBuiltin(t *testing.T) {
+	// CUE resolves `len` lexically: a scope binding named `len` shadows the
+	// builtin, so `len(xs)` calls the bound value. Here `len` is a string, which
+	// is not callable, so the call is rejected ("cannot call non-function") —
+	// the in-house engine must NOT silently fall through to the len builtin.
+	_, err := renderRow(t, `len(xs)`, map[string]any{"len": "shadowed", "xs": []any{1, 2}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot call")
+}
+
+func TestRender_ForVariableShadowsLenBuiltin(t *testing.T) {
+	// A for-comprehension variable named `len` shadows the builtin inside the
+	// body, matching CUE's lexical scoping. `len(len)` calls the bound element
+	// (a list), which is not callable, so it is rejected.
+	_, err := renderRow(t, `[for len in xs {"\(len(len))"}][0]`, map[string]any{
+		"xs": []any{[]any{1, 2}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot call")
+}
+
+func TestRender_PlainLenStillWorksWhenNotShadowed(t *testing.T) {
+	// With no scope binding named `len`, the builtin resolves normally.
+	got, err := renderRow(t, `"\(len(xs))"`, map[string]any{"xs": []any{1, 2, 3}})
+	require.NoError(t, err)
+	assert.Equal(t, "3", got)
+}
+
+func TestRender_StringsNamespaceStaysReservedAsCallTarget(t *testing.T) {
+	// `strings` is the builtin namespace, not a scope binding: a scope key named
+	// `strings` does not shadow it (it has no bare alias), so `strings.Join`
+	// still resolves to the builtin.
+	got, err := renderRow(t, `strings.Join(["a","b"], ",")`, map[string]any{"strings": "sv"})
+	require.NoError(t, err)
+	assert.Equal(t, "a,b", got)
+}
+
 // bigRowExpr is the canonical coverage-matrix row expression from
 // docs/research/markdownlint-coverage/README.md: the richest real row-expr,
 // combining string interpolation, `+` concatenation, the ternary idiom,

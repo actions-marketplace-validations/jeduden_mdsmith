@@ -200,6 +200,17 @@ func exprCorpus() []ExprCase {
 		{Name: "strings.Join arity error", Expr: `strings.Join(["a"])`, ScopeJSON: ``},
 		{Name: "len arity error", Expr: `len("a","b")`, ScopeJSON: ``},
 
+		// Builtin shadowing (item 3): a scope key or for-variable named `len`
+		// shadows the builtin, so `len(...)` calls non-callable data and both arms
+		// reject. `strings.Join` stays the builtin since `strings` has no alias.
+		{Name: "scope key len shadows builtin", Expr: `len(xs)`, ScopeJSON: `{"len":"shadowed","xs":[1,2]}`},
+		{
+			Name:      "for variable len shadows builtin",
+			Expr:      `[for len in xs {"\(len(len))"}][0]`,
+			ScopeJSON: `{"xs":[[1,2]]}`,
+		},
+		{Name: "strings key does not shadow namespace", Expr: `strings.Join(["a","b"], ",")`, ScopeJSON: `{"strings":"sv"}`},
+
 		// Equality semantics (item 3): struct field-wise, list type-strict,
 		// scalar numeric-aware.
 		{
@@ -335,6 +346,11 @@ func FuzzExpr(f *testing.F) {
 		{`fm["fm"]`, `{"fm":"lit"}`},
 		{`mdsmith_template_out`, `{"mdsmith_template_out":"x"}`},
 		{`"\(_strings_used)"`, `{}`},
+		// Builtin shadowing (item 3): scope/for binding named `len` shadows the
+		// builtin; `strings` namespace stays reserved.
+		{`len(xs)`, `{"len":"shadowed","xs":[1,2]}`},
+		{`[for len in xs {"\(len(len))"}][0]`, `{"xs":[[1,2]]}`},
+		{`strings.Join(["a","b"], ",")`, `{"strings":"sv"}`},
 	} {
 		f.Add(seed.expr, seed.scope)
 	}
