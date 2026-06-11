@@ -122,12 +122,13 @@ func TestTinyGoWASMArtifactSizeBudget(t *testing.T) {
 }
 
 // gzipLen compresses data at BestSpeed and returns the compressed byte
-// count. BestSpeed is used as a consistent, pessimistic upper bound on
-// transfer size across both size tests.
+// count. BestSpeed (level 1) produces larger output than DefaultCompression
+// (level 6), giving a consistent pessimistic upper bound on transfer size
+// across both size tests — if the artifact passes at BestSpeed, it
+// passes at any higher compression level too.
 func gzipLen(t *testing.T, data []byte) int {
 	t.Helper()
 	var buf bytes.Buffer
-	buf.Grow(len(data))
 	// NewWriterLevel only errors for levels outside [-2, 9]; BestSpeed=1
 	// is always valid, so the error is structurally unreachable.
 	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
