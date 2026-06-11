@@ -83,4 +83,5 @@ assignment and the cleanup restore.
       reports no data race
 - [x] All tests pass: `go test ./...`
 - [ ] `go tool golangci-lint run` reports no
-      issues
+      issues (tools/go.mod requires ≥ 1.25.8;
+      environment has 1.25.0 — cannot verify here)
