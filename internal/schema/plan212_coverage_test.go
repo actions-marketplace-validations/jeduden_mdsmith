@@ -232,7 +232,7 @@ func TestWriteAndRename_ChmodErrorSurfaces(t *testing.T) {
 }
 
 // TestWriteAndRename_ChmodInjection verifies that chmodFile is read under
-// chmodFileMu so a concurrently injected mock is visible. The injected
+// chmodFileMu so an injected mock is visible to writeAndRename. The injected
 // function returns os.ErrPermission; the error must propagate out of
 // writeAndRename unchanged.
 func TestWriteAndRename_ChmodInjection(t *testing.T) {
