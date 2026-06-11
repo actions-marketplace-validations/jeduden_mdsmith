@@ -155,6 +155,40 @@ func TestE2E_Build_TimeoutKillsRecipe(t *testing.T) {
 	assert.Contains(t, stderr, "FAIL")
 }
 
+func TestE2E_Build_LintDryRunSkipsBuildPass(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp is not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("hi"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	_, _, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--dry-run", "doc.md")
+	assert.Equal(t, 0, code)
+	assert.NoFileExists(t, filepath.Join(dir, "dst.txt"),
+		"a lint --dry-run preview must not run any recipe")
+}
+
+func TestE2E_Build_LintViolationsKeepNonZeroExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp is not available on Windows")
+	}
+	dir := writeBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("hi"), 0o644))
+	// A broken .md link is an unfixable diagnostic, so the lint pass
+	// exits 1 while the build pass still succeeds — the combined run
+	// must keep the lint exit code rather than masking it with build OK.
+	doc := buildDirective("copy", "src.txt", "dst.txt") +
+		"\nSee [missing](missing-page.md) for details.\n"
+	writeFixture(t, dir, "doc.md", doc)
+
+	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "doc.md")
+	out := stdout + stderr
+	assert.Equal(t, 1, code, "lint violations must keep exit 1: %s", out)
+	assert.Contains(t, out, "OK", "the build pass still runs")
+	assert.FileExists(t, filepath.Join(dir, "dst.txt"))
+}
+
 func TestE2E_Check_RunsNoRecipe(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("cp is not available on Windows")

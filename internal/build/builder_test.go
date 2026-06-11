@@ -401,6 +401,65 @@ func TestCopyFile_ReadError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCopyFile_StreamReadError(t *testing.T) {
+	// A directory opens fine but reading from it fails (EISDIR), so the
+	// error surfaces from io.Copy rather than os.Open — exercising the
+	// mid-stream error branch.
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "srcdir")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+	err := copyFile(srcDir, filepath.Join(root, "dst.txt"))
+	require.Error(t, err)
+}
+
+func TestCopyFile_PreservesSourceMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission bits are not meaningful on Windows")
+	}
+	root := t.TempDir()
+	src := filepath.Join(root, "src.bin")
+	dst := filepath.Join(root, "dst.bin")
+	require.NoError(t, os.WriteFile(src, []byte("x"), 0o600))
+	require.NoError(t, copyFile(src, dst))
+	info, err := os.Stat(dst)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestBuild_StagingDirCreationFails(t *testing.T) {
+	// Allocate the temp dirs before overriding TMPDIR — t.TempDir would
+	// fail under the bogus value.
+	root := t.TempDir()
+	// Point TMPDIR at a path that does not exist so os.MkdirTemp fails.
+	t.Setenv("TMPDIR", filepath.Join(root, "nope"))
+	b := NewCustomBuilder(map[string]RecipeSpec{
+		"echo": recipeCmd("echo hi"),
+	})
+	err := b.Build(context.Background(), Target{
+		Recipe:  "echo",
+		Root:    root,
+		Outputs: []string{"out.txt"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating staging dir")
+}
+
+func TestCommitOutputs_StatNonNotExistError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ENOTDIR semantics differ on Windows")
+	}
+	root := t.TempDir()
+	// A stage path that descends through a regular file makes os.Stat
+	// fail with ENOTDIR — a non-ErrNotExist error.
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
+	stage := filepath.Join(blocker, "out0")
+
+	err := commitOutputs(root, []string{"out.txt"}, []string{stage})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "staging output")
+}
+
 func TestSubstituteParams_PrefixBeforePlaceholder(t *testing.T) {
 	// A token with literal prefix text before a {name} placeholder exercises
 	// the WriteByte branch that copies non-'{' characters one at a time.

@@ -185,7 +185,9 @@ func isGlob(p string) bool {
 func expandArgv(
 	tokens []string, params map[string]string, inputs, outputs []string,
 ) []string {
-	argv := make([]string, 0, len(tokens))
+	// {inputs}/{outputs} expand to one argv per entry, so size for the
+	// worst case up front.
+	argv := make([]string, 0, len(tokens)+len(inputs)+len(outputs))
 	for _, tok := range tokens {
 		switch tok {
 		case "{inputs}":
@@ -296,8 +298,14 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()                                                        //nolint:errcheck // read-only file
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644) //nolint:gosec // artifact perms
+	defer in.Close() //nolint:errcheck // read-only file
+	// Mirror the staged file's permissions so the copy fallback matches
+	// what os.Rename would have preserved.
+	mode := os.FileMode(0o644)
+	if info, err := in.Stat(); err == nil {
+		mode = info.Mode().Perm()
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode) //nolint:gosec // mode mirrors the staged file
 	if err != nil {
 		return err
 	}
