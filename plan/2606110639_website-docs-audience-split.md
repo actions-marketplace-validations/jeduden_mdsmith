@@ -1,7 +1,7 @@
 ---
 id: 2606110639
 title: Audience split for website-published docs
-status: 🔳
+status: ✅
 summary: >-
   Remove maintainer- and agent-facing content from every
   website-published doc page and rehome it in repo-only
@@ -62,13 +62,13 @@ or a plan reference is replaced.
 
 ## Acceptance Criteria
 
-- [ ] No published page references a plan file, a plan
+- [x] No published page references a plan file, a plan
   number, or [PLAN.md](../PLAN.md) outside fenced example
   content.
-- [ ] Maintainer guidance found on published pages now
+- [x] Maintainer guidance found on published pages now
   lives under
   [docs/development](../docs/development/index.md).
-- [ ] `mdsmith check .` passes.
+- [x] `mdsmith check .` passes.
 
 [ea]: ../docs/background/concepts/engine-api.md
 [frck]: ../docs/background/concepts/flavor-rule-convention-kind.md
