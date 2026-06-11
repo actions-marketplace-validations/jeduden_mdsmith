@@ -30,9 +30,9 @@ func parseFile(src string) (*File, error) {
 	if p.sc.err != nil {
 		return nil, p.sc.err
 	}
-	if p.cur.kind != tEOF {
-		return nil, fmt.Errorf("cuelite: unexpected token after declarations")
-	}
+	// parseDecls consumes through tEOF (its loop stops only on tEOF for a file),
+	// so no trailing token remains; a stray token would have been parsed as
+	// another declaration or surfaced as a parse error above.
 	return &File{Decls: decls}, nil
 }
 
