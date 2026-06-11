@@ -170,9 +170,19 @@ Sleep 50ms
 Set TypingSpeed 0.005
 Show
 
-Type "# A <?build?> directive runs its recipe on fix"
+Type "# <?build?> directive: recipe is a user-defined shell script"
 Enter
 Sleep 100ms
+Type "cat scripts/render.sh"
+Sleep 100ms
+Enter
+Sleep 300ms
+
+Type "cat .mdsmith.yml"
+Sleep 100ms
+Enter
+Sleep 300ms
+
 Type "mdsmith fix page.md"
 Sleep 100ms
 Enter

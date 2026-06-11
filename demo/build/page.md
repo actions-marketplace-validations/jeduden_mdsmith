@@ -1,10 +1,10 @@
 # Build directive demo
 
-The `copy` recipe copies `source.txt` to `artifact.txt` when you run
-`mdsmith fix`.
+The `render` recipe is a user-defined shell script. `mdsmith fix`
+runs it and keeps `artifact.txt` in sync with `source.txt`.
 
 <?build
-recipe: copy
+recipe: render
 inputs:
   - source.txt
 outputs:

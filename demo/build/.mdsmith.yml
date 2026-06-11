@@ -1,4 +1,4 @@
 build:
   recipes:
-    copy:
-      command: cp {inputs} {outputs}
+    render:
+      command: scripts/render.sh {inputs} {outputs}
