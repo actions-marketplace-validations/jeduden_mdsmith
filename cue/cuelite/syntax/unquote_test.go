@@ -57,11 +57,11 @@ func TestUnquote_escapeErrors(t *testing.T) {
 // makes `\n` literal text, while `\#n` is the escape.
 func TestUnquote_rawStrings(t *testing.T) {
 	cases := map[string]string{
-		`#"a\nb"#`:       `a\nb`,    // backslash-n is literal in a raw string
-		`#"a\#nb"#`:      "a\nb",    // \#n is the newline escape at hash level 1
-		`##"a\##tb"##`:   "a\tb",    // hash level 2
-		`#"\#u0041"#`:    "A",       // raw unicode escape
-		`#"plain"#`:      "plain",   // no escapes
+		`#"a\nb"#`:     `a\nb`,  // backslash-n is literal in a raw string
+		`#"a\#nb"#`:    "a\nb",  // \#n is the newline escape at hash level 1
+		`##"a\##tb"##`: "a\tb",  // hash level 2
+		`#"\#u0041"#`:  "A",     // raw unicode escape
+		`#"plain"#`:    "plain", // no escapes
 	}
 	for raw, want := range cases {
 		got, err := Unquote(raw)

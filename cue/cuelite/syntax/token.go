@@ -18,67 +18,60 @@ const (
 	// `el.Constraint == OPTION` is false for a required field.
 	NoToken Token = iota
 
-	// Literal-kind tokens (BasicLit.Kind).
-	STRING       // a quoted string literal
-	INT          // an integer literal
-	FLOAT        // a floating-point literal
-	TRUE         // the bool literal true
-	FALSE        // the bool literal false
-	NULL         // the null literal
-	kInterpFrag  // an Interpolation fragment whose Value is already decoded
+	// STRING is a quoted string literal (BasicLit.Kind).
+	STRING
+	// INT is an integer literal (BasicLit.Kind).
+	INT
+	// FLOAT is a floating-point literal (BasicLit.Kind).
+	FLOAT
+	// TRUE is the bool literal true (BasicLit.Kind).
+	TRUE
+	// FALSE is the bool literal false (BasicLit.Kind).
+	FALSE
+	// NULL is the null literal (BasicLit.Kind).
+	NULL
+	kInterpFrag // an Interpolation fragment whose Value is already decoded
 
-	// Structural tokens.
-	OPTION // the `?` optional-field marker (Field.Constraint)
+	// OPTION is the `?` optional-field marker (Field.Constraint).
+	OPTION
 
-	// Binary / unary operators.
-	OR   // |  disjunction
-	AND  // &  meet
-	ADD  // +  addition / unary plus
-	SUB  // -  subtraction / unary minus
-	MUL  // *  multiplication / disjunction default mark
-	NOT  // !  boolean negation
-	EQL  // == equal
-	NEQ  // != not equal
-	LSS  // <  less
-	GTR  // >  greater
-	LEQ  // <= less or equal
-	GEQ  // >= greater or equal
-	MAT  // =~ regex match
-	NMAT // !~ regex non-match
+	// OR is the `|` disjunction binary operator.
+	OR
+	// AND is the `&` meet binary operator.
+	AND
+	// ADD is the `+` addition / unary plus operator.
+	ADD
+	// SUB is the `-` subtraction / unary minus operator.
+	SUB
+	// MUL is the `*` multiplication / disjunction default mark.
+	MUL
+	// NOT is the `!` boolean negation operator.
+	NOT
+	// EQL is the `==` equal comparison operator.
+	EQL
+	// NEQ is the `!=` not-equal comparison operator.
+	NEQ
+	// LSS is the `<` less comparison operator.
+	LSS
+	// GTR is the `>` greater comparison operator.
+	GTR
+	// LEQ is the `<=` less-or-equal comparison operator.
+	LEQ
+	// GEQ is the `>=` greater-or-equal comparison operator.
+	GEQ
+	// MAT is the `=~` regex match operator.
+	MAT
+	// NMAT is the `!~` regex non-match operator.
+	NMAT
 )
 
-// String renders a token as its source spelling, for error messages that
-// quote the operator. A non-operator token renders as a name.
+// String renders a token as its source spelling, for error messages that quote
+// the operator. A non-operator token renders as a name.
 func (t Token) String() string {
+	if s, ok := operatorString(t); ok {
+		return s
+	}
 	switch t {
-	case OR:
-		return "|"
-	case AND:
-		return "&"
-	case ADD:
-		return "+"
-	case SUB:
-		return "-"
-	case MUL:
-		return "*"
-	case NOT:
-		return "!"
-	case EQL:
-		return "=="
-	case NEQ:
-		return "!="
-	case LSS:
-		return "<"
-	case GTR:
-		return ">"
-	case LEQ:
-		return "<="
-	case GEQ:
-		return ">="
-	case MAT:
-		return "=~"
-	case NMAT:
-		return "!~"
 	case OPTION:
 		return "?"
 	case STRING:
@@ -96,4 +89,41 @@ func (t Token) String() string {
 	default:
 		return fmt.Sprintf("token(%d)", int(t))
 	}
+}
+
+// operatorString returns the source spelling of a binary or unary operator
+// token and ok=true. It returns "", false for tokens that are not operators
+// (literals, OPTION, NoToken, kInterpFrag).
+func operatorString(t Token) (string, bool) {
+	switch t {
+	case OR:
+		return "|", true
+	case AND:
+		return "&", true
+	case ADD:
+		return "+", true
+	case SUB:
+		return "-", true
+	case MUL:
+		return "*", true
+	case NOT:
+		return "!", true
+	case EQL:
+		return "==", true
+	case NEQ:
+		return "!=", true
+	case LSS:
+		return "<", true
+	case GTR:
+		return ">", true
+	case LEQ:
+		return "<=", true
+	case GEQ:
+		return ">=", true
+	case MAT:
+		return "=~", true
+	case NMAT:
+		return "!~", true
+	}
+	return "", false
 }

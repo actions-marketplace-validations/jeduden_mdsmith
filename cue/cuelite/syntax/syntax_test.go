@@ -102,19 +102,19 @@ func TestParseFile_comprehensions(t *testing.T) {
 // TestParseFile_errors drives the parser/scanner error branches.
 func TestParseFile_errors(t *testing.T) {
 	bad := []string{
-		`x: int &`,             // dangling binary operand
-		`x: (int`,              // unterminated paren
-		`x: [1, 2`,             // unterminated list
-		`{a: int`,              // unterminated struct
-		`x: a.`,                // selector with no member
-		`x: a[1`,               // unterminated index
-		`x: strings.Join(a`,    // unterminated call
-		`x: @attr`,             // unexpected character (attribute)
-		`x: /* c */ 1`,         // block comment is unexpected
-		`x: "unterminated`,     // unterminated string
-		`for`,                  // comprehension with no clause body
-		`x: [for v xs {v}]`,    // for clause missing 'in'
-		`x: [for {v}]`,         // for clause missing variable
+		`x: int &`,              // dangling binary operand
+		`x: (int`,               // unterminated paren
+		`x: [1, 2`,              // unterminated list
+		`{a: int`,               // unterminated struct
+		`x: a.`,                 // selector with no member
+		`x: a[1`,                // unterminated index
+		`x: strings.Join(a`,     // unterminated call
+		`x: @attr`,              // unexpected character (attribute)
+		`x: /* c */ 1`,          // block comment is unexpected
+		`x: "unterminated`,      // unterminated string
+		`for`,                   // comprehension with no clause body
+		`x: [for v xs {v}]`,     // for clause missing 'in'
+		`x: [for {v}]`,          // for clause missing variable
 		`x: [for v, in xs {v}]`, // for clause missing value variable
 		`x: =`,                  // bare assign in value position
 	}
@@ -154,10 +154,10 @@ func TestScanner_comments(t *testing.T) {
 // TestUnquote_dialects decodes the three string dialects and a bytes literal.
 func TestUnquote_dialects(t *testing.T) {
 	cases := map[string]string{
-		`"abc"`:               "abc",
-		`"a\nb"`:              "a\nb",
-		`"aAb"`:          "aAb",
-		`#"raw\nstring"#`:     `raw\nstring`,
+		`"abc"`:                      "abc",
+		`"a\nb"`:                     "a\nb",
+		`"aAb"`:                      "aAb",
+		`#"raw\nstring"#`:            `raw\nstring`,
 		"\"\"\"\n  a\n  b\n  \"\"\"": "a\nb",
 	}
 	for raw, want := range cases {
@@ -174,12 +174,12 @@ func TestUnquote_dialects(t *testing.T) {
 // TestUnquote_errors drives Unquote's error branches.
 func TestUnquote_errors(t *testing.T) {
 	for _, raw := range []string{
-		``,        // empty
-		`#`,       // hashes with no quote
-		`xyz`,     // not a quote
-		`"a`,      // unterminated
-		`"\x41"`,  // Go-only hex escape CUE rejects
-		`"\z"`,    // unknown escape
+		``,         // empty
+		`#`,        // hashes with no quote
+		`xyz`,      // not a quote
+		`"a`,       // unterminated
+		`"\x41"`,   // Go-only hex escape CUE rejects
+		`"\z"`,     // unknown escape
 		"\"a\nb\"", // raw newline in a single-line string
 	} {
 		_, err := Unquote(raw)
@@ -220,9 +220,9 @@ func TestInterpolation_dialects(t *testing.T) {
 // TestInterpolation_errors drives malformed interpolations.
 func TestInterpolation_errors(t *testing.T) {
 	for _, src := range []string{
-		`x: "a\(v"`,    // unterminated interpolation expression
-		`x: "a\(v)b`,   // unterminated string after interpolation
-		`x: "a\(+)b"`,  // bad embedded expression
+		`x: "a\(v"`,   // unterminated interpolation expression
+		`x: "a\(v)b`,  // unterminated string after interpolation
+		`x: "a\(+)b"`, // bad embedded expression
 	} {
 		_, err := parse(t, src)
 		assert.Error(t, err, "src %q must fail", src)
