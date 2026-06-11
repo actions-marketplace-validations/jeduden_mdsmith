@@ -75,18 +75,20 @@ func TestWASMArtifactSizeBudget(t *testing.T) {
 // TinyGo WASM size budgets. The production build uses -no-debug, which
 // strips DWARF info and can halve the raw output vs. a debug build.
 //
-// Raw budget: guards tinygo heap and segment fit (plan 215/247 ceiling).
+// Raw budget: the plan-215/247 ceiling of 8 MiB. This is not a tight
+// regression guard (baseline is ~3.5 MiB); it is the hard design limit.
 // Gzip budget: guards mobile transfer cost — browsers and CDNs deliver
-// the .wasm file compressed. Measured baseline with -no-debug: ~3.5 MiB
-// raw / ~1.6 MiB gzipped. Ceilings leave 10 %+ headroom for
-// toolchain-version drift.
+// the .wasm file compressed. Measured baseline with -no-debug at
+// BestSpeed: ~3.5 MiB raw / ~1.6 MiB gzipped. Ceiling leaves ~88%
+// headroom for toolchain-version drift.
 const (
-	maxTinyGoWASMRawBytes  = 8 * 1024 * 1024 // 8 MiB raw (plan-215/247 ceiling)
+	maxTinyGoWASMRawBytes  = 8 * 1024 * 1024 // 8 MiB raw (plan-215/247 hard limit)
 	maxTinyGoWASMGzipBytes = 3 * 1024 * 1024 // 3 MiB gzip (mobile transfer guard)
 )
 
-// tinygoFlags are the build flags used by both the production build
-// script and this test, so they cannot drift apart.
+// tinygoFlags must be kept in sync with the `tinygo` case in build.sh.
+// Use the 3-index form when appending to prevent mutation of the shared
+// backing array if the slice ever gains spare capacity.
 var tinygoFlags = []string{"build", "-target", "wasm", "-no-debug"}
 
 // TestTinyGoWASMArtifactSizeBudget builds the engine with tinygo using
@@ -100,7 +102,9 @@ func TestTinyGoWASMArtifactSizeBudget(t *testing.T) {
 		t.Skip("tinygo not installed; skipping tinygo size budget check")
 	}
 	out := filepath.Join(t.TempDir(), "mdsmith-tinygo.wasm")
-	args := append(tinygoFlags, "-o", out, ".")
+	// 3-index slice ensures append always reallocates, never writes into
+	// the tinygoFlags backing array even if spare capacity exists.
+	args := append(tinygoFlags[:len(tinygoFlags):len(tinygoFlags)], "-o", out, ".")
 	cmd := exec.Command("tinygo", args...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("tinygo wasm build failed: %v\n%s", err, b)
@@ -111,8 +115,13 @@ func TestTinyGoWASMArtifactSizeBudget(t *testing.T) {
 	}
 	raw := len(data)
 
+	// Use BestSpeed to model CDN-delivered transfer cost; the ceiling was
+	// calibrated at this level.
 	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	if err != nil {
+		t.Fatalf("gzip.NewWriterLevel: %v", err)
+	}
 	if _, err := zw.Write(data); err != nil {
 		t.Fatalf("gzip write: %v", err)
 	}
