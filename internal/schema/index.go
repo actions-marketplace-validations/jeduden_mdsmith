@@ -228,7 +228,7 @@ func writeAndRename(tmp *os.File, tmpPath, target string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpPath, 0o644); err != nil {
+	if err := chmodFile(tmpPath, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, target)
@@ -269,7 +269,7 @@ func resolveDir(dir string) string {
 	if abs == "" {
 		abs = filepath.Clean(dir)
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+	if resolved, err := evalSymlinks(abs); err == nil {
 		return resolved
 	}
 	return filepath.Clean(abs)

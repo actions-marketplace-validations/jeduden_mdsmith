@@ -2413,7 +2413,7 @@ func isSchemaFile(docPath, schemaPath string) bool {
 	docInfo, errDoc := os.Stat(docPath)
 	schemaInfo, errSchema := os.Stat(schemaPath)
 	if errDoc == nil && errSchema == nil {
-		return os.SameFile(docInfo, schemaInfo)
+		return sameFile(docInfo, schemaInfo)
 	}
 
 	docAbs, errDocAbs := filepath.Abs(docPath)
