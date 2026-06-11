@@ -160,7 +160,7 @@ func (c *Cache) Save(root string) error {
 // can inject a failing io.WriteCloser without needing file-system tricks.
 func writeTempFile(wc io.WriteCloser, data []byte) error {
 	if _, err := wc.Write(data); err != nil {
-		wc.Close()
+		_ = wc.Close()
 		return fmt.Errorf("writing temp cache file: %w", err)
 	}
 	if err := wc.Close(); err != nil {
