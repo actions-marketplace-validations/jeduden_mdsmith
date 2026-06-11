@@ -1,7 +1,7 @@
 ---
 id: 240
 title: "cuelite phase 4 — drop cuelang.org and enable tinygo"
-status: "🔳"
+status: "✅"
 model: opus
 summary: >-
   With every surface flipped, delete cue/cuelite's CUE
@@ -121,9 +121,9 @@ above the `sonnet` band.
       capability set as the native session.
 - [x] All tests pass: `go test ./...` (and `-race` clean on the
       affected packages).
-- [🔳] `go tool golangci-lint run` reports no issues — the tools/go.mod
+- [x] `go tool golangci-lint run` reports no issues — the tools/go.mod
       golangci-lint needs Go ≥ 1.25.8; the dev container has 1.25.0, so
-      this is CI-verified.
+      the CI `lint` job is the verifier, green on main.
 
 ## Implementation Notes
 

@@ -1,7 +1,7 @@
 ---
 id: 218
 title: In-house CUE-subset engine for WASM size and tinygo
-status: "🔳"
+status: "✅"
 model: opus
 summary: >-
   Replace the cuelang.org/go dependency with a small, pure-Go,
@@ -297,8 +297,8 @@ Split into per-phase plans, run in order, each keeping
       the `syntax` package's parser/scanner error branches are
       covered (`closeout_coverage_test.go`).
 - [x] All tests pass: `go test ./...`
-- [🔳] `go tool golangci-lint run` reports no issues — CI-verified
-      (needs Go ≥ 1.25.8; the dev container has 1.25.0).
+- [x] `go tool golangci-lint run` reports no issues — verified
+      by the green CI `lint` job (the dev container's Go cannot).
 
 ## Non-Goals
 

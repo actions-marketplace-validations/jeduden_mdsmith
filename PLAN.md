@@ -140,7 +140,7 @@ footer: |
 | 215        | ✅     | opus   | [mdsmith public engine API and WASM bindings](plan/215_engine-api-wasm.md)                                                              |
 | 216        | ✅     | opus   | [Per-document parse cache for the LSP, keyed by version](plan/216_lsp-parse-cache.md)                                                   |
 | 217        | ✅     | opus   | [Obsidian plugin (WASM runtime)](plan/217_obsidian-plugin.md)                                                                           |
-| 218        | 🔳     | opus   | [In-house CUE-subset engine for WASM size and tinygo](plan/218_wasm-size-reduction.md)                                                  |
+| 218        | ✅     | opus   | [In-house CUE-subset engine for WASM size and tinygo](plan/218_wasm-size-reduction.md)                                                  |
 | 219        | ✅     | opus   | [Route cmd/mdsmith and the LSP through pkg/mdsmith.Session](plan/219_session-cli-lsp-migration.md)                                      |
 | 220        | ✅     | opus   | [Harden the git-index writers against a transient index.lock](plan/220_git-index-lock-retry.md)                                         |
 | 221        | ✅     | opus   | [Ship mdsmith as a self-hosted Flatpak bundle](plan/221_flatpak-bundle-distribution.md)                                                 |
@@ -158,7 +158,7 @@ footer: |
 | 237        | ✅     | sonnet | [cuelite phase 1 — surface D (placeholder paths)](plan/237_cuelite-surface-d.md)                                                        |
 | 238        | ✅     | opus   | [cuelite phase 2 — surfaces A + B (schema, query)](plan/238_cuelite-surfaces-ab.md)                                                     |
 | 239        | ✅     | opus   | [cuelite phase 3 — surface C (row-expr evaluator)](plan/239_cuelite-surface-c.md)                                                       |
-| 240        | 🔳     | opus   | [cuelite phase 4 — drop cuelang.org and enable tinygo](plan/240_cuelite-drop-cue.md)                                                    |
+| 240        | ✅     | opus   | [cuelite phase 4 — drop cuelang.org and enable tinygo](plan/240_cuelite-drop-cue.md)                                                    |
 | 241        | ✅     | opus   | [Schema-per-file config under `.mdsmith/schemas/`](plan/241_schema-files.md)                                                            |
 | 242        | ✅     | opus   | [proto.md schemas declare content entries via `<?content?>`](plan/242_proto-content-entries.md)                                         |
 | 243        | ✅     | sonnet | [`mdsmith extract` projects the document H1 as `title`](plan/243_extract-h1-title.md)                                                   |
