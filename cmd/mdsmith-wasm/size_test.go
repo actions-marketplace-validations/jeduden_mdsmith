@@ -72,24 +72,36 @@ func TestWASMArtifactSizeBudget(t *testing.T) {
 	}
 }
 
-// maxTinyGoWASMBytes is the plan-215/247 tinygo budget. The os.Chmod,
-// os.SameFile, and os.Symlink/filepath.EvalSymlinks calls that blocked
-// the tinygo build are now behind build-tagged seams (plan 247), so
-// the 8 MiB budget is a verified ceiling, enforced by
-// TestTinyGoWASMArtifactSizeBudget below.
-const maxTinyGoWASMBytes = 8 * 1024 * 1024 // 8 MiB
+// TinyGo WASM size budgets. The production build uses -no-debug, which
+// strips DWARF info and can halve the raw output vs. a debug build.
+//
+// Raw budget: guards tinygo heap and segment fit (plan 215/247 ceiling).
+// Gzip budget: guards mobile transfer cost — browsers and CDNs deliver
+// the .wasm file compressed. Measured baseline with -no-debug: ~3.5 MiB
+// raw / ~1.6 MiB gzipped. Ceilings leave 10 %+ headroom for
+// toolchain-version drift.
+const (
+	maxTinyGoWASMRawBytes  = 8 * 1024 * 1024 // 8 MiB raw (plan-215/247 ceiling)
+	maxTinyGoWASMGzipBytes = 3 * 1024 * 1024 // 3 MiB gzip (mobile transfer guard)
+)
 
-// TestTinyGoWASMArtifactSizeBudget builds the engine with tinygo and
-// asserts the artifact stays within the plan-215/247 budget of 8 MiB.
-// It skips when tinygo is not installed (the offline dev container and
-// the standard-Go test job); the dedicated tinygo-wasm CI job always
-// has tinygo available and will not skip.
+// tinygoFlags are the build flags used by both the production build
+// script and this test, so they cannot drift apart.
+var tinygoFlags = []string{"build", "-target", "wasm", "-no-debug"}
+
+// TestTinyGoWASMArtifactSizeBudget builds the engine with tinygo using
+// the same -no-debug flag as the production build and asserts the
+// artifact stays within the plan-215/247 raw budget and the gzip
+// transfer budget. It skips when tinygo is not installed (the offline
+// dev container and the standard-Go test job); the dedicated tinygo-wasm
+// CI job always has tinygo available and will not skip.
 func TestTinyGoWASMArtifactSizeBudget(t *testing.T) {
 	if _, err := exec.LookPath("tinygo"); err != nil {
 		t.Skip("tinygo not installed; skipping tinygo size budget check")
 	}
 	out := filepath.Join(t.TempDir(), "mdsmith-tinygo.wasm")
-	cmd := exec.Command("tinygo", "build", "-target", "wasm", "-o", out, ".")
+	args := append(tinygoFlags, "-o", out, ".")
+	cmd := exec.Command("tinygo", args...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("tinygo wasm build failed: %v\n%s", err, b)
 	}
@@ -97,10 +109,28 @@ func TestTinyGoWASMArtifactSizeBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading tinygo wasm artifact: %v", err)
 	}
+	raw := len(data)
+
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(data); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	gz := buf.Len()
+
 	const mib = 1024 * 1024
-	t.Logf("tinygo wasm artifact: raw=%d bytes (%.1f MiB)", len(data), float64(len(data))/mib)
-	if len(data) > maxTinyGoWASMBytes {
+	t.Logf("tinygo wasm artifact: raw=%d bytes (%.1f MiB), gzip=%d bytes (%.1f MiB)",
+		raw, float64(raw)/mib, gz, float64(gz)/mib)
+
+	if raw > maxTinyGoWASMRawBytes {
 		t.Errorf("tinygo wasm raw size %d bytes exceeds budget %d (%.1f MiB > %.1f MiB)",
-			len(data), maxTinyGoWASMBytes, float64(len(data))/mib, float64(maxTinyGoWASMBytes)/mib)
+			raw, maxTinyGoWASMRawBytes, float64(raw)/mib, float64(maxTinyGoWASMRawBytes)/mib)
+	}
+	if gz > maxTinyGoWASMGzipBytes {
+		t.Errorf("tinygo wasm gzip size %d bytes exceeds budget %d (%.1f MiB > %.1f MiB)",
+			gz, maxTinyGoWASMGzipBytes, float64(gz)/mib, float64(maxTinyGoWASMGzipBytes)/mib)
 	}
 }
