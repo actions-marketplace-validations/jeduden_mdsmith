@@ -559,7 +559,6 @@ jobs:
   # drops continue-on-error so the 8 MiB budget gates.
   tinygo-wasm:
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
       contents: read
     steps:
@@ -579,7 +578,12 @@ jobs:
           echo "${TINYGO_SHA256}  /tmp/tinygo.deb" | sha256sum -c -
           sudo dpkg -i /tmp/tinygo.deb
           tinygo version
+      # Step-level continue-on-error: the build fails today on the
+      # os.* calls plan 247 build-tags away. The errors stay visible in
+      # this step's log while the JOB concludes green, so the known gap
+      # does not block the merge queue.
       - name: Build the engine with tinygo (informational)
+        continue-on-error: true
         run: tinygo build -target wasm -o /tmp/mdsmith-tiny.wasm ./cmd/mdsmith-wasm
       - name: tinygo size budget (skips on the known build failure)
         run: go test -run TestTinyGoWASMArtifactSizeBudget ./cmd/mdsmith-wasm/...
