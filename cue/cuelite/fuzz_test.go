@@ -140,3 +140,56 @@ func extraSchemaFuzzSeeds() []struct{ schema, data string } {
 		{`{a:`, `{"a"`},
 	}
 }
+
+// FuzzPathSmoke parses a path expression through ParsePath and requires the
+// parser never to panic or hang — the robustness regression for surface D
+// (path.go + unquote.go), which lost its fuzzer when the differential harness
+// was deleted (plan 240). The 12 historical minimized crashers (recovered from
+// the deleted internal/cuelitetest/testdata/fuzz/FuzzParsePath corpus) seed the
+// mutator so a regression in a known class surfaces immediately.
+//
+// Run as a real fuzzer locally with:
+//
+//	go test -run=- -fuzz=FuzzPathSmoke -fuzztime=30s ./cue/cuelite/
+func FuzzPathSmoke(f *testing.F) {
+	for _, s := range pathSmokeSeeds() {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, expr string) {
+		// ParsePath must return a Path or an error, never panic, on any input.
+		// The parsed segments must also feed ResolvePath without panicking.
+		p, err := ParsePath(expr)
+		if err != nil {
+			return
+		}
+		_ = p.Segments()
+	})
+}
+
+// pathSmokeSeeds returns the historical minimized ParsePath crashers
+// (recovered from git history: the deleted FuzzParsePath testdata corpus) plus
+// the raw-byte, surrogate, raw-string, and multiline boundary seeds the old
+// differential fuzzer carried. They steer FuzzPathSmoke toward the quoting,
+// escape, BOM, and CR-near-close edges that produced panics before.
+func pathSmokeSeeds() []string {
+	return []string{
+		// The 12 minimized crashers from the deleted FuzzParsePath corpus.
+		"\"\xfc\"",
+		"A//\x00",
+		"#\"\"\"\n0\n\"\"\"\r#\"\"\"#",
+		"\"\\U80000000\"",
+		"##\"\"\"##",
+		"#\"\"\"\n\\\r#\n0\n\"\"\"#",
+		"A000000000000000//",
+		"A//\xe7",
+		"#\"\r\"#",
+		"#\"\"\"\n\"\"\"\r#\n\"\"\"#",
+		"A\n",
+		// Boundary seeds: quoting, surrogate halves, raw-string escapes, BOM,
+		// CR-near-close, and the after-dot rejection.
+		"\"a\\u0041\"", "\"\\U0001F600\"", "\"\\uD83D\\uDE00\"", "\"\\uD83D\"",
+		"a[\"b\"]", "a[0]", "#\"b\"#", "##\"b\"##", "a.#\"b\"#",
+		`#"\#"#"#`, "\ufeffa", "a\ufeffb", "$.$", "a.if.for",
+		"\"\"\"\na\n\"\"\"", "#\"\"\"\na\n\"\"\"#", "\"\"\"\n\"\"\r\"\n\"\"\"",
+	}
+}
