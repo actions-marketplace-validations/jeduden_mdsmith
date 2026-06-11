@@ -27,21 +27,21 @@ const (
 	tIdent
 	tInt
 	tFloat
-	tString        // a complete string literal (no interpolation)
-	tInterpStart   // a string literal opening an interpolation: text up to the first \(
-	tColon         // :
-	tComma         // ,
-	tQuestion      // ?
-	tLParen        // (
-	tRParen        // )
-	tLBrace        // {
-	tRBrace        // }
-	tLBrack        // [
-	tRBrack        // ]
-	tDot           // .
-	tEllipsis      // ...
-	tAssign        // = (only in a let clause, which the subset rejects)
-	tOp            // an operator (tok.op carries the Token)
+	tString      // a complete string literal (no interpolation)
+	tInterpStart // a string literal opening an interpolation: text up to the first \(
+	tColon       // :
+	tComma       // ,
+	tQuestion    // ?
+	tLParen      // (
+	tRParen      // )
+	tLBrace      // {
+	tRBrace      // }
+	tLBrack      // [
+	tRBrack      // ]
+	tDot         // .
+	tEllipsis    // ...
+	tAssign      // = (only in a let clause, which the subset rejects)
+	tOp          // an operator (tok.op carries the Token)
 )
 
 // tok is one lexed token. text carries the raw source slice for an ident,
@@ -58,9 +58,9 @@ type tok struct {
 // tracks open string-interpolation dialects so a `)` closing an interpolation
 // expression resumes the enclosing string fragment.
 type scanner struct {
-	src   string
-	pos   int
-	err   error
+	src string
+	pos int
+	err error
 	// interpStack holds the quote dialect of each open interpolation, innermost
 	// last. A non-empty stack means the next `)` at depth 0 resumes a string
 	// fragment rather than closing a paren group.
@@ -168,48 +168,72 @@ func (s *scanner) scanIdent() tok {
 // an `e`/`E` exponent, makes it a float.
 func (s *scanner) scanNumber() tok {
 	start := s.pos
-	isFloat := false
-	// A 0x/0o/0b prefix is always an integer; scan hex/base digits straight.
+	// A 0x/0o/0b prefix is always an integer; delegate to the base-prefix path.
 	if s.src[s.pos] == '0' && s.pos+1 < len(s.src) {
-		switch s.src[s.pos+1] {
-		case 'x', 'X', 'o', 'O', 'b', 'B':
-			s.pos += 2
-			for s.pos < len(s.src) && (isHexDigit(s.src[s.pos]) || s.src[s.pos] == '_') {
-				s.pos++
-			}
-			return tok{kind: tInt, text: s.src[start:s.pos]}
+		if t, ok := s.scanBasePrefixInt(start); ok {
+			return t
 		}
 	}
 	for s.pos < len(s.src) && (isDigitByte(s.src[s.pos]) || s.src[s.pos] == '_') {
 		s.pos++
 	}
-	// A fraction `.digits` (a lone trailing `.` is the selector dot, not a
-	// fraction, so require a digit after it).
-	if s.pos+1 < len(s.src) && s.src[s.pos] == '.' && isDigitByte(s.src[s.pos+1]) {
-		isFloat = true
-		s.pos++
-		for s.pos < len(s.src) && (isDigitByte(s.src[s.pos]) || s.src[s.pos] == '_') {
-			s.pos++
-		}
-	}
-	// An exponent `e[+-]digits`.
-	if s.pos < len(s.src) && (s.src[s.pos] == 'e' || s.src[s.pos] == 'E') {
-		j := s.pos + 1
-		if j < len(s.src) && (s.src[j] == '+' || s.src[j] == '-') {
-			j++
-		}
-		if j < len(s.src) && isDigitByte(s.src[j]) {
-			isFloat = true
-			s.pos = j
-			for s.pos < len(s.src) && (isDigitByte(s.src[s.pos]) || s.src[s.pos] == '_') {
-				s.pos++
-			}
-		}
-	}
+	isFloat := s.scanFraction() || s.scanExponent()
 	if isFloat {
 		return tok{kind: tFloat, text: s.src[start:s.pos]}
 	}
 	return tok{kind: tInt, text: s.src[start:s.pos]}
+}
+
+// scanBasePrefixInt scans a 0x/0o/0b-prefixed integer literal when the current
+// position starts with `0` followed by a base letter. It advances past the
+// prefix and the base digits (hex digits for all three bases) and returns the
+// tInt token and ok=true. It returns ok=false when the byte after `0` is not a
+// recognised base letter, leaving s.pos unchanged.
+func (s *scanner) scanBasePrefixInt(start int) (tok, bool) {
+	switch s.src[s.pos+1] {
+	case 'x', 'X', 'o', 'O', 'b', 'B':
+		s.pos += 2
+		for s.pos < len(s.src) && (isHexDigit(s.src[s.pos]) || s.src[s.pos] == '_') {
+			s.pos++
+		}
+		return tok{kind: tInt, text: s.src[start:s.pos]}, true
+	}
+	return tok{}, false
+}
+
+// scanFraction advances past a `.digits` fractional part when one is present
+// (a lone trailing `.` is the selector dot, not a fraction, so a digit after
+// the `.` is required). It returns true when a fraction was consumed.
+func (s *scanner) scanFraction() bool {
+	if s.pos+1 >= len(s.src) || s.src[s.pos] != '.' || !isDigitByte(s.src[s.pos+1]) {
+		return false
+	}
+	s.pos++ // consume '.'
+	for s.pos < len(s.src) && (isDigitByte(s.src[s.pos]) || s.src[s.pos] == '_') {
+		s.pos++
+	}
+	return true
+}
+
+// scanExponent advances past an `e[+-]digits` exponent part when one is
+// present (the `e`/`E` must be followed by an optional sign and at least one
+// digit). It returns true when an exponent was consumed.
+func (s *scanner) scanExponent() bool {
+	if s.pos >= len(s.src) || (s.src[s.pos] != 'e' && s.src[s.pos] != 'E') {
+		return false
+	}
+	j := s.pos + 1
+	if j < len(s.src) && (s.src[j] == '+' || s.src[j] == '-') {
+		j++
+	}
+	if j >= len(s.src) || !isDigitByte(s.src[j]) {
+		return false
+	}
+	s.pos = j
+	for s.pos < len(s.src) && (isDigitByte(s.src[s.pos]) || s.src[s.pos] == '_') {
+		s.pos++
+	}
+	return true
 }
 
 // isDigitByte reports whether c is an ASCII decimal digit.
@@ -225,81 +249,116 @@ func isHexDigit(c byte) bool {
 // fails loudly rather than mis-tokenizing.
 func (s *scanner) scanPunct() tok {
 	c := s.src[s.pos]
-	two := ""
+	// Try a two-character operator first (==, !=, <=, >=, =~, !~).
 	if s.pos+1 < len(s.src) {
-		two = s.src[s.pos : s.pos+2]
+		if t, ok := scanTwoCharOp(s.src[s.pos : s.pos+2]); ok {
+			s.pos += 2
+			return t
+		}
 	}
-	switch two {
-	case "==":
-		s.pos += 2
-		return tok{kind: tOp, op: EQL}
-	case "!=":
-		s.pos += 2
-		return tok{kind: tOp, op: NEQ}
-	case "<=":
-		s.pos += 2
-		return tok{kind: tOp, op: LEQ}
-	case ">=":
-		s.pos += 2
-		return tok{kind: tOp, op: GEQ}
-	case "=~":
-		s.pos += 2
-		return tok{kind: tOp, op: MAT}
-	case "!~":
-		s.pos += 2
-		return tok{kind: tOp, op: NMAT}
-	}
+	// `...` ellipsis must be checked before the single `.` dot.
 	if c == '.' && strings.HasPrefix(s.src[s.pos:], "...") {
 		s.pos += 3
 		return tok{kind: tEllipsis}
 	}
 	s.pos++
+	return s.scanOneCharPunct(c)
+}
+
+// scanTwoCharOp maps a two-byte string to its operator token and ok=true for
+// the six two-character CUE operators (==, !=, <=, >=, =~, !~). It returns
+// ok=false for any other two-byte string so the caller falls through to
+// single-character scanning.
+func scanTwoCharOp(two string) (tok, bool) {
+	switch two {
+	case "==":
+		return tok{kind: tOp, op: EQL}, true
+	case "!=":
+		return tok{kind: tOp, op: NEQ}, true
+	case "<=":
+		return tok{kind: tOp, op: LEQ}, true
+	case ">=":
+		return tok{kind: tOp, op: GEQ}, true
+	case "=~":
+		return tok{kind: tOp, op: MAT}, true
+	case "!~":
+		return tok{kind: tOp, op: NMAT}, true
+	}
+	return tok{}, false
+}
+
+// scanOneCharPunct maps a single ASCII byte to its punctuation or operator
+// token. It delegates to scanStructuralPunct for the delimiter set and
+// scanOperatorChar for the operator set. An unrecognised byte records a scan
+// error and returns tEOF.
+func (s *scanner) scanOneCharPunct(c byte) tok {
+	if t, ok := scanStructuralPunct(c); ok {
+		return t
+	}
+	if t, ok := scanOperatorChar(c); ok {
+		return t
+	}
+	s.fail("unexpected character %q", string(c))
+	return tok{kind: tEOF}
+}
+
+// scanStructuralPunct maps a single ASCII byte to a structural punctuation
+// token (colon, comma, question mark, delimiters, dot) and ok=true. It returns
+// ok=false for bytes that are not structural punctuation.
+func scanStructuralPunct(c byte) (tok, bool) {
 	switch c {
 	case ':':
-		return tok{kind: tColon}
+		return tok{kind: tColon}, true
 	case ',':
-		return tok{kind: tComma}
+		return tok{kind: tComma}, true
 	case '?':
-		return tok{kind: tQuestion}
+		return tok{kind: tQuestion}, true
 	case '(':
-		return tok{kind: tLParen}
+		return tok{kind: tLParen}, true
 	case ')':
-		return tok{kind: tRParen}
+		return tok{kind: tRParen}, true
 	case '{':
-		return tok{kind: tLBrace}
+		return tok{kind: tLBrace}, true
 	case '}':
-		return tok{kind: tRBrace}
+		return tok{kind: tRBrace}, true
 	case '[':
-		return tok{kind: tLBrack}
+		return tok{kind: tLBrack}, true
 	case ']':
-		return tok{kind: tRBrack}
+		return tok{kind: tRBrack}, true
 	case '.':
-		return tok{kind: tDot}
-	case '|':
-		return tok{kind: tOp, op: OR}
-	case '&':
-		return tok{kind: tOp, op: AND}
-	case '+':
-		return tok{kind: tOp, op: ADD}
-	case '-':
-		return tok{kind: tOp, op: SUB}
-	case '*':
-		return tok{kind: tOp, op: MUL}
-	case '!':
-		return tok{kind: tOp, op: NOT}
-	case '<':
-		return tok{kind: tOp, op: LSS}
-	case '>':
-		return tok{kind: tOp, op: GTR}
-	case '=':
-		// A bare `=` only appears in a `let` clause, which the subset's evaluator
-		// rejects as unsupported; tokenizing it (rather than failing the scan)
-		// lets the parser build the let clause so that rejection fires.
-		return tok{kind: tAssign}
-	default:
-		s.fail("unexpected character %q", string(c))
-		return tok{kind: tEOF}
+		return tok{kind: tDot}, true
 	}
+	return tok{}, false
+}
+
+// scanOperatorChar maps a single ASCII operator byte to its tOp token and
+// ok=true for the single-character operator set (|, &, +, -, *, !, <, >, =).
+// A bare `=` maps to tAssign (not tOp) because it only appears in a `let`
+// clause, which the evaluator rejects as unsupported; tokenizing it lets the
+// parser build the let clause so that rejection fires. It returns ok=false for
+// non-operator bytes.
+func scanOperatorChar(c byte) (tok, bool) {
+	switch c {
+	case '|':
+		return tok{kind: tOp, op: OR}, true
+	case '&':
+		return tok{kind: tOp, op: AND}, true
+	case '+':
+		return tok{kind: tOp, op: ADD}, true
+	case '-':
+		return tok{kind: tOp, op: SUB}, true
+	case '*':
+		return tok{kind: tOp, op: MUL}, true
+	case '!':
+		return tok{kind: tOp, op: NOT}, true
+	case '<':
+		return tok{kind: tOp, op: LSS}, true
+	case '>':
+		return tok{kind: tOp, op: GTR}, true
+	case '=':
+		return tok{kind: tAssign}, true
+	}
+	return tok{}, false
 }
 
 // fail records the first scan error, naming the construct. Subsequent next

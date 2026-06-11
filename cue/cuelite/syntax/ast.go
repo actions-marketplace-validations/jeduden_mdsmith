@@ -252,28 +252,6 @@ func walkChildren(n Node, fn func(Node)) {
 		for _, d := range node.Decls {
 			fn(d)
 		}
-	case *Interpolation:
-		for _, e := range node.Elts {
-			fn(e)
-		}
-	case *UnaryExpr:
-		fn(node.X)
-	case *BinaryExpr:
-		fn(node.X)
-		fn(node.Y)
-	case *ParenExpr:
-		fn(node.X)
-	case *SelectorExpr:
-		fn(node.X)
-		fn(node.Sel)
-	case *IndexExpr:
-		fn(node.X)
-		fn(node.Index)
-	case *CallExpr:
-		fn(node.Fun)
-		for _, a := range node.Args {
-			fn(a)
-		}
 	case *StructLit:
 		for _, d := range node.Elts {
 			fn(d)
@@ -296,6 +274,40 @@ func walkChildren(n Node, fn func(Node)) {
 			fn(c)
 		}
 		fn(node.Value)
+	default:
+		walkExprChildren(n, fn)
+	}
+}
+
+// walkExprChildren calls fn on each direct child of an expression or clause
+// node. It covers Interpolation, the operator expressions (UnaryExpr,
+// BinaryExpr, ParenExpr), the composite expressions (SelectorExpr, IndexExpr,
+// CallExpr), and the three clause types (IfClause, LetClause, ForClause).
+// Leaf nodes (Ident, BasicLit) have no children and are silently ignored.
+func walkExprChildren(n Node, fn func(Node)) {
+	switch node := n.(type) {
+	case *Interpolation:
+		for _, e := range node.Elts {
+			fn(e)
+		}
+	case *UnaryExpr:
+		fn(node.X)
+	case *BinaryExpr:
+		fn(node.X)
+		fn(node.Y)
+	case *ParenExpr:
+		fn(node.X)
+	case *SelectorExpr:
+		fn(node.X)
+		fn(node.Sel)
+	case *IndexExpr:
+		fn(node.X)
+		fn(node.Index)
+	case *CallExpr:
+		fn(node.Fun)
+		for _, a := range node.Args {
+			fn(a)
+		}
 	case *IfClause:
 		fn(node.Condition)
 	case *LetClause:
