@@ -132,10 +132,7 @@ func (c *Cache) Save(root string) error {
 		return fmt.Errorf("creating .mdsmith dir: %w", err)
 	}
 
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encoding build cache: %w", err)
-	}
+	data, _ := json.MarshalIndent(c, "", "  ")
 	data = append(data, '\n')
 
 	tmp, err := os.CreateTemp(dir, "build-cache-*.json.tmp")
@@ -145,7 +142,7 @@ func (c *Cache) Save(root string) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) //nolint:errcheck // best-effort cleanup on the failure path
 
-	if err := writeTempFile(tmp, data); err != nil {
+	if err := writeTempFileVar(tmp, data); err != nil {
 		return err
 	}
 
@@ -155,6 +152,10 @@ func (c *Cache) Save(root string) error {
 	}
 	return nil
 }
+
+// writeTempFileVar is the writeTempFile implementation used by Save; tests may
+// replace it to inject write failures without file-system tricks.
+var writeTempFileVar = writeTempFile
 
 // writeTempFile writes data to wc and closes it. Extracted so tests
 // can inject a failing io.WriteCloser without needing file-system tricks.

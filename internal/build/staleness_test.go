@@ -1,6 +1,7 @@
 package build
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -368,4 +369,61 @@ func TestResolveInputs_DuplicatesDeduped(t *testing.T) {
 // TestNormalizeOutput_EmptyString covers the p == "" branch in normalizeOutput.
 func TestNormalizeOutput_EmptyString(t *testing.T) {
 	assert.Equal(t, ".", normalizeOutput(""))
+}
+
+func TestVerdictString(t *testing.T) {
+	assert.Equal(t, "FRESH", Fresh.String())
+	assert.Equal(t, "STALE", Stale.String())
+}
+
+func TestStaleness_GlobInputMatches(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src1.txt", "hello")
+	writeFile(t, root, "src2.txt", "world")
+	writeFile(t, root, "dst.txt", "result")
+	in := newPlan(t, root, "cat", "cat {inputs}", []string{"src*.txt"}, []string{"dst.txt"}, nil)
+	cache := NewCache()
+
+	res, err := CheckStaleness(in, cache)
+	require.NoError(t, err)
+	require.Equal(t, Stale, res.Verdict)
+
+	entry, err := RecordBuild(in)
+	require.NoError(t, err)
+	cache.Put(entry)
+
+	res2, err := CheckStaleness(in, cache)
+	require.NoError(t, err)
+	assert.Equal(t, Fresh, res2.Verdict)
+}
+
+func TestResolveInputs_GlobCapExceeded(t *testing.T) {
+	old := globCapFn
+	globCapFn = func(_ int) error { return errors.New("cap exceeded") }
+	defer func() { globCapFn = old }()
+
+	root := t.TempDir()
+	writeFile(t, root, "a.txt", "a")
+	in := newPlan(t, root, "r", "tool", []string{"*.txt"}, []string{"out.txt"}, nil)
+	_, err := CheckStaleness(in, NewCache())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cap exceeded")
+}
+
+func TestRecordBuild_BadInputPath(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "hello")
+	in := newPlan(t, root, "r", "tool", []string{"../escape.txt"}, []string{"dst.txt"}, nil)
+	_, err := RecordBuild(in)
+	require.Error(t, err)
+}
+
+func TestRecordBuild_HashFileErrorForInput(t *testing.T) {
+	root := t.TempDir()
+	// src.txt is a directory: resolveInputs succeeds (path is in root),
+	// but computeActionIDFromResolved fails when it tries to hash the dir.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "src.txt"), 0o755))
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"dst.txt"}, nil)
+	_, err := RecordBuild(in)
+	require.Error(t, err)
 }

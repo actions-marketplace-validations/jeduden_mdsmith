@@ -2,6 +2,7 @@ package build
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -208,4 +209,31 @@ func TestWriteTempFile_CloseError(t *testing.T) {
 	err := writeTempFile(&closeFailWriter{}, []byte("data"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "closing temp cache file")
+}
+
+func TestCache_Save_SortOrder(t *testing.T) {
+	root := t.TempDir()
+	c := NewCache()
+	c.Put(CacheEntry{Outputs: []OutputHash{{Path: "z.txt", Hash: "h1"}}, ActionID: "id-z"})
+	c.Put(CacheEntry{Outputs: []OutputHash{{Path: "a.txt", Hash: "h2"}}, ActionID: "id-a"})
+	require.NoError(t, c.Save(root))
+
+	got, err := LoadCache(root)
+	require.NoError(t, err)
+	require.Len(t, got.Entries, 2)
+	assert.Equal(t, "a.txt", got.Entries[0].Outputs[0].Path)
+	assert.Equal(t, "z.txt", got.Entries[1].Outputs[0].Path)
+}
+
+func TestCache_Save_WriteTempFileError(t *testing.T) {
+	old := writeTempFileVar
+	writeTempFileVar = func(_ io.WriteCloser, _ []byte) error {
+		return errors.New("injected write error")
+	}
+	defer func() { writeTempFileVar = old }()
+
+	root := t.TempDir()
+	c := NewCache()
+	err := c.Save(root)
+	require.Error(t, err)
 }

@@ -17,6 +17,9 @@ import (
 	buildrule "github.com/jeduden/mdsmith/internal/rules/build"
 )
 
+// globCapFn is the CheckGlobMatchCap implementation; tests may replace it.
+var globCapFn = buildrule.CheckGlobMatchCap
+
 // Verdict is the staleness result for one target.
 type Verdict int
 
@@ -79,7 +82,7 @@ func resolveInputs(in StalenessInput) ([]string, error) {
 			if len(matches) == 0 {
 				return nil, fmt.Errorf("inputs glob %q matched no files", entry)
 			}
-			if err := buildrule.CheckGlobMatchCap(len(matches)); err != nil {
+			if err := globCapFn(len(matches)); err != nil {
 				return nil, err
 			}
 			for _, m := range matches {
@@ -170,21 +173,9 @@ func canonicalPaths(paths []string) string {
 	return b.String()
 }
 
-// ComputeActionID computes the sha256 ActionID over the recipe command,
-// canonical params, sorted relative inputs, each input's content hash,
-// sorted relative outputs, and the cache version. Every field is framed
-// with an outer 8-byte big-endian length; nested keys, values, and paths
-// are themselves framed. Returns "sha256-<64 lowercase hex>".
-func ComputeActionID(in StalenessInput) (string, error) {
-	inputs, err := resolveInputs(in)
-	if err != nil {
-		return "", err
-	}
-	outputs, err := resolveOutputs(in)
-	if err != nil {
-		return "", err
-	}
-
+// computeActionIDFromResolved hashes the ActionID from pre-resolved inputs and
+// outputs, so both ComputeActionID and RecordBuild can resolve paths once.
+func computeActionIDFromResolved(in StalenessInput, inputs, outputs []string) (string, error) {
 	h := sha256.New()
 	frame(h, []byte(in.Command))
 	frame(h, []byte(canonicalParams(in.Target.Params)))
@@ -208,6 +199,23 @@ func ComputeActionID(in StalenessInput) (string, error) {
 	frame(h, verBuf[:])
 
 	return "sha256-" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// ComputeActionID computes the sha256 ActionID over the recipe command,
+// canonical params, sorted relative inputs, each input's content hash,
+// sorted relative outputs, and the cache version. Every field is framed
+// with an outer 8-byte big-endian length; nested keys, values, and paths
+// are themselves framed. Returns "sha256-<64 lowercase hex>".
+func ComputeActionID(in StalenessInput) (string, error) {
+	inputs, err := resolveInputs(in)
+	if err != nil {
+		return "", err
+	}
+	outputs, err := resolveOutputs(in)
+	if err != nil {
+		return "", err
+	}
+	return computeActionIDFromResolved(in, inputs, outputs)
 }
 
 // hashFile returns the lowercase-hex sha256 of a file's content.
@@ -279,15 +287,15 @@ func CheckStaleness(in StalenessInput, cache *Cache) (StalenessResult, error) {
 // from disk. Call after a successful Build. built-at is left empty; the
 // caller stamps it.
 func RecordBuild(in StalenessInput) (CacheEntry, error) {
-	actionID, err := ComputeActionID(in)
-	if err != nil {
-		return CacheEntry{}, err
-	}
 	inputs, err := resolveInputs(in)
 	if err != nil {
 		return CacheEntry{}, err
 	}
 	outputs, err := resolveOutputs(in)
+	if err != nil {
+		return CacheEntry{}, err
+	}
+	actionID, err := computeActionIDFromResolved(in, inputs, outputs)
 	if err != nil {
 		return CacheEntry{}, err
 	}
