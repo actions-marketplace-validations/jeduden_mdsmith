@@ -209,10 +209,31 @@ The round-1 review probed every row construct against the CUE oracle
   decimal, and the real corpus never adds floats. Display-interpolation
   of a float VALUE is unaffected.
 
+### Review round 2: oracle alignment and four more CUE divergences
+
+Round 2 re-probed every item against the oracle (v0.16.1) and fixed five
+issues round 1 left:
+
+- **Oracle missed `mdsmith_row_out`.** It aliased and exposed the
+  in-house parse-wrapper field, so a scope key of that name diverged.
+  `RowScaffoldFieldNames` now single-sources the scaffolding names.
+- **Quoted hidden selectors.** `fm."_key"` selects the `_`-field per CUE;
+  only a bare-ident `fm._key` is hidden. `evalRowSelector` applies the
+  `_`-prefix rejection only to the bare form.
+- **Builtin shadowing.** A scope key or for-variable named `len` shadows
+  the `len` builtin lexically; `strings` stays reserved. `evalRowCall`
+  resolves a bare-ident target against scope first.
+- **Unary `+`.** CUE accepts `+(1+2)` as a numeric identity
+  (`identityNumeric`). The unsupported-construct hatch doc now enumerates
+  its real members, adding the d45b673 repetition-bound rejection, one
+  `FuzzExpr` seed per member.
+
 ### Binding contract (newRowScope)
 
-The scope binding now matches the CUE oracle exactly and is documented
-on `newRowScope` and in the `cuetemplate` package doc:
+The scope binding matches the CUE oracle on every reference form the
+corpus and `FuzzExpr` exercise. Round 1 stated it "matched the oracle
+exactly"; round 2 found that overstated and fixed the last divergence
+(below). The contract is:
 
 - A key binds as a BARE identifier only when it is a CUE-safe identifier
   (`^[A-Za-z][A-Za-z0-9_]*$`) that is not reserved. Reserved are `fm`,
@@ -227,8 +248,9 @@ on `newRowScope` and in the `cuetemplate` package doc:
 The differential ORACLE was fixed to implement the SAME contract. The
 leaky `_strings_used` sink is gone. A two-pass compile adds the
 `strings` import only when the expression uses it, so no extra name
-exists to reference. The oracle also drops the same `fm` and
-scaffolding keys the in-house arm does.
+exists to reference. The oracle reserves and drops the same `fm` and
+scaffolding keys the in-house arm does, via the shared
+`RowScaffoldFieldNames` source (round 2; see above).
 
 ### Hatch redesign (divergence-scoped)
 
