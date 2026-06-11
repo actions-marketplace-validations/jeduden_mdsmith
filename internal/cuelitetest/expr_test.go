@@ -354,6 +354,7 @@ func FuzzExpr(f *testing.F) {
 		{`"\({a:1}.a)"`, ``},                        // struct literal in expr
 		{`"\(0.1 + 0.2)"`, ``},                      // float arithmetic
 		{`"\(x + 1)"`, `{"x":9223372036854775807}`}, // big-int overflow
+		{`"\(-x)"`, `{"x":-9223372036854775808}`},   // unary - of int64 min overflows
 		{`"\(len(m))"`, `{"m":{"k":"v"}}`},          // len(struct)
 		{`'a\(id)b'`, `{"id":"X"}`},                 // bytes interpolation
 		{`"ab" * 2000000`, ``},                      // repetition bound (d45b673)

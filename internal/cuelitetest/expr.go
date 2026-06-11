@@ -312,7 +312,8 @@ func RunExpr(t testing.TB, cases []ExprCase) {
 //     the class stays pinned, are: a for…if combined comprehension clause; the
 //     two-variable `for i, x in` form; a multi-clause comprehension (`let`
 //     followed by another clause); `len(struct)`; a struct literal used as an
-//     expression value; an int64-overflowing big-int `+`; a bytes
+//     expression value; an int64-overflowing big-int `+` (and the unary `-` of
+//     int64 min, which has no int64 negation); a bytes
 //     interpolation (`'…'`); `float` arithmetic (a `+` with a float operand);
 //     and a string repetition (`s * n`) whose count or output size exceeds the
 //     maxRepeat bound (added with the d45b673 CodeQL hardening — CUE would

@@ -1,6 +1,7 @@
 package cuelite
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -534,6 +535,15 @@ func TestRender_IntAdditionInRangeStillWorks(t *testing.T) {
 	got, err := renderRow(t, `"\(x + 1)"`, map[string]any{"x": 41})
 	require.NoError(t, err)
 	assert.Equal(t, "42", got)
+}
+
+func TestRender_UnaryNegateInt64MinIsRejected(t *testing.T) {
+	// CUE (arbitrary precision) negates int64 min to 9223372036854775808; the
+	// int64 engine would silently wrap to itself. Reject as out-of-subset,
+	// consistent with the checked `+` policy.
+	_, err := renderRow(t, `"\(-x)"`, map[string]any{"x": int64(math.MinInt64)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported")
 }
 
 // --- item 8: float arithmetic is a loud out-of-subset rejection ---

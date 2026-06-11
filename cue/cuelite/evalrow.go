@@ -340,6 +340,14 @@ func evalRowUnary(n *ast.UnaryExpr, scope *rowScope) (*engineValue, error) {
 		}
 		return &engineValue{kind: kBool, b: !v.b}, nil
 	case token.SUB:
+		// Negating int64 min has no int64 representation (CUE, arbitrary
+		// precision, yields 9223372036854775808): reject it as out-of-subset
+		// rather than silently wrapping, consistent with checkedAddInt64's
+		// policy on `+`.
+		if v.kind == kInt && v.i == math.MinInt64 {
+			return nil, fmt.Errorf(
+				"cuelite: unsupported integer overflow in -(%d) (big integers are not in the subset)", v.i)
+		}
 		return negateNumeric(v)
 	case token.ADD:
 		return identityNumeric(v)
