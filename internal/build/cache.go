@@ -3,6 +3,7 @@ package build
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -144,17 +145,26 @@ func (c *Cache) Save(root string) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) //nolint:errcheck // best-effort cleanup on the failure path
 
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("writing temp cache file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing temp cache file: %w", err)
+	if err := writeTempFile(tmp, data); err != nil {
+		return err
 	}
 
 	final := filepath.Join(dir, "build-cache.json")
 	if err := os.Rename(tmpName, final); err != nil {
 		return fmt.Errorf("committing build cache: %w", err)
+	}
+	return nil
+}
+
+// writeTempFile writes data to wc and closes it. Extracted so tests
+// can inject a failing io.WriteCloser without needing file-system tricks.
+func writeTempFile(wc io.WriteCloser, data []byte) error {
+	if _, err := wc.Write(data); err != nil {
+		wc.Close()
+		return fmt.Errorf("writing temp cache file: %w", err)
+	}
+	if err := wc.Close(); err != nil {
+		return fmt.Errorf("closing temp cache file: %w", err)
 	}
 	return nil
 }

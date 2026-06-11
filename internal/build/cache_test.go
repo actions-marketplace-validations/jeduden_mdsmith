@@ -1,6 +1,7 @@
 package build
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,6 +110,17 @@ func TestLoadCache_VersionZeroNormalized(t *testing.T) {
 	assert.Equal(t, CacheVersion, c.Version)
 }
 
+func TestLoadCache_DotMdsmithIsFile(t *testing.T) {
+	root := t.TempDir()
+	// .mdsmith as a regular file makes ReadFile on .mdsmith/build-cache.json
+	// fail with ENOTDIR — a non-ENOENT error that hits the "reading build
+	// cache" error path regardless of whether the process is root.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mdsmith"), []byte("file"), 0o644))
+	_, err := LoadCache(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading build cache")
+}
+
 func TestLoadCache_UnreadableFile(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root ignores file permissions")
@@ -138,4 +150,62 @@ func TestCache_Save_UnwritableDir(t *testing.T) {
 	c := NewCache()
 	err := c.Save(root)
 	require.Error(t, err)
+}
+
+func TestCache_Save_MkdirAllError(t *testing.T) {
+	root := t.TempDir()
+	// .mdsmith as a regular file: MkdirAll(".mdsmith") fails with ENOTDIR
+	// regardless of whether the process runs as root.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mdsmith"), []byte("file"), 0o644))
+	c := NewCache()
+	err := c.Save(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating .mdsmith dir")
+}
+
+func TestCache_Save_RenameError(t *testing.T) {
+	root := t.TempDir()
+	mdsmithDir := filepath.Join(root, ".mdsmith")
+	require.NoError(t, os.MkdirAll(mdsmithDir, 0o755))
+	// build-cache.json as a directory: os.Rename(tmpFile → dir) fails with
+	// EISDIR on POSIX, which hits the "committing build cache" error path.
+	require.NoError(t, os.MkdirAll(filepath.Join(mdsmithDir, "build-cache.json"), 0o755))
+	c := NewCache()
+	err := c.Save(root)
+	require.Error(t, err)
+}
+
+func TestCache_Save_VersionZeroNormalized(t *testing.T) {
+	// Ensure the c.Version == 0 branch in Save normalises to CacheVersion.
+	root := t.TempDir()
+	c := &Cache{Version: 0}
+	c.Put(CacheEntry{Outputs: []OutputHash{{Path: "a.txt", Hash: "h"}}, ActionID: "id"})
+	require.NoError(t, c.Save(root))
+	got, err := LoadCache(root)
+	require.NoError(t, err)
+	assert.Equal(t, CacheVersion, got.Version)
+}
+
+// --- writeTempFile error paths ---
+
+type writeFailCloser struct{}
+
+func (w *writeFailCloser) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+func (w *writeFailCloser) Close() error              { return nil }
+
+type closeFailWriter struct{}
+
+func (w *closeFailWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (w *closeFailWriter) Close() error                { return errors.New("flush failed") }
+
+func TestWriteTempFile_WriteError(t *testing.T) {
+	err := writeTempFile(&writeFailCloser{}, []byte("data"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writing temp cache file")
+}
+
+func TestWriteTempFile_CloseError(t *testing.T) {
+	err := writeTempFile(&closeFailWriter{}, []byte("data"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "closing temp cache file")
 }

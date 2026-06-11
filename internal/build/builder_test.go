@@ -472,3 +472,17 @@ func TestSubstituteParams_EmbeddedListPlaceholder(t *testing.T) {
 	// commands; here we verify the substituteParams passthrough.
 	assert.Equal(t, "prefix-{inputs}-suffix", substituteParams("prefix-{inputs}-suffix", nil))
 }
+
+func TestCommitOutputs_StatError(t *testing.T) {
+	root := t.TempDir()
+	// Create a regular file at the same path as the expected staging dir so
+	// os.Stat on "notadir/out0" fails with ENOTDIR — a non-ENOENT error that
+	// hits the "staging output" error branch rather than the "did not produce"
+	// branch.
+	notadir := filepath.Join(root, "notadir")
+	require.NoError(t, os.WriteFile(notadir, []byte("x"), 0o644))
+
+	err := commitOutputs(root, []string{"out.txt"}, []string{filepath.Join(notadir, "out0")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "staging output")
+}

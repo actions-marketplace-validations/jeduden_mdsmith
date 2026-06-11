@@ -3,6 +3,7 @@ package build
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -301,4 +302,70 @@ func TestRecordBuild_HashFileErrorForOutput(t *testing.T) {
 	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"out.txt"}, nil)
 	_, err := RecordBuild(in)
 	require.Error(t, err)
+}
+
+// --- ComputeActionID error paths ---
+
+func TestComputeActionID_BadInputPath(t *testing.T) {
+	root := t.TempDir()
+	in := newPlan(t, root, "r", "tool", []string{"../escape.txt"}, []string{"out.txt"}, nil)
+	_, err := ComputeActionID(in)
+	require.Error(t, err)
+}
+
+func TestComputeActionID_BadOutputPath(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "hello")
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"../escape.txt"}, nil)
+	_, err := ComputeActionID(in)
+	require.Error(t, err)
+}
+
+// TestCheckStaleness_ComputeActionIDError covers the ComputeActionID error
+// branch inside CheckStaleness (step 3). The output exists (so step 2 passes)
+// but the input is a directory — hashFile returns an error.
+func TestCheckStaleness_ComputeActionIDError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "src.txt"), 0o755))
+	writeFile(t, root, "out.txt", "result")
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"out.txt"}, nil)
+	_, err := CheckStaleness(in, NewCache())
+	require.Error(t, err)
+}
+
+// TestResolveInputs_GlobMatchEscapesRoot covers the ResolvePathInRoot error
+// inside the glob-match loop in resolveInputs (the branch that handles a
+// glob that matches a file escaping the root via symlink).
+func TestResolveInputs_GlobMatchEscapesRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is unreliable on Windows CI")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("s"), 0o644))
+	require.NoError(t, os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "leak.txt")))
+	in := newPlan(t, root, "r", "tool", []string{"*.txt"}, []string{"out.txt"}, nil)
+	_, err := CheckStaleness(in, NewCache())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "project root")
+}
+
+// TestResolveInputs_DuplicatesDeduped covers the dup=true branch in the add
+// closure: a file that appears in both Target.Inputs and DefaultInputs is
+// counted only once in the hash.
+func TestResolveInputs_DuplicatesDeduped(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "content")
+	writeFile(t, root, "out.txt", "out")
+	// src.txt in both Inputs and DefaultInputs — the second occurrence is
+	// deduplicated by the add closure.
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"out.txt"}, []string{"src.txt"})
+	id, err := ComputeActionID(in)
+	require.NoError(t, err)
+	assert.NotEmpty(t, id)
+}
+
+// TestNormalizeOutput_EmptyString covers the p == "" branch in normalizeOutput.
+func TestNormalizeOutput_EmptyString(t *testing.T) {
+	assert.Equal(t, ".", normalizeOutput(""))
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,6 +15,15 @@ import (
 	buildexec "github.com/jeduden/mdsmith/internal/build"
 	"github.com/jeduden/mdsmith/internal/config"
 )
+
+// mockBuilder is a test-only Builder whose Build fn is injected per test.
+type mockBuilder struct {
+	fn func(ctx context.Context, target buildexec.Target) error
+}
+
+func (m *mockBuilder) Build(ctx context.Context, target buildexec.Target) error {
+	return m.fn(ctx, target)
+}
 
 // buildPassCfg returns a minimal *config.Config with the given recipe
 // YAML snippet (already indented under recipes:) for buildpass unit tests.
@@ -465,4 +475,87 @@ func TestRunBuildPass_SaveCacheError(t *testing.T) {
 	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{timeout: time.Second}, &buf)
 	// Recipe ran (OK) but cache.Save failed → exit 2.
 	assert.Equal(t, 2, code)
+}
+
+// TestRunBuildPass_ReadErrorWithSuccessfulBuild_ExitsTwo covers the
+// len(errs) > 0 && code == 0 path: one file fails to read (goes into errs),
+// another file's target builds successfully (code == 0), so the function
+// returns 2 rather than masking the read error.
+func TestRunBuildPass_ReadErrorWithSuccessfulBuild_ExitsTwo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	var buf strings.Builder
+	// p is a valid file with a target; the nonexistent path becomes an error.
+	// The build succeeds (code == 0), but len(errs) > 0 triggers return 2.
+	code := runBuildPass(cfg, cfgPath, []string{p, "/nonexistent/ghost.md"},
+		buildPassOpts{noCache: true, timeout: time.Second}, &buf)
+	assert.Equal(t, 2, code)
+	assert.Contains(t, buf.String(), "OK")
+	assert.Contains(t, buf.String(), "reading")
+}
+
+// TestRunBuildPass_OverlappingOutputsReturnsTwo covers the detectOverlap error
+// branch: two directives writing the same output file returns exit 2 before
+// any recipe runs.
+func TestRunBuildPass_OverlappingOutputsReturnsTwo(t *testing.T) {
+	root := t.TempDir()
+	cfg := buildPassCfg("    cp:\n      command: cp {inputs} {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := "# A\n\n" +
+		"<?build\nrecipe: cp\noutputs:\n  - out.txt\n?>\n[out.txt](out.txt)\n<?/build?>\n\n" +
+		"# B\n\n" +
+		"<?build\nrecipe: cp\noutputs:\n  - out.txt\n?>\n[out.txt](out.txt)\n<?/build?>\n"
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	var buf strings.Builder
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{timeout: time.Second}, &buf)
+	assert.Equal(t, 2, code)
+	assert.Contains(t, buf.String(), "overlap")
+}
+
+// TestDispatchOne_RefreshCacheEntryError covers the refreshCacheEntry error
+// path inside dispatchOne. The mock builder creates the declared output and
+// then replaces the input with a directory; when refreshCacheEntry calls
+// RecordBuild it tries to hash the input and fails.
+func TestDispatchOne_RefreshCacheEntryError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("content"), 0o644))
+
+	cfg := buildPassCfg("    cp:\n      command: cp {inputs} {outputs}\n")
+	bt := buildTarget{
+		file: "test.md",
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"src.txt"},
+			Outputs: []string{"out.txt"},
+		},
+	}
+
+	builder := &mockBuilder{fn: func(_ context.Context, target buildexec.Target) error {
+		// Create the declared output so RecordBuild's resolveOutputs passes.
+		_ = os.WriteFile(filepath.Join(root, "out.txt"), []byte("result"), 0o644)
+		// Replace the input with a directory so hashFile fails inside RecordBuild.
+		_ = os.Remove(filepath.Join(root, "src.txt"))
+		_ = os.MkdirAll(filepath.Join(root, "src.txt"), 0o755)
+		return nil
+	}}
+
+	cache := buildexec.NewCache()
+	var buf strings.Builder
+	outcome := dispatchOne(builder, bt, cfg, buildPassOpts{}, cache, time.Second, &buf)
+	assert.Equal(t, outcomeFailed, outcome)
+	assert.Contains(t, buf.String(), "FAIL")
 }
