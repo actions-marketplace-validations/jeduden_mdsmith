@@ -42,7 +42,17 @@ type RunCache struct {
 	// are an empty struct sentinel. Built lazily as ParsedSchema
 	// slots populate; the LSP's didChange path on a fragment then
 	// transitively invalidates every schema that reached it.
-	schemaDependents sync.Map // string (fragmentPath) -> *sync.Map
+	//
+	// This is a mutex-guarded plain map rather than a sync.Map: the
+	// empty-set cleanup needs a compare-and-delete (drop frag only if
+	// it still points at the same set), and sync.Map.CompareAndDelete
+	// is unavailable on tinygo, the toolchain the WASM build targets
+	// (plan 218/240). The mutex guards the outer map's
+	// load/store/compare-and-delete; the inner *sync.Map stays
+	// concurrent for the per-set Store/Delete/Range the register and
+	// invalidate paths run without the outer lock.
+	depsMu           sync.Mutex
+	schemaDependents map[string]*sync.Map // fragmentPath -> dependent-schema set
 
 	// schemaIncludes / schemaCUESources mirror ParsedSchemaMetadata
 	// into dedicated sync.Maps so Invalidate reads metadata without
@@ -89,7 +99,7 @@ type ParsedSchemaMetadata interface {
 // NewRunCache returns an empty cache ready to be installed on
 // engine.Runner.RunCache.
 func NewRunCache() *RunCache {
-	return &RunCache{}
+	return &RunCache{schemaDependents: map[string]*sync.Map{}}
 }
 
 // FrontMatter returns build's result for absPath, computed at most once
@@ -296,14 +306,19 @@ func (c *RunCache) registerSchemaIncludes(schemaPath string, includes []string) 
 		if frag == "" {
 			continue
 		}
-		for retry := 0; retry < 8; retry++ {
-			setI, _ := c.schemaDependents.LoadOrStore(frag, &sync.Map{})
-			set := setI.(*sync.Map)
-			set.Store(schemaPath, struct{}{})
-			if current, ok := c.schemaDependents.Load(frag); ok && current == setI {
-				break
-			}
+		// Under depsMu the load-or-store and the inner Store are one atomic
+		// step, so the empty-set cleanup in invalidate (also under depsMu)
+		// cannot orphan the dependent the way the lock-free sync.Map version's
+		// CompareAndDelete race could — the retry loop that guarded that race is
+		// no longer needed.
+		c.depsMu.Lock()
+		set, ok := c.schemaDependents[frag]
+		if !ok {
+			set = &sync.Map{}
+			c.schemaDependents[frag] = set
 		}
+		set.Store(schemaPath, struct{}{})
+		c.depsMu.Unlock()
 	}
 }
 
@@ -418,8 +433,10 @@ func (c *RunCache) invalidate(absPath string, visited map[string]bool) {
 	// only the live dependents. The visited set carried through the
 	// recursion is the cycle guard — a dependent that has already
 	// been invalidated in this top-level call is skipped.
-	if setI, ok := c.schemaDependents.Load(absPath); ok {
-		set := setI.(*sync.Map)
+	c.depsMu.Lock()
+	set, ok := c.schemaDependents[absPath]
+	c.depsMu.Unlock()
+	if ok {
 		var deps []string
 		set.Range(func(k, _ any) bool {
 			deps = append(deps, k.(string))
@@ -428,7 +445,9 @@ func (c *RunCache) invalidate(absPath string, visited map[string]bool) {
 		for _, dep := range deps {
 			c.invalidate(dep, visited)
 		}
-		c.schemaDependents.Delete(absPath)
+		c.depsMu.Lock()
+		delete(c.schemaDependents, absPath)
+		c.depsMu.Unlock()
 	}
 
 	// Drop the parsed-schema slot and its mirrored metadata.
@@ -441,23 +460,25 @@ func (c *RunCache) invalidate(absPath string, visited map[string]bool) {
 	// absPath from that fragment's dependent set. Leaves the
 	// fragment's own slot intact (it is a sibling document, not the
 	// invalidated one); only the back-pointer to absPath is
-	// removed. When that removal empties the set, CompareAndDelete
-	// drops the schemaDependents entry too so long-lived LSP
-	// sessions do not accumulate empty *sync.Maps. CompareAndDelete
-	// is the race-safe primitive: if a concurrent
-	// registerSchemaMetadata re-Stored a dependent between our
-	// Range and the delete, the value in schemaDependents now
-	// differs from setI and the delete is skipped, preserving the
-	// new entry.
+	// removed. When that removal empties the set, the entry is dropped
+	// too so long-lived LSP sessions do not accumulate empty
+	// *sync.Maps. The empty-check and the drop run together under
+	// depsMu and confirm the slot still holds the SAME set: a
+	// concurrent registerSchemaIncludes that re-stored a dependent
+	// either ran before this lock (so the set is non-empty and kept)
+	// or after the drop (so it re-creates a fresh set under the same
+	// lock) — the mutex makes this the race-safe equivalent of the
+	// former sync.Map.CompareAndDelete, which tinygo lacks (plan 240).
 	for _, frag := range includes {
 		if frag == "" {
 			continue
 		}
-		setI, ok := c.schemaDependents.Load(frag)
+		c.depsMu.Lock()
+		set, ok := c.schemaDependents[frag]
 		if !ok {
+			c.depsMu.Unlock()
 			continue
 		}
-		set := setI.(*sync.Map)
 		set.Delete(absPath)
 		empty := true
 		set.Range(func(_, _ any) bool {
@@ -465,9 +486,20 @@ func (c *RunCache) invalidate(absPath string, visited map[string]bool) {
 			return false
 		})
 		if empty {
-			c.schemaDependents.CompareAndDelete(frag, setI)
+			delete(c.schemaDependents, frag)
 		}
+		c.depsMu.Unlock()
 	}
+}
+
+// dependentSet returns the dependent-schema set registered for fragment
+// under the depsMu guard, for tests that assert the reverse-include index
+// shape. It returns (nil, false) when no set is registered.
+func (c *RunCache) dependentSet(fragment string) (*sync.Map, bool) {
+	c.depsMu.Lock()
+	defer c.depsMu.Unlock()
+	set, ok := c.schemaDependents[fragment]
+	return set, ok
 }
 
 // InvalidateWikilinks clears every cached wikilink index. The LSP
