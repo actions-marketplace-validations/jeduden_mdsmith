@@ -96,3 +96,46 @@ func TestCache_SaveIsAtomic_NoTempLeftBehind(t *testing.T) {
 		assert.Equal(t, "build-cache.json", e.Name(), "no temp file should remain")
 	}
 }
+
+func TestLoadCache_VersionZeroNormalized(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".mdsmith"), 0o755))
+	// Write a cache JSON with version: 0 — should be normalised to CacheVersion on load.
+	raw := `{"version":0,"entries":[]}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".mdsmith", "build-cache.json"), []byte(raw), 0o644))
+	c, err := LoadCache(root)
+	require.NoError(t, err)
+	assert.Equal(t, CacheVersion, c.Version)
+}
+
+func TestLoadCache_UnreadableFile(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, ".mdsmith")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	p := filepath.Join(dir, "build-cache.json")
+	require.NoError(t, os.WriteFile(p, []byte(`{"version":1}`), 0o000))
+	t.Cleanup(func() { _ = os.Chmod(p, 0o644) })
+
+	_, err := LoadCache(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading build cache")
+}
+
+func TestCache_Save_UnwritableDir(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, ".mdsmith")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	c := NewCache()
+	err := c.Save(root)
+	require.Error(t, err)
+}

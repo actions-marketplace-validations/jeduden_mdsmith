@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	buildexec "github.com/jeduden/mdsmith/internal/build"
 	"github.com/jeduden/mdsmith/internal/config"
 )
 
@@ -277,4 +278,191 @@ func TestCollectBuildTargets_MalformedDirectiveSkipped(t *testing.T) {
 	targets, errs := collectBuildTargets([]string{p}, root, "", 0)
 	assert.Empty(t, errs)
 	assert.Empty(t, targets, "directive with non-string recipe param must be skipped")
+}
+
+// --- resolveDefaultInputs ---
+
+func TestResolveDefaultInputs_ParamToken_Resolved(t *testing.T) {
+	out := resolveDefaultInputs([]string{"{tape}"}, map[string]string{"tape": "demo.tape"})
+	assert.Equal(t, []string{"demo.tape"}, out)
+}
+
+func TestResolveDefaultInputs_ParamToken_NotInParams_PassesThrough(t *testing.T) {
+	// A {token} whose name is absent from params falls through as a literal.
+	out := resolveDefaultInputs([]string{"{unknown}"}, map[string]string{})
+	assert.Equal(t, []string{"{unknown}"}, out)
+}
+
+func TestResolveDefaultInputs_LiteralEntry(t *testing.T) {
+	out := resolveDefaultInputs([]string{"assets/logo.svg"}, map[string]string{"tape": "demo.tape"})
+	assert.Equal(t, []string{"assets/logo.svg"}, out)
+}
+
+func TestResolveDefaultInputs_Empty(t *testing.T) {
+	assert.Nil(t, resolveDefaultInputs(nil, nil))
+	assert.Nil(t, resolveDefaultInputs([]string{}, nil))
+}
+
+// --- loadBuildCache ---
+
+func TestLoadBuildCache_NoCacheFlag_ReturnsEmpty(t *testing.T) {
+	root := t.TempDir()
+	var buf strings.Builder
+	c := loadBuildCache(root, buildPassOpts{noCache: true}, &buf)
+	assert.Empty(t, c.Entries)
+	assert.Empty(t, buf.String(), "noCache must not print anything")
+}
+
+func TestLoadBuildCache_CorruptFile_ReturnsEmptyAndWarns(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".mdsmith"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".mdsmith", "build-cache.json"), []byte("{bad json"), 0o644))
+	var buf strings.Builder
+	c := loadBuildCache(root, buildPassOpts{}, &buf)
+	assert.Empty(t, c.Entries, "corrupt cache should yield empty cache")
+	assert.Contains(t, buf.String(), "stale")
+}
+
+// --- refreshCacheEntry ---
+
+func TestRefreshCacheEntry_NoCache_IsNoop(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "out.txt"), []byte("x"), 0o644))
+	stin := buildexec.StalenessInput{
+		Target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"src.txt"},
+			Outputs: []string{"out.txt"},
+		},
+		Command: "cp {inputs} {outputs}",
+	}
+	cache := buildexec.NewCache()
+	err := refreshCacheEntry(stin, cache, buildPassOpts{noCache: true})
+	require.NoError(t, err)
+	assert.Empty(t, cache.Entries, "noCache must not write to cache")
+}
+
+// --- targetVerdict with force + error ---
+
+func TestTargetVerdict_ForceAndMissingInput_ReturnsError(t *testing.T) {
+	root := t.TempDir()
+	// No src.txt on disk; --build-force still resolves inputs to catch errors.
+	stin := buildexec.StalenessInput{
+		Target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"absent.txt"},
+			Outputs: []string{"out.txt"},
+		},
+		Command: "cp {inputs} {outputs}",
+	}
+	_, err := targetVerdict(stin, buildexec.NewCache(), buildPassOpts{force: true})
+	require.Error(t, err, "--build-force must still surface missing-input errors")
+}
+
+func TestTargetVerdict_NoCacheAndMissingInput_ReturnsError(t *testing.T) {
+	root := t.TempDir()
+	stin := buildexec.StalenessInput{
+		Target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"absent.txt"},
+			Outputs: []string{"out.txt"},
+		},
+		Command: "cp {inputs} {outputs}",
+	}
+	_, err := targetVerdict(stin, buildexec.NewCache(), buildPassOpts{noCache: true})
+	require.Error(t, err, "--build-no-cache must still surface missing-input errors")
+}
+
+// --- dispatchTargets exit-code paths ---
+
+func TestRunBuildPass_RebuildNoCache_ExitsZero(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	var buf strings.Builder
+	// --build-no-cache + success: must exit 0, must not write cache.
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{noCache: true, timeout: time.Second}, &buf)
+	assert.Equal(t, 0, code)
+	assert.Contains(t, buf.String(), "OK")
+	_, err := os.Stat(filepath.Join(root, ".mdsmith", "build-cache.json"))
+	assert.True(t, os.IsNotExist(err), "cache must not be written when --build-no-cache is set")
+}
+
+func TestRunBuildPass_CheckStale_FreshTarget_ExitsZero(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	// Run once to build and prime the cache.
+	var buf strings.Builder
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{timeout: time.Second}, &buf)
+	require.Equal(t, 0, code)
+
+	// Now check-stale: target is fresh, so exit 0.
+	buf.Reset()
+	code = runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{checkStale: true, timeout: time.Second}, &buf)
+	assert.Equal(t, 0, code)
+	assert.NotContains(t, buf.String(), "STALE")
+}
+
+func TestRunBuildPass_CheckStale_StaleTarget_ExitsTwo(t *testing.T) {
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	// No prior run — target is stale.
+	var buf strings.Builder
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{checkStale: true, timeout: time.Second}, &buf)
+	assert.Equal(t, 2, code)
+	assert.Contains(t, buf.String(), "STALE")
+}
+
+func TestRunBuildPass_SaveCacheError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("touch and chmod not reliable on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	// Create .mdsmith dir and make it unwritable so cache.Save fails.
+	mdsmithDir := filepath.Join(root, ".mdsmith")
+	require.NoError(t, os.MkdirAll(mdsmithDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(mdsmithDir, 0o755) })
+
+	var buf strings.Builder
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{timeout: time.Second}, &buf)
+	// Recipe ran (OK) but cache.Save failed → exit 2.
+	assert.Equal(t, 2, code)
 }

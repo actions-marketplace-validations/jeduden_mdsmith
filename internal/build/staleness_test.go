@@ -216,3 +216,89 @@ func TestDetectOutputOverlap_NoOverlap(t *testing.T) {
 	}
 	require.NoError(t, DetectOutputOverlap(plans))
 }
+
+// --- resolveInputs error branches ---
+
+func TestResolveInputs_GlobSyntaxError(t *testing.T) {
+	root := t.TempDir()
+	// An unclosed bracket is a glob syntax error in doublestar.
+	in := newPlan(t, root, "r", "tool", []string{"[invalid"}, []string{"out.txt"}, nil)
+	_, err := CheckStaleness(in, NewCache())
+	require.Error(t, err)
+}
+
+func TestResolveInputs_LiteralPathEscapesRoot(t *testing.T) {
+	root := t.TempDir()
+	// A literal input with ".." that would escape the root is rejected.
+	in := newPlan(t, root, "r", "tool", []string{"../escape.txt"}, []string{"out.txt"}, nil)
+	_, err := CheckStaleness(in, NewCache())
+	require.Error(t, err)
+}
+
+func TestResolveInputs_DefaultInputEscapesRoot(t *testing.T) {
+	root := t.TempDir()
+	// A default input with ".." that would escape the root is rejected.
+	in := newPlan(t, root, "r", "tool", nil, []string{"out.txt"}, []string{"../escape.txt"})
+	_, err := CheckStaleness(in, NewCache())
+	require.Error(t, err)
+}
+
+// --- resolveOutputs error branch ---
+
+func TestCheckStaleness_BadOutputPath(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "hello")
+	// An output path with ".." that would escape the root is rejected.
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"../escape.txt"}, nil)
+	_, err := CheckStaleness(in, NewCache())
+	require.Error(t, err)
+}
+
+func TestRecordBuild_BadOutputPath(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "hello")
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"../escape.txt"}, nil)
+	_, err := RecordBuild(in)
+	require.Error(t, err)
+}
+
+// --- hashFile error branches ---
+
+func TestComputeActionID_HashFileError(t *testing.T) {
+	root := t.TempDir()
+	// Create a directory named like an input file — ReadFile on a dir fails.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "src.txt"), 0o755))
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"out.txt"}, nil)
+	_, err := ComputeActionID(in)
+	require.Error(t, err)
+}
+
+func TestCheckStaleness_HashFileErrorForOutput(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "hello")
+	// Build the cache with a real file, then replace the output with a directory
+	// so the content-hash step (step 5) fails.
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"dst.txt"}, nil)
+	writeFile(t, root, "dst.txt", "world")
+	cache := NewCache()
+	entry, err := RecordBuild(in)
+	require.NoError(t, err)
+	cache.Put(entry)
+
+	// Replace dst.txt with a directory so hashFile returns an error.
+	require.NoError(t, os.Remove(filepath.Join(root, "dst.txt")))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "dst.txt"), 0o755))
+
+	_, err = CheckStaleness(in, cache)
+	require.Error(t, err)
+}
+
+func TestRecordBuild_HashFileErrorForOutput(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "hello")
+	// Replace the output with a directory so hashFile returns an error.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "out.txt"), 0o755))
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"out.txt"}, nil)
+	_, err := RecordBuild(in)
+	require.Error(t, err)
+}
