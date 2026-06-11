@@ -319,26 +319,13 @@ jobs:
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version-file: go.mod
-      # Plan 236: the cuelite-versus-CUE differential benchmark (the
-      # in-house path against the direct-CUE oracle) must genuinely run
-      # in CI, not just exist. The phases that flip cuelite to the in-house
-      # engine are judged against these arms.
-      - run: go test -run=^$ -bench=. -benchtime=20x ./internal/cuelitetest/...
-      # Plan 236: the cuelite/cue FACTOR gate. TestFactorGate computes the
-      # cuelite-over-cue ns/op ratio for the hot (validate) and cold
-      # (compile-validate) paths and FAILS when either exceeds its interim
-      # budget (2.5x hot, 2.0x cold) — the ratio cancels runner speed, so a
-      # blowup trips it but a slow runner does not. The gate is an ordinary
-      # `go test` (the per-arm measurement loop lives in Go, no inline shell)
-      # and writes a factor table to GITHUB_STEP_SUMMARY for the run page.
-      # -v so the per-benchmark factor lines (t.Log) land in the job
-      # log on success, not only in the step summary.
-      # CUELITE_FACTOR_GATE=1 arms the gate: it skips everywhere else
-      # (notably the parallel `test` job) because the ratio is only
-      # meaningful on a quiet runner.
-      - run: go test -v -run=TestFactorGate ./internal/cuelitetest/...
-        env:
-          CUELITE_FACTOR_GATE: "1"
+      # Plan 240: the differential oracle left with the cuelang.org
+      # dependency, so the cuelite benchmarks are engine-only and the
+      # old CUE-relative factor gate is replaced by an absolute
+      # allocs/op guard (TestValidateAllocBudget in bench_test.go,
+      # asserted here verbosely so the numbers land in the job log).
+      - run: go test -run=^$ -bench=. -benchtime=20x ./cue/cuelite/...
+      - run: go test -v -run=TestValidateAllocBudget ./cue/cuelite/
 
   # Build-tag A/B job for the vendored goldmark fork (plan 197+198).
   # pkg/goldmark/ is part of the main module — it was a nested module
