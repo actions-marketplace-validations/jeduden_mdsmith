@@ -573,25 +573,30 @@ func evalRowSelector(n *ast.SelectorExpr, scope *rowScope) (*engineValue, error)
 	if err != nil {
 		return nil, err
 	}
-	name, err := rowSelectorName(n.Sel)
+	name, quoted, err := rowSelectorName(n.Sel)
 	if err != nil {
 		return nil, err
 	}
-	// A `_`-prefixed member is a CUE HIDDEN field: a bare selector cannot reach
-	// it (only a string index `fm["_key"]` can), so reject it as not-found,
-	// matching the oracle. The index path (evalRowIndex → selectField) does not
-	// apply this rule, so `fm["_key"]` still resolves.
-	if strings.HasPrefix(name, "_") {
+	// A `_`-prefixed member is a CUE HIDDEN field: a BARE-identifier selector
+	// (`fm._key`) cannot reach it, so reject it as not-found, matching the
+	// oracle. A QUOTED selector (`fm."_key"`) DOES select the hidden field per
+	// CUE, as does a string index (`fm["_key"]`); only the bare-ident form is
+	// blocked. So apply the rule only when the label was a bare identifier.
+	if !quoted && strings.HasPrefix(name, "_") {
 		return nil, fmt.Errorf("cuelite: field %q not found", name)
 	}
 	return selectField(base, name)
 }
 
-// rowSelectorName resolves a selector's member label to the field name to read.
-// A bare identifier (`fm.id`) names the field directly. A quoted string label
+// rowSelectorName resolves a selector's member label to the field name to read,
+// also reporting whether the label was a QUOTED string. A bare identifier
+// (`fm.id`) names the field directly (quoted=false). A quoted string label
 // (`fm."my-key"`) is the same member selection CUE allows on a struct, so it
-// decodes to its string value — `fm."?"` selects the literal `?` key, not the
-// "?" placeholder the schema-path selectorName falls back to.
+// decodes to its string value (quoted=true) — `fm."?"` selects the literal `?`
+// key, not the "?" placeholder the schema-path selectorName falls back to. The
+// quoted flag lets evalRowSelector apply the hidden-field (`_`-prefix) rejection
+// only to the bare-ident form, since CUE selects a `_`-prefixed field through a
+// quoted label but not a bare one.
 //
 // The CUE parser only ever produces an *ast.Ident or a STRING *ast.BasicLit for
 // a selector member: a numeric or bytes member is a parse error
@@ -599,16 +604,16 @@ func evalRowSelector(n *ast.SelectorExpr, scope *rowScope) (*engineValue, error)
 // in the quoted label is impossible (a selector label is not an interpolation),
 // so literal.Unquote on a parser-validated STRING token cannot fail; its error
 // is returned for completeness but is unreachable from the parser.
-func rowSelectorName(l ast.Label) (string, error) {
+func rowSelectorName(l ast.Label) (name string, quoted bool, err error) {
 	if id, ok := l.(*ast.Ident); ok {
-		return id.Name, nil
+		return id.Name, false, nil
 	}
 	bl := l.(*ast.BasicLit)
-	s, err := literal.Unquote(bl.Value)
-	if err != nil {
-		return "", fmt.Errorf("cuelite: selector label %s: %w", bl.Value, err)
+	s, uerr := literal.Unquote(bl.Value)
+	if uerr != nil {
+		return "", false, fmt.Errorf("cuelite: selector label %s: %w", bl.Value, uerr)
 	}
-	return s, nil
+	return s, true, nil
 }
 
 // selectField reads a named member out of a struct value, erroring when the

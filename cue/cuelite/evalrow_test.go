@@ -544,6 +544,15 @@ func TestRender_HiddenKeyReachableViaFMIndex(t *testing.T) {
 	assert.Equal(t, "hidden", got)
 }
 
+func TestRender_HiddenKeyReachableViaQuotedSelector(t *testing.T) {
+	// `fm."_key"` reaches a hidden field via a QUOTED selector, matching CUE:
+	// the `_`-prefix rejection applies only to a bare *ast.Ident selector
+	// label, not a quoted string label.
+	got, err := renderRow(t, `fm."_key"`, map[string]any{"_key": "hidden"})
+	require.NoError(t, err)
+	assert.Equal(t, "hidden", got)
+}
+
 func TestRender_StringsKeyDoesNotBindAsBareIdent(t *testing.T) {
 	// A key named `strings` is the builtin namespace as a bare identifier, not
 	// the data; the data value is reachable as `fm.strings`.

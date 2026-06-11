@@ -369,7 +369,7 @@ func mustInf() float64 {
 // produces this shape for a selector, so the branch is reached only by a direct
 // AST construction.
 func TestRowSelectorName_UnquoteError(t *testing.T) {
-	_, err := rowSelectorName(&ast.BasicLit{Kind: token.STRING, Value: `"\x"`})
+	_, _, err := rowSelectorName(&ast.BasicLit{Kind: token.STRING, Value: `"\x"`})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "selector label")
 }

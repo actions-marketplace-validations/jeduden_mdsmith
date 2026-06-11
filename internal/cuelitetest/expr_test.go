@@ -233,6 +233,7 @@ func exprCorpus() []ExprCase {
 		{Name: "hidden key not bare addressable", Expr: `_key`, ScopeJSON: `{"_key":"hidden"}`},
 		{Name: "hidden key not via fm selector", Expr: `fm._key`, ScopeJSON: `{"_key":"hidden"}`},
 		{Name: "hidden key via fm index", Expr: `fm["_key"]`, ScopeJSON: `{"_key":"hidden"}`},
+		{Name: "hidden key via fm quoted selector", Expr: `fm."_key"`, ScopeJSON: `{"_key":"hidden"}`},
 		{Name: "strings key only via fm", Expr: `fm.strings`, ScopeJSON: `{"strings":"sv"}`},
 		{Name: "keyword key not bare", Expr: `for`, ScopeJSON: `{"for":"fv"}`},
 		{Name: "literal fm key dropped", Expr: `fm["fm"]`, ScopeJSON: `{"fm":"lit"}`},
@@ -321,6 +322,7 @@ func FuzzExpr(f *testing.F) {
 		// drop — both arms must agree.
 		{`_key`, `{"_key":"hidden"}`},
 		{`fm._key`, `{"_key":"hidden"}`},
+		{`fm."_key"`, `{"_key":"hidden"}`},
 		{`fm["_key"]`, `{"_key":"hidden"}`},
 		{`for`, `{"for":"fv"}`},
 		{`fm.strings`, `{"strings":"sv"}`},
