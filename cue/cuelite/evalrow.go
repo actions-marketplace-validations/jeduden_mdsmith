@@ -291,8 +291,9 @@ func evalRow(e ast.Expr, scope *rowScope) (*engineValue, error) {
 }
 
 // evalRowUnary evaluates a unary expression. The row subset uses `!` for the
-// boolean negation an `if !cond` ternary arm needs, and `-` for a negative
-// numeric literal. Any other unary operator is outside the subset.
+// boolean negation an `if !cond` ternary arm needs, `-` for a negative numeric
+// literal, and `+` for the numeric-identity unary CUE admits (`+(1+2)` is 3).
+// Any other unary operator is outside the subset.
 func evalRowUnary(n *ast.UnaryExpr, scope *rowScope) (*engineValue, error) {
 	v, err := evalRow(n.X, scope)
 	if err != nil {
@@ -306,8 +307,22 @@ func evalRowUnary(n *ast.UnaryExpr, scope *rowScope) (*engineValue, error) {
 		return &engineValue{kind: kBool, b: !v.b}, nil
 	case token.SUB:
 		return negateNumeric(v)
+	case token.ADD:
+		return identityNumeric(v)
 	default:
 		return nil, fmt.Errorf("cuelite: unsupported unary operator %q", n.Op)
+	}
+}
+
+// identityNumeric returns a concrete numeric value unchanged, implementing CUE's
+// unary `+` (a numeric identity: `+(1+2)` is 3, `+(-1.5)` is -1.5). A non-number
+// operand is an invalid operation, matching CUE's `+"a"` rejection.
+func identityNumeric(v *engineValue) (*engineValue, error) {
+	switch v.kind {
+	case kInt, kFloat:
+		return v, nil
+	default:
+		return nil, fmt.Errorf("cuelite: invalid operation: cannot apply unary + to %s", v.describe())
 	}
 }
 

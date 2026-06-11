@@ -148,6 +148,10 @@ func exprCorpus() []ExprCase {
 		{Name: "number add is not string", Expr: `1 + 1`, ScopeJSON: ``},
 		{Name: "mixed add rejected", Expr: `"a" + 1`, ScopeJSON: ``},
 
+		// Unary + numeric identity (CUE `+(1+2)` == 3).
+		{Name: "unary plus int identity", Expr: `"\(+(1+2))"`, ScopeJSON: ``},
+		{Name: "unary plus on string rejected", Expr: `+"a"`, ScopeJSON: ``},
+
 		// String repetition (item 2): the FuzzExpr ""*0 find, both operand
 		// orders, and the rejected pairings.
 		{Name: "string repeat empty zero", Expr: `"" * 0`, ScopeJSON: ``},
@@ -311,13 +315,15 @@ func FuzzExpr(f *testing.F) {
 		// Loud out-of-subset rejections (hatch class b): CUE accepts each, the
 		// in-house engine rejects with the "unsupported" wording. One seed per
 		// construct pins the class.
-		{`strings.Join([for x in xs if x != "b" {x}], ",")`, `{"xs":["a","b","c"]}`}, // for…if combined
-		{`strings.Join([for i, x in xs {"\(i):\(x)"}], ",")`, `{"xs":["a","b"]}`},    // for i, x in
-		{`"\({a:1}.a)"`, ``},                        // struct literal in expr
-		{`"\(0.1 + 0.2)"`, ``},                      // float arithmetic
-		{`"\(x + 1)"`, `{"x":9223372036854775807}`}, // big-int overflow
-		{`"\(len(m))"`, `{"m":{"k":"v"}}`},          // len(struct)
-		{`'a\(id)b'`, `{"id":"X"}`},                 // bytes interpolation
+		{`strings.Join([for x in xs if x != "b" {x}], ",")`, `{"xs":["a","b","c"]}`},      // for…if combined
+		{`strings.Join([for i, x in xs {"\(i):\(x)"}], ",")`, `{"xs":["a","b"]}`},         // for i, x in
+		{`strings.Join([for x in xs let y = x + x {y}], ",")`, `{"xs":["a","b"]}`},        // let multi-clause
+		{`"\({a:1}.a)"`, ``},                          // struct literal in expr
+		{`"\(0.1 + 0.2)"`, ``},                        // float arithmetic
+		{`"\(x + 1)"`, `{"x":9223372036854775807}`},   // big-int overflow
+		{`"\(len(m))"`, `{"m":{"k":"v"}}`},            // len(struct)
+		{`'a\(id)b'`, `{"id":"X"}`},                   // bytes interpolation
+		{`"ab" * 2000000`, ``},                        // repetition bound (d45b673)
 		// Scope binding contract (item 6): hidden keys, reserved names, the fm
 		// drop — both arms must agree.
 		{`_key`, `{"_key":"hidden"}`},

@@ -520,6 +520,28 @@ func TestRender_FloatDisplayInterpolationStillWorks(t *testing.T) {
 	assert.Equal(t, "w=1.5", got)
 }
 
+// --- unary + (numeric identity, matching CUE `+(1+2)` == 3) ---
+
+func TestRender_UnaryPlusInt(t *testing.T) {
+	// CUE accepts a unary `+` on a number as a numeric identity: `+(1+2)` is 3.
+	got, err := renderRow(t, `"\(+(1+2))"`, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "3", got)
+}
+
+func TestRender_UnaryPlusFloat(t *testing.T) {
+	got, err := renderRow(t, `"\(+(weight))"`, map[string]any{"weight": 1.5})
+	require.NoError(t, err)
+	assert.Equal(t, "1.5", got)
+}
+
+func TestRender_UnaryPlusOnStringIsError(t *testing.T) {
+	// CUE rejects `+"a"` as an invalid operation; the in-house engine matches.
+	_, err := renderRow(t, `+"a"`, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid operation")
+}
+
 // --- item 6: scope binding contract (match the oracle exactly) ---
 
 func TestRender_HiddenKeyNotBareAddressable(t *testing.T) {

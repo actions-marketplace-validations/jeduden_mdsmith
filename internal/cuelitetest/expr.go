@@ -277,11 +277,18 @@ func RunExpr(t testing.TB, cases []ExprCase) {
 //     non-numeric byte still fails.
 //   - unsupported-construct: the in-house arm REJECTS with the engine's
 //     "unsupported" wording while the oracle ACCEPTS. This covers the
-//     constructs CUE admits but the row subset deliberately does not — for…if
-//     combined clauses, `for i, x in`, `let`, len(struct), struct literals in
-//     exprs, big ints, bytes interpolation, and float arithmetic. It is keyed
-//     on the error-text class, so it NEVER masks an accept-vs-accept string
-//     diff or an in-house-accepts/oracle-rejects mismatch.
+//     constructs CUE admits but the row subset deliberately does not. Its real
+//     members, each carrying the "unsupported" token and each seeded below so
+//     the class stays pinned, are: a for…if combined comprehension clause; the
+//     two-variable `for i, x in` form; a multi-clause comprehension (`let`
+//     followed by another clause); `len(struct)`; a struct literal used as an
+//     expression value; an int64-overflowing big-int `+`; a bytes
+//     interpolation (`'…'`); `float` arithmetic (a `+` with a float operand);
+//     and a string repetition (`s * n`) whose count or output size exceeds the
+//     maxRepeat bound (added with the d45b673 CodeQL hardening — CUE would
+//     repeat, the engine rejects). It is keyed on the error-text class, so it
+//     NEVER masks an accept-vs-accept string diff or an
+//     in-house-accepts/oracle-rejects mismatch.
 func HatchedDivergence(inHouse, oracle ExprOutcome) bool {
 	return floatDisplayDivergence(inHouse, oracle) ||
 		unsupportedConstructDivergence(inHouse, oracle)
