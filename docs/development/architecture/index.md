@@ -135,11 +135,13 @@ cmd/mdsmith              internal/lsp
                          CUE-subset façade;
                          imports no internal/
                          package; fieldinterp
-                         already consumes its
-                         ParsePath; its eventual
-                         consumers are schema,
-                         requiredstructure,
-                         query, and cuetemplate)
+                         consumes its ParsePath
+                         and cuetemplate consumes
+                         its CompileRow/Render
+                         row-expr surface; its
+                         remaining consumers are
+                         schema, requiredstructure,
+                         and query)
 ```
 
 `pkg/markdown` sits at the bottom. It
@@ -195,12 +197,17 @@ the
 phase 4 deletes never becomes part of the
 public surface.
 
-`fieldinterp` is already a consumer,
-reading `cuelite.ParsePath`. Its further
-consumers are `internal/schema`,
-`requiredstructure`, `query`, and
-`cuetemplate`. It imports none of them,
-and nothing else in the tree.
+`fieldinterp` is a consumer, reading
+`cuelite.ParsePath`. `cuetemplate` is a
+consumer too. Its `Compile` and `Render`
+run on `cuelite.CompileRow` and
+`RowTemplate.Render` (plan 239). So
+`cuelang.org/go` is gone from
+`internal/cuetemplate`. The remaining
+prospective consumers are
+`internal/schema`, `requiredstructure`,
+and `query`. `cue/cuelite` imports none
+of them, and nothing else in the tree.
 
 These packages are public surfaces.
 For details see

@@ -26,6 +26,18 @@
 // compiled schema, with no JSON marshal/parse round-trip — the
 // front-matter hot path.
 //
+// [CompileRow] and [RowTemplate.Render] are the catalog row-expression
+// surface (surface C): CompileRow parses a single CUE expression that
+// returns a string (the parse-only step, AST cached), and Render
+// evaluates it against a front-matter map to a concrete string. The row
+// subset adds string interpolation across the plain, raw, and multiline
+// dialects, `+` concatenation, string×int repetition, `for`/`if`
+// comprehensions, field and index selection, and the strings.Join / len
+// builtins — over a documented binding contract that mirrors CUE (every
+// CUE-safe non-reserved key binds by name, the whole map under `fm`).
+// It is a separate tree-walker from Compile's schema evaluator: a row
+// reference resolves against concrete data or errors, never deferring.
+//
 // # Error model
 //
 // Validate upholds one invariant:
