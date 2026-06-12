@@ -494,7 +494,6 @@ func TestExplain_InputIsDirectory_ReturnsHashError(t *testing.T) {
 	require.Error(t, err)
 }
 
-
 func TestExplain_NoInputsNoOutputs_EmptyFields(t *testing.T) {
 	root := t.TempDir()
 	// No inputs, no outputs: Explain must still return a valid ActionID.
