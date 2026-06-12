@@ -371,7 +371,8 @@ func TestCommitOutputs_MkdirAllError(t *testing.T) {
 	stage := filepath.Join(stageDir, "out0")
 	require.NoError(t, os.WriteFile(stage, []byte("data"), 0o644))
 
-	err := commitOutputs(root, []string{"file.txt/result.txt"}, []string{stage})
+	finals := []string{filepath.Join(root, "file.txt", "result.txt")}
+	err := commitOutputs(finals, []string{"file.txt/result.txt"}, []string{stage})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating output dir")
 }
@@ -389,7 +390,8 @@ func TestCommitOutputs_RenameFallbackToCopyFails(t *testing.T) {
 	stage := filepath.Join(stageDir, "out0")
 	require.NoError(t, os.WriteFile(stage, []byte("data"), 0o644))
 
-	err := commitOutputs(root, []string{"result"}, []string{stage})
+	finals := []string{filepath.Join(root, "result")}
+	err := commitOutputs(finals, []string{"result"}, []string{stage})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "writing output")
 }
@@ -436,12 +438,14 @@ func TestCopyFile_PreservesSourceMode(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
-func TestBuild_StagingDirCreationFails(t *testing.T) {
-	// Allocate the temp dirs before overriding TMPDIR — t.TempDir would
-	// fail under the bogus value.
+func TestBuild_StagingRootCreationFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ENOTDIR semantics differ on Windows")
+	}
 	root := t.TempDir()
-	// Point TMPDIR at a path that does not exist so os.MkdirTemp fails.
-	t.Setenv("TMPDIR", filepath.Join(root, "nope"))
+	// Plant a regular file at .mdsmith so MkdirAll(.mdsmith/build-staging)
+	// fails with ENOTDIR before any recipe runs.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mdsmith"), []byte("x"), 0o644))
 	b := NewCustomBuilder(map[string]RecipeSpec{
 		"echo": recipeCmd("echo hi"),
 	})
@@ -451,23 +455,30 @@ func TestBuild_StagingDirCreationFails(t *testing.T) {
 		Outputs: []string{"out.txt"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "creating staging dir")
+	assert.Contains(t, err.Error(), "staging root")
 }
 
-func TestCommitOutputs_StatNonNotExistError(t *testing.T) {
+func TestVerifyOutputsExist_StatNonNotExistError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("ENOTDIR semantics differ on Windows")
 	}
-	root := t.TempDir()
-	// A stage path that descends through a regular file makes os.Stat
+	// A stage path that descends through a regular file makes os.Lstat
 	// fail with ENOTDIR — a non-ErrNotExist error.
 	blocker := filepath.Join(t.TempDir(), "blocker")
 	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
 	stage := filepath.Join(blocker, "out0")
 
-	err := commitOutputs(root, []string{"out.txt"}, []string{stage})
+	err := verifyOutputsExist([]string{"out.txt"}, []string{stage})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "staging output")
+}
+
+func TestVerifyOutputsExist_MissingOutput(t *testing.T) {
+	stageDir := t.TempDir()
+	stage := filepath.Join(stageDir, "out0") // never created
+	err := verifyOutputsExist([]string{"out.txt"}, []string{stage})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not produce declared output")
 }
 
 func TestSubstituteParams_PrefixBeforePlaceholder(t *testing.T) {
@@ -499,16 +510,19 @@ func TestBuild_MkdirTempError(t *testing.T) {
 	assert.Contains(t, err.Error(), "staging dir")
 }
 
-func TestCommitOutputs_StatError(t *testing.T) {
+func TestVerifyOutputsExist_StatError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ENOTDIR semantics differ on Windows")
+	}
 	root := t.TempDir()
 	// Create a regular file at the same path as the expected staging dir so
-	// os.Stat on "notadir/out0" fails with ENOTDIR — a non-ENOENT error that
-	// hits the "staging output" error branch rather than the "did not produce"
-	// branch.
+	// os.Lstat on "notadir/out0" fails with ENOTDIR — a non-ENOENT error
+	// that hits the "staging output" error branch rather than the
+	// "did not produce" branch.
 	notadir := filepath.Join(root, "notadir")
 	require.NoError(t, os.WriteFile(notadir, []byte("x"), 0o644))
 
-	err := commitOutputs(root, []string{"out.txt"}, []string{filepath.Join(notadir, "out0")})
+	err := verifyOutputsExist([]string{"out.txt"}, []string{filepath.Join(notadir, "out0")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "staging output")
 }

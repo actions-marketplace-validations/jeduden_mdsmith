@@ -15,10 +15,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 
@@ -57,23 +58,38 @@ type Builder interface {
 }
 
 // CustomBuilder is the sole Builder implementation. It dispatches a
-// directive's recipe command via os/exec.
+// directive's recipe command via os/exec under a hermetic environment,
+// staging every output in a random-suffixed per-recipe dir, and
+// committing it with a symlink-safe atomic rename.
 type CustomBuilder struct {
 	recipes map[string]RecipeSpec
+	exec    ExecConfig
 }
 
-// NewCustomBuilder returns a CustomBuilder over the given recipe map.
+// NewCustomBuilder returns a CustomBuilder over the given recipe map. The
+// build executor runs every recipe under the compiled-default hermetic
+// environment (PATH /usr/bin:/bin, pass-through [HOME, LANG, LC_ALL]).
+// Use NewCustomBuilderExec to override those defaults from config.
 func NewCustomBuilder(recipes map[string]RecipeSpec) *CustomBuilder {
 	return &CustomBuilder{recipes: recipes}
+}
+
+// NewCustomBuilderExec returns a CustomBuilder whose recipes run under
+// the given exec configuration. An empty ExecConfig field falls back to
+// the compiled default at exec time.
+func NewCustomBuilderExec(recipes map[string]RecipeSpec, ec ExecConfig) *CustomBuilder {
+	return &CustomBuilder{recipes: recipes, exec: ec}
 }
 
 var _ Builder = (*CustomBuilder)(nil)
 
 // Build resolves the target's inputs and outputs against the project
-// root, stages every output in a per-target temp dir, runs the recipe
-// with the staged paths, and renames the staged files into place on
-// success. On any failure the temp dir is removed and no declared
-// output is touched.
+// root, stages every output in a random-suffixed per-recipe dir under
+// .mdsmith/build-staging/, runs the recipe under a hermetic environment
+// with that dir as its working directory, verifies the output
+// post-conditions, and commits the staged files with symlink-safe atomic
+// renames. On any failure before the commit phase the staging dir is
+// removed and no declared output is touched.
 func (b *CustomBuilder) Build(ctx context.Context, target Target) error {
 	spec, ok := b.recipes[target.Recipe]
 	if !ok {
@@ -84,41 +100,166 @@ func (b *CustomBuilder) Build(ctx context.Context, target Target) error {
 		return fmt.Errorf("recipe %q has an empty command", target.Recipe)
 	}
 
-	inputs, err := b.resolveInputs(target)
+	plan, cleanup, err := b.stage(target)
 	if err != nil {
 		return err
 	}
-	outputs, err := b.resolveOutputs(target)
+	defer cleanup()
+
+	argv := expandArgv(tokens, target.Params, plan.absInputs, plan.stagePaths)
+
+	before, err := snapshotDirs(plan.parents, snapshotCap)
 	if err != nil {
 		return err
 	}
 
-	stageDir, err := mkdirTempFn("", "mdsmith-build-")
-	if err != nil {
-		return fmt.Errorf("creating staging dir: %w", err)
-	}
-	defer os.RemoveAll(stageDir) //nolint:errcheck // best-effort cleanup
-
-	// Stage path per output: a flat file named by index, so a recipe
-	// writing to {outputs}[i] writes inside the staging dir.
-	stagePaths := make([]string, len(outputs))
-	for i := range outputs {
-		stagePaths[i] = filepath.Join(stageDir, fmt.Sprintf("out%d", i))
-	}
-
-	// Absolute input paths recomposed against root.
-	absInputs := make([]string, len(inputs))
-	for i, in := range inputs {
-		absInputs[i] = filepath.Join(target.Root, filepath.FromSlash(in))
-	}
-
-	argv := expandArgv(tokens, target.Params, absInputs, stagePaths)
-
-	if err := runRecipe(ctx, target.Root, argv); err != nil {
+	if err := runRecipe(ctx, runOpts{
+		argv:    argv,
+		dir:     plan.stageDir,
+		exec:    b.exec,
+		defExec: defaultExecConfig(),
+		timeout: timeoutFromContext(ctx),
+	}); err != nil {
 		return fmt.Errorf("recipe %q failed: %w", target.Recipe, err)
 	}
 
-	return commitOutputs(target.Root, outputs, stagePaths)
+	if err := verifyOutputsExist(plan.outputs, plan.stagePaths); err != nil {
+		return err
+	}
+	if err := verifyNoUndeclaredWrites(before, plan.parents, plan.finals); err != nil {
+		return err
+	}
+
+	return commitOutputs(plan.finals, plan.outputs, plan.stagePaths)
+}
+
+// buildPlan holds the resolved paths for one Build call: the recipe's
+// inputs/outputs (root-relative), their absolute forms, the per-output
+// staging paths, and the output parent dirs the post-condition snapshot
+// covers.
+type buildPlan struct {
+	outputs    []string // root-relative declared outputs
+	finals     []string // absolute destinations, one per output
+	stagePaths []string // absolute staging paths, one per output
+	absInputs  []string // absolute resolved inputs
+	parents    []string // de-duplicated output parent dirs
+	stageDir   string   // the per-recipe staging dir
+}
+
+// stage resolves the target's inputs and outputs, validates and creates
+// the per-recipe staging dir, and computes every absolute path Build
+// needs. It returns a cleanup closure that removes the staging dir; the
+// caller must defer it.
+func (b *CustomBuilder) stage(target Target) (buildPlan, func(), error) {
+	inputs, err := b.resolveInputs(target)
+	if err != nil {
+		return buildPlan{}, func() {}, err
+	}
+	outputs, err := b.resolveOutputs(target)
+	if err != nil {
+		return buildPlan{}, func() {}, err
+	}
+
+	stagingRoot, err := ensureStagingRoot(target.Root)
+	if err != nil {
+		return buildPlan{}, func() {}, err
+	}
+	stageDir, err := mkdirTempFn(stagingRoot, "recipe-")
+	if err != nil {
+		return buildPlan{}, func() {}, fmt.Errorf("creating staging dir: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(stageDir) }
+
+	plan := buildPlan{
+		outputs:    outputs,
+		finals:     make([]string, len(outputs)),
+		stagePaths: make([]string, len(outputs)),
+		absInputs:  make([]string, len(inputs)),
+		stageDir:   stageDir,
+	}
+	for i, rel := range outputs {
+		// A flat file named by index, so a recipe writing to {outputs}[i]
+		// writes inside the staging dir.
+		plan.stagePaths[i] = filepath.Join(stageDir, fmt.Sprintf("out%d", i))
+		plan.finals[i] = filepath.Join(target.Root, filepath.FromSlash(rel))
+	}
+	for i, in := range inputs {
+		plan.absInputs[i] = filepath.Join(target.Root, filepath.FromSlash(in))
+	}
+	plan.parents = outputParents(plan.finals)
+	return plan, cleanup, nil
+}
+
+// outputParents returns the de-duplicated set of parent directories of
+// the declared output paths — the scope the post-condition snapshot
+// covers.
+func outputParents(finals []string) []string {
+	seen := make(map[string]struct{}, len(finals))
+	var out []string
+	for _, f := range finals {
+		dir := filepath.Dir(f)
+		if _, dup := seen[dir]; dup {
+			continue
+		}
+		seen[dir] = struct{}{}
+		out = append(out, dir)
+	}
+	return out
+}
+
+// verifyOutputsExist confirms every declared output was produced in the
+// staging dir. A recipe that exits 0 without writing a declared output is
+// a build failure.
+func verifyOutputsExist(outputs, stagePaths []string) error {
+	for i, rel := range outputs {
+		if _, err := os.Lstat(stagePaths[i]); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("recipe exited 0 but did not produce declared output %q", rel)
+			}
+			return fmt.Errorf("staging output %q: %w", rel, err)
+		}
+	}
+	return nil
+}
+
+// verifyNoUndeclaredWrites re-snapshots the output parent dirs and fails
+// the build if any file outside the declared finals was added, removed,
+// or modified by the recipe.
+func verifyNoUndeclaredWrites(before map[string]fileState, parents, finals []string) error {
+	after, err := snapshotDirs(parents, snapshotCap)
+	if err != nil {
+		return err
+	}
+	declared := make(map[string]struct{}, len(finals))
+	for _, f := range finals {
+		declared[f] = struct{}{}
+	}
+	violations := diffSnapshots(before, after, declared)
+	if len(violations) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(violations))
+	for _, v := range violations {
+		names = append(names, fmt.Sprintf("%s (%s)", v.path, v.kind))
+	}
+	return fmt.Errorf(
+		"recipe wrote outside its declared outputs: %s", strings.Join(names, ", "),
+	)
+}
+
+// timeoutFromContext derives a positive timeout from the context's
+// deadline so runRecipe can run its own process-group kill timer. A
+// context with no deadline yields 0 (no timeout).
+func timeoutFromContext(ctx context.Context) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	d := time.Until(deadline)
+	if d <= 0 {
+		return time.Nanosecond // already past: fire the timeout path promptly
+	}
+	return d
 }
 
 // resolveInputs resolves every inputs: entry. A literal entry is
@@ -247,50 +388,60 @@ func substituteParams(tok string, params map[string]string) string {
 	return b.String()
 }
 
-// runRecipe execs argv with the project root as the working directory.
-// No shell is invoked: argv[0] is the program and argv[1:] its
-// arguments. The context bounds the run; on cancellation the process is
-// killed.
-func runRecipe(ctx context.Context, root string, argv []string) error {
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // argv is explicit; user-declared recipe
-	cmd.Dir = root
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("%w (timed out)", ctx.Err())
-		}
-		return err
-	}
-	return nil
-}
-
-// commitOutputs renames each staged file to its final in-root location,
-// creating parent directories as needed. A staged file that the recipe
-// did not write is an error (the recipe failed to produce a declared
-// output). On any rename failure the already-committed renames are not
-// rolled back here — the per-target temp dir guarantees nothing was
-// touched until this point, and the basic contract (plan 2606101548
-// hardens it further) treats a partial commit failure as a hard error.
-func commitOutputs(root string, outputs, stagePaths []string) error {
+// commitOutputs renames each staged file to its final destination,
+// creating parent directories as needed. Before each replace it Lstats
+// the destination and refuses to overwrite a symlink — a symlink there
+// could redirect the write outside the project tree. The replace is
+// atomic per file (os.Rename → rename(2) / MoveFileEx). Multi-output
+// commit is *not* transactional: if rename N+1 fails after N succeeded,
+// mdsmith reports the partial state and returns an error; the caller
+// removes the staging dir and exits FAIL, and because no cache entry was
+// written the next `fix` reruns the whole recipe.
+func commitOutputs(finals, outputs, stagePaths []string) error {
 	for i, rel := range outputs {
 		stage := stagePaths[i]
-		if _, err := os.Stat(stage); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("recipe did not produce declared output %q", rel)
-			}
-			return fmt.Errorf("staging output %q: %w", rel, err)
+		final := finals[i]
+		if err := refuseSymlinkDest(final, rel); err != nil {
+			return err
 		}
-		final := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
 			return fmt.Errorf("creating output dir for %q: %w", rel, err)
 		}
 		if err := os.Rename(stage, final); err != nil {
 			// Cross-device rename can fail; fall back to copy.
 			if cerr := copyFile(stage, final); cerr != nil {
+				if i > 0 {
+					return fmt.Errorf(
+						"writing output %q (outputs 0..%d already committed; rerun fix): %w",
+						rel, i-1, cerr,
+					)
+				}
 				return fmt.Errorf("writing output %q: %w", rel, cerr)
 			}
 		}
+	}
+	return nil
+}
+
+// refuseSymlinkDest fails when the output destination is an existing
+// symlink. Overwriting a symlink with os.Rename replaces the link itself,
+// but a copy fallback (cross-device) would follow it and write through
+// to the link target — possibly outside the project tree. Refusing up
+// front keeps both paths safe and gives a clear diagnostic.
+func refuseSymlinkDest(final, rel string) error {
+	info, err := os.Lstat(final)
+	if err != nil {
+		// ErrNotExist: nothing to replace. ENOTDIR: a parent component is a
+		// file — there is no symlink at the destination, and the subsequent
+		// MkdirAll reports the parent problem with a clearer message. Any
+		// other error is surfaced.
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return nil
+		}
+		return fmt.Errorf("inspecting output %q: %w", rel, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to replace output %q: it is a symlink", rel)
 	}
 	return nil
 }
