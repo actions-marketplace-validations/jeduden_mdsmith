@@ -27,12 +27,16 @@ func buildDirective(recipe, input, output string) string {
 
 // writeBuildRepo sets up an isolated repo with a .mdsmith.yml carrying
 // the given build.recipes YAML block (already indented under recipes:).
+// It also writes a matching .mdsmith.yml.trust marker so the build pass
+// trust gate is satisfied, mirroring a developer who has run
+// `mdsmith trust` on their clone.
 func writeBuildRepo(t *testing.T, recipesYAML string) string {
 	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
 	cfg := "rules: {}\nbuild:\n  recipes:\n" + recipesYAML
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"), []byte(cfg), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml.trust"), []byte(cfg), 0o600))
 	return dir
 }
 
@@ -271,8 +275,11 @@ func TestE2E_Build_RecipeCommandChangeRebuilds(t *testing.T) {
 	require.Equal(t, 0, code1)
 
 	// Edit the recipe command; the ActionID changes, so the target rebuilds.
+	// Editing the config invalidates the trust marker, so re-trust it (as a
+	// developer would via `mdsmith trust`) before the second build.
 	cfg := "rules: {}\nbuild:\n  recipes:\n    copy:\n      command: install {inputs} {outputs}\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"), []byte(cfg), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml.trust"), []byte(cfg), 0o600))
 	_, stderr2, code2 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
 	require.Equal(t, 0, code2, stderr2)
 	assert.Contains(t, stderr2, "OK", "a recipe command change must invalidate the target")

@@ -37,6 +37,17 @@ func buildPassCfg(recipesYAML string) *config.Config {
 	return cfg
 }
 
+// trustRoot writes a .mdsmith.yml file and an identical trust marker in
+// root so the build pass trust gate is satisfied. Unit tests that drive
+// runBuildPass to actually execute a recipe call this; the file bytes are
+// arbitrary (the gate only checks that config and marker match).
+func trustRoot(t *testing.T, root string) {
+	t.Helper()
+	body := []byte("rules: {}\nbuild:\n  recipes: {}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mdsmith.yml"), body, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mdsmith.yml.trust"), body, 0o600))
+}
+
 // buildPassDirective returns a minimal Markdown snippet with one
 // <?build?> directive referencing the given recipe and output filename.
 func buildPassDirective(recipe, output string) string {
@@ -158,6 +169,7 @@ func TestRunBuildPass_OK(t *testing.T) {
 		t.Skip("touch not available on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -178,6 +190,7 @@ func TestRunBuildPass_FAIL(t *testing.T) {
 		t.Skip("false not available on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    boom:\n      command: false\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -396,6 +409,7 @@ func TestRunBuildPass_RebuildNoCache_ExitsZero(t *testing.T) {
 		t.Skip("touch not available on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -417,6 +431,7 @@ func TestRunBuildPass_CheckStale_FreshTarget_ExitsZero(t *testing.T) {
 		t.Skip("touch not available on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -460,6 +475,7 @@ func TestRunBuildPass_SaveCacheError(t *testing.T) {
 		t.Skip("touch and chmod not reliable on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -487,6 +503,7 @@ func TestRunBuildPass_ReadErrorWithSuccessfulBuild_ExitsTwo(t *testing.T) {
 		t.Skip("touch not available on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 

@@ -143,10 +143,21 @@ func runBinary(t *testing.T, stdin string, args ...string) (stdout, stderr strin
 // runBinaryInDir runs the mdsmith binary with the given args in the given directory.
 func runBinaryInDir(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
+	return runBinaryInDirEnv(t, dir, stdin, nil, args...)
+}
+
+// runBinaryInDirEnv is runBinaryInDir with extra environment variables.
+// Each entry in extraEnv is a KEY=VALUE string appended after the
+// coverage-dir environment so it can override or add to the inherited
+// process environment.
+func runBinaryInDirEnv(
+	t *testing.T, dir, stdin string, extraEnv []string, args ...string,
+) (stdout, stderr string, exitCode int) {
+	t.Helper()
 
 	cmd := exec.Command(binaryPath, args...)
 	cmd.Dir = dir
-	cmd.Env = envWithCoverDir(coverDir)
+	cmd.Env = append(envWithCoverDir(coverDir), extraEnv...)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf

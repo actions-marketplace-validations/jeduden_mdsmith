@@ -51,6 +51,7 @@ Commands:
   kinds             Inspect declared kinds and resolve effective config per file
   init              Generate .mdsmith.yml (--from-markdownlint converts an existing config)
   lsp               Run the Language Server Protocol server on stdio
+  trust             Review the .mdsmith.yml diff and trust the build pass on this clone
   version           Print version and exit
 
 Global flags:
@@ -115,6 +116,8 @@ func dispatch(first string, args []string) int {
 		return runInit(args)
 	case "lsp":
 		return runLSP(args)
+	case "trust":
+		return runTrust(args)
 	case "version":
 		printVersion()
 		return 0
