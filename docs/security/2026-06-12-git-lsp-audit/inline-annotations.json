@@ -1,0 +1,42 @@
+[
+  {
+    "path": "cmd/mdsmith/mergedriver.go",
+    "line": 728,
+    "side": "RIGHT",
+    "severity": "low",
+    "id": "S001",
+    "body": "**[S001 · low] Hook-file write and remove lack a prior lstat guard**\n\nensurePreMergeCommitHook (mergedriver.go:728) calls os.ReadFile then os.WriteFile on hookPath without a prior os.Lstat guard. runPreMergeCommitUninstall (premergecommit.go:137,157) and runPreMergeCommitStatus (premergecommit.go:186) do the same. If .git/hooks/pre-merge-commit is a symlink, ReadFile/WriteFile/Remove all follow it. WriteGitattributes (githooks.go:703) applies lstatFile before every I/O and uses temp-then-rename so the write cannot follow a late-introduced symlink. The hook paths are missing that pattern.\n\n**Fix:** Apply the WriteGitattributes pattern: lstat before I/O, reject if not a regular file, and write via temp-then-rename instead of os.WriteFile. For Remove, lstat and reject if not a regular file before calling os.Remove."
+  },
+  {
+    "path": "cmd/mdsmith/mergedriver.go",
+    "line": 818,
+    "side": "RIGHT",
+    "severity": "low",
+    "id": "S003",
+    "body": "**[S003 · low] GOPATH fallback in resolveInstalledBinary can be steered by environment**\n\nresolveInstalledBinary falls back to $GOPATH/bin/mdsmith (via 'go env GOPATH', line 859) when os.Executable() and exec.LookPath both fail. If $GOPATH is attacker-controlled (poisoned CI, repo .envrc), the fallback resolves an attacker binary. That path is written into git config as the merge driver, so subsequent merges invoke it. The fallback is only reached in abnormal install scenarios where both primary lookups fail.\n\n**Fix:** Remove the GOPATH fallback; os.Executable() and LookPath cover all normal deployments. If the fallback is kept, verify the resolved path resides in the same directory as the running binary before accepting it."
+  },
+  {
+    "path": "cmd/mdsmith/mergedriver.go",
+    "line": 769,
+    "side": "RIGHT",
+    "severity": "info",
+    "id": "S002",
+    "body": "**[S002 · info] shellQuote correctly escapes the merge driver binary path for git config shell expansion**\n\nregisterMergeDriver builds 'shellQuote(exe) + \" merge-driver run %O %A %B %P\"' and writes it to git config. git later passes this to /bin/sh. shellQuote (lines 853-855) wraps the path in single quotes and escapes embedded single quotes as '\\'''. The escaping is correct for all representable POSIX paths. This is an informational confirmation that the load-bearing control has been reviewed.\n\n**Fix:** No action required. Consider a unit test that asserts shellQuote of a path with single quotes, spaces, and dollar signs produces a string that /bin/sh eval yields the original path."
+  },
+  {
+    "path": "internal/build/builder.go",
+    "line": 1,
+    "side": "RIGHT",
+    "severity": "info",
+    "id": "S004",
+    "body": "**[S004 · info] Build-pass exec paths confirmed CLI-only — no LSP or merge-driver regression**\n\ninternal/build exec.CommandContext calls (builder.go:254, hooks.go:90) run user-declared recipes and hooks. The package doc states the build pass is CLI-only and excluded from LSP and merge-driver paths. Verified: the only callers of NewCustomBuilder and RunHooks/RunAfterHooks are in cmd/mdsmith/buildpass.go. The LSP fix-on-save path calls sess.Fix (pkg/mdsmith Session), which does not import internal/build. The merge driver calls fixpkg.Source directly — also no exec. The threat-model baseline holds.\n\n**Fix:** No action required. Consider an integration test asserting the LSP Session.Fix call chain contains no internal/build import."
+  },
+  {
+    "path": "internal/lsp/server.go",
+    "line": 343,
+    "side": "RIGHT",
+    "severity": "info",
+    "id": "S005",
+    "body": "**[S005 · info] LSP server: no executeCommand handler, three-layer panic recovery confirmed**\n\nworkspace/executeCommand is absent from the dispatch table (server.go:548-559); unrecognised methods return method-not-found. Code actions (quickFix, source.fixAll.mdsmith) return WorkspaceEdit in-band via sess.Fix — in-process only. dispatchRaw (server.go:343) defers a recover() per frame, logging via window/logMessage and settling pending calls. Lint goroutines and fetchClientSettings have their own recover() guards. A rule panic on attacker content cannot crash or hang the server.\n\n**Fix:** No action required."
+  }
+]

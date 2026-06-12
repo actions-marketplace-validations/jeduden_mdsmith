@@ -1,0 +1,318 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "mdsmith-security-review",
+          "informationUri": "https://github.com/jeduden/mdsmith",
+          "rules": [
+            {
+              "id": "S001",
+              "name": "git",
+              "shortDescription": {
+                "text": "Hook-file write and remove lack a prior lstat guard"
+              },
+              "fullDescription": {
+                "text": "ensurePreMergeCommitHook (mergedriver.go:728) calls os.ReadFile then os.WriteFile on hookPath without a prior os.Lstat guard. runPreMergeCommitUninstall (premergecommit.go:137,157) and runPreMergeCommitStatus (premergecommit.go:186) do the same. If .git/hooks/pre-merge-commit is a symlink, ReadFile/WriteFile/Remove all follow it. WriteGitattributes (githooks.go:703) applies lstatFile before every I/O and uses temp-then-rename so the write cannot follow a late-introduced symlink. The hook paths are missing that pattern."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "security-severity": "3.0",
+                "tags": [
+                  "security",
+                  "CWE-363"
+                ]
+              }
+            },
+            {
+              "id": "S002",
+              "name": "git",
+              "shortDescription": {
+                "text": "shellQuote correctly escapes the merge driver binary path for git config shell expansion"
+              },
+              "fullDescription": {
+                "text": "registerMergeDriver builds 'shellQuote(exe) + \" merge-driver run %O %A %B %P\"' and writes it to git config. git later passes this to /bin/sh. shellQuote (lines 853-855) wraps the path in single quotes and escapes embedded single quotes as '\\'''. The escaping is correct for all representable POSIX paths. This is an informational confirmation that the load-bearing control has been reviewed."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "security-severity": "0.0",
+                "tags": [
+                  "security",
+                  "CWE-78"
+                ]
+              }
+            },
+            {
+              "id": "S003",
+              "name": "git",
+              "shortDescription": {
+                "text": "GOPATH fallback in resolveInstalledBinary can be steered by environment"
+              },
+              "fullDescription": {
+                "text": "resolveInstalledBinary falls back to $GOPATH/bin/mdsmith (via 'go env GOPATH', line 859) when os.Executable() and exec.LookPath both fail. If $GOPATH is attacker-controlled (poisoned CI, repo .envrc), the fallback resolves an attacker binary. That path is written into git config as the merge driver, so subsequent merges invoke it. The fallback is only reached in abnormal install scenarios where both primary lookups fail."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "security-severity": "3.0",
+                "tags": [
+                  "security",
+                  "CWE-426"
+                ]
+              }
+            },
+            {
+              "id": "S004",
+              "name": "git",
+              "shortDescription": {
+                "text": "Build-pass exec paths confirmed CLI-only — no LSP or merge-driver regression"
+              },
+              "fullDescription": {
+                "text": "internal/build exec.CommandContext calls (builder.go:254, hooks.go:90) run user-declared recipes and hooks. The package doc states the build pass is CLI-only and excluded from LSP and merge-driver paths. Verified: the only callers of NewCustomBuilder and RunHooks/RunAfterHooks are in cmd/mdsmith/buildpass.go. The LSP fix-on-save path calls sess.Fix (pkg/mdsmith Session), which does not import internal/build. The merge driver calls fixpkg.Source directly — also no exec. The threat-model baseline holds."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "security-severity": "0.0",
+                "tags": [
+                  "security"
+                ]
+              }
+            },
+            {
+              "id": "S005",
+              "name": "lsp",
+              "shortDescription": {
+                "text": "LSP server: no executeCommand handler, three-layer panic recovery confirmed"
+              },
+              "fullDescription": {
+                "text": "workspace/executeCommand is absent from the dispatch table (server.go:548-559); unrecognised methods return method-not-found. Code actions (quickFix, source.fixAll.mdsmith) return WorkspaceEdit in-band via sess.Fix — in-process only. dispatchRaw (server.go:343) defers a recover() per frame, logging via window/logMessage and settling pending calls. Lint goroutines and fetchClientSettings have their own recover() guards. A rule panic on attacker content cannot crash or hang the server."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "security-severity": "0.0",
+                "tags": [
+                  "security"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "S001",
+          "ruleIndex": 0,
+          "level": "note",
+          "message": {
+            "text": "Hook-file write and remove lack a prior lstat guard"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cmd/mdsmith/mergedriver.go"
+                },
+                "region": {
+                  "startLine": 728,
+                  "endLine": 748
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cmd/mdsmith/premergecommit.go"
+                },
+                "region": {
+                  "startLine": 137,
+                  "endLine": 137
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cmd/mdsmith/premergecommit.go"
+                },
+                "region": {
+                  "startLine": 157,
+                  "endLine": 157
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cmd/mdsmith/premergecommit.go"
+                },
+                "region": {
+                  "startLine": 186,
+                  "endLine": 186
+                }
+              }
+            }
+          ],
+          "properties": {
+            "confidence": "confirmed",
+            "severity": "low"
+          }
+        },
+        {
+          "ruleId": "S002",
+          "ruleIndex": 1,
+          "level": "note",
+          "message": {
+            "text": "shellQuote correctly escapes the merge driver binary path for git config shell expansion"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cmd/mdsmith/mergedriver.go"
+                },
+                "region": {
+                  "startLine": 769,
+                  "endLine": 779
+                }
+              }
+            }
+          ],
+          "properties": {
+            "confidence": "confirmed",
+            "severity": "info"
+          }
+        },
+        {
+          "ruleId": "S003",
+          "ruleIndex": 2,
+          "level": "note",
+          "message": {
+            "text": "GOPATH fallback in resolveInstalledBinary can be steered by environment"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cmd/mdsmith/mergedriver.go"
+                },
+                "region": {
+                  "startLine": 818,
+                  "endLine": 821
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cmd/mdsmith/mergedriver.go"
+                },
+                "region": {
+                  "startLine": 859,
+                  "endLine": 859
+                }
+              }
+            }
+          ],
+          "properties": {
+            "confidence": "tentative",
+            "severity": "low"
+          }
+        },
+        {
+          "ruleId": "S004",
+          "ruleIndex": 3,
+          "level": "note",
+          "message": {
+            "text": "Build-pass exec paths confirmed CLI-only — no LSP or merge-driver regression"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/build/builder.go"
+                },
+                "region": {
+                  "startLine": 1,
+                  "endLine": 9
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/build/builder.go"
+                },
+                "region": {
+                  "startLine": 254,
+                  "endLine": 254
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/build/hooks.go"
+                },
+                "region": {
+                  "startLine": 90,
+                  "endLine": 90
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cmd/mdsmith/buildpass.go"
+                },
+                "region": {
+                  "startLine": 23,
+                  "endLine": 23
+                }
+              }
+            }
+          ],
+          "properties": {
+            "confidence": "confirmed",
+            "severity": "info"
+          }
+        },
+        {
+          "ruleId": "S005",
+          "ruleIndex": 4,
+          "level": "note",
+          "message": {
+            "text": "LSP server: no executeCommand handler, three-layer panic recovery confirmed"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/lsp/server.go"
+                },
+                "region": {
+                  "startLine": 343,
+                  "endLine": 358
+                }
+              }
+            }
+          ],
+          "properties": {
+            "confidence": "confirmed",
+            "severity": "info"
+          }
+        }
+      ]
+    }
+  ]
+}

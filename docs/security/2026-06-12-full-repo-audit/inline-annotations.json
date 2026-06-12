@@ -1,0 +1,50 @@
+[
+  {
+    "path": ".github/workflows/release.yml",
+    "line": 1015,
+    "side": "RIGHT",
+    "severity": "medium",
+    "id": "S001",
+    "body": "**[S001 · medium] komac binary downloaded and executed without SHA256 checksum verification**\n\nThe winget-submit job downloads the komac binary from GitHub Releases with curl and immediately marks it executable and runs it, with WINGET_PR_TOKEN in scope, without any SHA256 or signature check after the download. Every other binary download in the repository (tinygo in ci.yml:563-568, VHS/ttyd/ffmpeg in record-demo.yml, mdsmith itself in setup-mdsmith-pinned-version/action.yml) has a hardcoded SHA256 verified with `sha256sum -c` before execution. The winget-submit job runs inside the `release` environment, which requires human approval, but the binary is fetched and executed within that environment's privileged step.\n\n**Fix:** Add a hardcoded SHA256 and a `sha256sum -c` check immediately after the curl line, matching the pattern used by tinygo in ci.yml:563-568: `echo \"<sha256>  /usr/local/bin/komac\" | sha256sum -c`. Optionally cosign-verify the release asset as well."
+  },
+  {
+    "path": "cmd/mdsmith/buildpass.go",
+    "line": 50,
+    "side": "RIGHT",
+    "severity": "low",
+    "id": "S002",
+    "body": "**[S002 · low] MDS040 (recipe-safety) gate passes when recipe-safety is disabled by attacker-controlled config**\n\ncheckMDS040Gate (buildpass.go:50-84) returns true (gate open, build pass proceeds) when `recipe-safety` is absent from cfg.Rules or is disabled: `if !ok || !rc.Enabled { return true }`. An attacker-controlled .mdsmith.yml can set `recipe-safety: false`, causing the gate to open with no validation of the recipe commands. The gate is the sole runtime check before executing recipes. When disabled, recipes with shell interpreters (sh, bash, etc.) — normally blocked by MDS040 — will execute via exec.CommandContext during `mdsmith fix`. The build pass is explicitly CLI-only (not LSP/WASM/merge-driver/hook), so this requires the user to run `mdsmith fix` on an untrusted repo. The pre-merge-commit hook passes --no-build, so git merge is not affected.\n\n**Fix:** Option A: make the MDS040 gate non-bypassable — when recipes are defined, always run the shell-safety check regardless of the recipe-safety rule toggle. Option B: document the build pass behavior prominently in a user-facing warning when recipes are present in an unfamiliar repo."
+  },
+  {
+    "path": "cmd/mdsmith/mergedriver.go",
+    "line": 728,
+    "side": "RIGHT",
+    "severity": "low",
+    "id": "S003",
+    "body": "**[S003 · low] Hook-file write and remove lack a prior lstat guard — symlink redirects write to arbitrary path**\n\nensurePreMergeCommitHook (mergedriver.go:728) calls os.ReadFile then os.WriteFile on hookPath without a prior os.Lstat guard that rejects symlinks. runPreMergeCommitUninstall (premergecommit.go:137,157) and runPreMergeCommitStatus (premergecommit.go:186) do the same. If .git/hooks/pre-merge-commit is a symlink placed by a hostile repo, ReadFile follows it to read arbitrary content, and WriteFile overwrites the symlink target. WriteGitattributes (internal/githooks/githooks.go:703) applies an lstatFile guard before every I/O and uses temp-then-rename — the hook paths are missing that pattern. Triggered only when the user explicitly runs `mdsmith merge-driver install` or `mdsmith pre-merge-commit install`, not during a routine `git merge`.\n\n**Fix:** Apply the WriteGitattributes pattern: call os.Lstat before every read/write/remove on hookPath; if the path exists and is not a regular file, return an error. For WriteFile, use a temp-file-then-rename approach as WriteGitattributes does."
+  },
+  {
+    "path": "cmd/mdsmith/mergedriver.go",
+    "line": 818,
+    "side": "RIGHT",
+    "severity": "low",
+    "id": "S004",
+    "body": "**[S004 · low] GOPATH fallback in resolveInstalledBinary can be steered by attacker-controlled environment**\n\nresolveInstalledBinary (mergedriver.go:797) falls back to $GOPATH/bin/mdsmith (via `go env GOPATH`) when both os.Executable() and exec.LookPath('mdsmith') fail. If $GOPATH is attacker-controlled — via a poisoned CI environment, a hostile `.envrc`, or a compromised tool that sets $GOPATH — the fallback resolves and registers a malicious binary as the git merge driver. The path written to git config is then used on every future `git merge` in the repo. The fallback is reached only in abnormal install scenarios where both primary lookups fail.\n\n**Fix:** Remove the GOPATH fallback entirely; os.Executable() and exec.LookPath cover all practical deployment scenarios. If the fallback must remain, validate that the resolved path's directory matches the directory of os.Executable() before accepting it."
+  },
+  {
+    "path": ".claude/skills/mdsmith-security-review/references/threat-model.md",
+    "line": 29,
+    "side": "RIGHT",
+    "severity": "info",
+    "id": "S006",
+    "body": "**[S006 · info] Threat model §0 baseline statement 'recipes are not executed by mdsmith' is incorrect**\n\nThe §0 baseline states 'Recipes are not executed by mdsmith. `<?build?>` renders a body template; the recipe command is run by external tooling (CI/Make), never by mdsmith.' This is incorrect for current code. Recipes are executed by `mdsmith fix` CLI via exec.CommandContext in internal/build/builder.go:254 and hooks.go:90. The execution IS intentionally constrained: CLI-only (not in LSP, WASM, merge driver, or pre-merge-commit hook — which passes --no-build). Future reviewers relying on the §0 baseline will waste time looking for a 'regression' that is actually the documented design.\n\n**Fix:** Update the §0 baseline to: 'Recipes are executed by `mdsmith fix` CLI via exec.Command (no shell). They are NOT executed in the LSP, WASM bindings, merge driver, or pre-merge-commit hook (--no-build). The fix is that mdsmith does execute recipes in the CLI — the constraint is that this does not happen in zero-interaction paths.'"
+  },
+  {
+    "path": "editors/obsidian/src/main.ts",
+    "line": 210,
+    "side": "RIGHT",
+    "severity": "info",
+    "id": "S005",
+    "body": "**[S005 · info] Obsidian plugin configPath passed to vault adapter without path-traversal validation**\n\nloadConfigYAML() passes the user-configured configPath directly to this.app.vault.adapter.read(p) without normalizing or checking for `..` traversal segments. The plugin relies on Obsidian's DataAdapter to confine reads to the vault root. Obsidian's desktop DataAdapter does internally join the vault root with the supplied path, which resolves traversal. However, no independent validation is present in the plugin, so a path like `../../etc/passwd` would reach the adapter's own normalization rather than being caught early.\n\n**Fix:** Add a simple guard before the adapter.read: reject paths that begin with `..` or are absolute, using `!path.normalize(p).startsWith('..')` and `!path.isAbsolute(p)`. This makes the constraint explicit and independent of the adapter."
+  }
+]

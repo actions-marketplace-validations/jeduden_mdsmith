@@ -26,9 +26,11 @@ These are the load-bearing security properties of mdsmith's design.
 A review's first job is to verify each still holds; a change that
 breaks one is likely your highest-severity finding.
 
-- **Recipes are not executed by mdsmith.** `<?build?>` renders a
-  body *template*; the recipe command is run by external tooling
-  (CI/Make), never by mdsmith. → confirm no new `exec` path.
+- **Recipes are executed by `mdsmith fix` CLI only** via
+  `exec.Command` (no shell, explicit argv). They are NOT executed
+  in the LSP, WASM bindings, merge driver, or pre-merge-commit hook
+  (which passes `--no-build`). → confirm no exec in zero-interaction
+  paths (LSP fix-on-save, merge driver, editor open).
 - **Recipe commands come from config, not documents.** The directive
   supplies a recipe *name* and params; the command lives in
   `build.recipes`. → confirm document content can't supply a command.
