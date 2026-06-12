@@ -91,12 +91,18 @@ func TestRunMergeDriverInstall_RegisterError(t *testing.T) {
 	dir := t.TempDir()
 	initTestRepo(t, dir)
 	orig := executableFunc
-	executableFunc = func() (string, error) { return "", errors.New("no executable") }
+	// Return a temp-dir path so resolveInstalledBinary treats it as transient.
+	executableFunc = func() (string, error) {
+		return filepath.Join(os.TempDir(), "go-run-fake", "mdsmith"), nil
+	}
 	t.Cleanup(func() { executableFunc = orig })
+	// Restrict PATH to only git so LookPath("mdsmith") and goEnvPath (which
+	// needs "go") both fail, while git rev-parse still resolves.
+	pathWithOnlyGit(t)
 	t.Chdir(dir)
 	captureStderr(func() {
 		// In a git repo, but registerMergeDriver fails because the binary
-		// cannot be located.
+		// cannot be located via any fallback.
 		assert.Equal(t, 2, runMergeDriverInstall(nil))
 	})
 }
