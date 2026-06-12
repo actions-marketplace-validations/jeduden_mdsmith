@@ -1,7 +1,7 @@
 ---
 id: 2606120633
 title: Wire PGO into the release build without a committed profile
-status: "🔲"
+status: "🔳"
 summary: >-
   A committed cmd/mdsmith/default.pgo burdened every
   merge with a repo-specific binary artifact and was

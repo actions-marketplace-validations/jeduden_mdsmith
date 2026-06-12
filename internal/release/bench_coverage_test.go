@@ -224,10 +224,15 @@ func TestToolkit_copyMarkdownTree(t *testing.T) {
 		assert.True(t, os.IsNotExist(err), "non-markdown files are skipped")
 	})
 
-	t.Run("missing source root surfaces a walk error", func(t *testing.T) {
-		err := tk.copyMarkdownTree(filepath.Join(t.TempDir(), "absent"),
-			filepath.Join(t.TempDir(), "corpus"))
-		require.Error(t, err)
+	t.Run("missing source root copies nothing", func(t *testing.T) {
+		// An absent srcRoot is a no-op: in production checkoutPinned
+		// fetched it first, so an absent tree only happens when the
+		// corpus was never cloned (the hermetic PGO/bench tests).
+		dst := filepath.Join(t.TempDir(), "corpus")
+		err := tk.copyMarkdownTree(filepath.Join(t.TempDir(), "absent"), dst)
+		require.NoError(t, err)
+		_, statErr := os.Stat(dst)
+		assert.True(t, os.IsNotExist(statErr), "nothing is written for an absent source")
 	})
 
 	t.Run("copyInto failure propagates", func(t *testing.T) {
