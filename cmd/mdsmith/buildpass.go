@@ -164,6 +164,10 @@ func runBuildPass(
 		result := buildexec.RunHooks(ctx, before, root, w)
 		cancel()
 		if result != nil {
+			// Collection errors (len(errs)>0) take priority: always exit 2.
+			if len(errs) > 0 {
+				return 2
+			}
 			return result.ExitCode
 		}
 	}

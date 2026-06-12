@@ -99,16 +99,18 @@ func validateHook(listName string, idx int, hook HookCfg) error {
 	if hook.Command == "" {
 		return fmt.Errorf("%s: command must not be empty", label)
 	}
-	// Validate param values.
-	for k, v := range hook.Params {
-		if err := validateHookParamValue(label, k, v); err != nil {
+	// Validate param values in sorted key order for deterministic errors.
+	paramKeys := make([]string, 0, len(hook.Params))
+	for k := range hook.Params {
+		paramKeys = append(paramKeys, k)
+	}
+	sort.Strings(paramKeys)
+	allowed := make(map[string]bool, len(hook.Params))
+	for _, k := range paramKeys {
+		allowed[k] = true
+		if err := validateHookParamValue(label, k, hook.Params[k]); err != nil {
 			return err
 		}
-	}
-	// Build allowed set from params map keys.
-	allowed := make(map[string]bool, len(hook.Params))
-	for k := range hook.Params {
-		allowed[k] = true
 	}
 	// Validate command placeholders: hooks may not reference {inputs} or
 	// {outputs} — those are directive-context collective placeholders.
