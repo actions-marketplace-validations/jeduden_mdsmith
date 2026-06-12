@@ -116,8 +116,9 @@ func (t *Toolkit) PGO(root, workdir string) error {
 	}
 
 	out := filepath.Join(root, pgoDefaultProfileRel)
-	if err := t.fs.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", filepath.Dir(out), err)
+	outDir := filepath.Dir(out)
+	if err := t.fs.MkdirAll(outDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", outDir, err)
 	}
 	fmt.Printf("pgo: merging %d profiles into %s\n", len(profs), out)
 	if err := t.runner.RunCommand(root, "go", pgoMergeArgs(mdsmithBin, out, profs)...); err != nil {

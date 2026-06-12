@@ -129,13 +129,12 @@ type pgoFakeRunner struct{}
 func (r *pgoFakeRunner) RunCommand(dir, name string, args ...string) error {
 	switch {
 	case name == "go" && len(args) >= 4 && args[0] == "build":
-		// go build ... -o <bin> ... — scan for the -o value
-		for i, a := range args {
-			if a == "-o" && i+1 < len(args) {
-				return os.WriteFile(args[i+1], []byte("BIN"), 0o755)
-			}
+		// go build -pgo=off -o <bin> ./cmd/mdsmith — pin the exact shape
+		// so removing -pgo=off from pgo.go is caught as a test failure.
+		if len(args) < 5 || args[1] != "-pgo=off" || args[2] != "-o" {
+			return fmt.Errorf("unexpected go build args: %v", args)
 		}
-		return fmt.Errorf("no -o flag in go build args: %v", args)
+		return os.WriteFile(args[3], []byte("BIN"), 0o755)
 	case name == "go" && len(args) >= 2 && args[0] == "tool" && args[1] == "pprof":
 		out := pgoOutputFlag(args)
 		return os.WriteFile(out, []byte("MERGED-PGO"), 0o644)
