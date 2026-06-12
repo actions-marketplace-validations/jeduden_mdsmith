@@ -269,6 +269,24 @@ func (r *pgoMergeErrRunner) RunCommand(dir, name string, args ...string) error {
 	}
 }
 
+// TestPGOMkdirOutputDirFails covers the MkdirAll error path for
+// outDir (cmd/mdsmith/) inside PGO: pre-creating root/cmd as a
+// regular file makes MkdirAll fail with ENOTDIR so the merge step
+// is never reached.
+func TestPGOMkdirOutputDirFails(t *testing.T) {
+	root := t.TempDir()
+	workdir := t.TempDir()
+	stageMinimalRepo(t, root)
+
+	// Block MkdirAll(root/cmd/mdsmith): root/cmd exists as a file,
+	// so creating a sub-directory under it fails with ENOTDIR on any OS.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "cmd"), []byte("x"), 0o644))
+
+	err := NewWithDeps(osFS{}, &pgoFakeRunner{}).PGO(root, workdir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mkdir")
+}
+
 // TestPGOBuildCorporaFails covers the buildCorpora error path: a
 // non-git root causes git ls-files to fail, which buildCorpora wraps
 // and returns to PGO.

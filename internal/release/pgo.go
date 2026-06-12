@@ -138,9 +138,7 @@ func (t *Toolkit) PGO(root, workdir string) error {
 func (t *Toolkit) collectProfile(mdsmithBin string, r pgoProfileRun) error {
 	fmt.Printf("pgo: profiling %v -> %s\n", r.args, r.prof)
 	prev, had := os.LookupEnv("MDSMITH_CPUPROFILE")
-	if err := os.Setenv("MDSMITH_CPUPROFILE", r.prof); err != nil {
-		return fmt.Errorf("set MDSMITH_CPUPROFILE: %w", err)
-	}
+	_ = os.Setenv("MDSMITH_CPUPROFILE", r.prof)
 	defer func() {
 		if had {
 			_ = os.Setenv("MDSMITH_CPUPROFILE", prev)
