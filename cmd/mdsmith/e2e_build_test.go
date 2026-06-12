@@ -467,13 +467,16 @@ func TestE2E_Check_RunsNoRecipe(t *testing.T) {
 
 // --- Plan 104: build lifecycle hooks ---
 
-// writeBuildRepoWithHooks sets up a repo with recipes and hooks.
+// writeBuildRepoWithHooks sets up a repo with recipes and hooks. It also
+// writes a matching .mdsmith.yml.trust marker so the build pass trust gate
+// is satisfied, mirroring a developer who has run `mdsmith trust`.
 func writeBuildRepoWithHooks(t *testing.T, recipesYAML, hooksYAML string) string {
 	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
 	cfg := "rules: {}\nbuild:\n  recipes:\n" + recipesYAML + "\n  hooks:\n" + hooksYAML
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"), []byte(cfg), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml.trust"), []byte(cfg), 0o600))
 	return dir
 }
 
