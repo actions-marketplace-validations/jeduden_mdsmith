@@ -505,10 +505,22 @@ func buildExecConfig(cfg *config.Config) buildexec.ExecConfig {
 }
 
 // envIsSet reports whether the named environment variable is set to a
-// non-empty value. It is the production environment lookup passed to the
-// trust gate.
+// truthy value. It is the production environment lookup passed to the
+// trust gate, so an explicit MDSMITH_TRUST_BUILD=0 (or false/no/off)
+// does NOT grant trust — only an affirmative value does. This avoids the
+// footgun where a user who sets the variable to a disabling value still
+// has the build pass run.
 func envIsSet(name string) bool {
-	return os.Getenv(name) != ""
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return false
+	}
+	switch strings.ToLower(v) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 // collectBuildTargets parses each file, walks its <?build?> directives,

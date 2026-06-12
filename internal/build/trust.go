@@ -24,9 +24,12 @@ const defaultConfigFileName = ".mdsmith.yml"
 // repository.
 const trustMarkerSuffix = ".trust"
 
-// envTrustBuild, when set to a non-empty value, grants build trust
+// envTrustBuild names the environment variable that grants build trust
 // without a marker file. CI environments are presumed sandboxed and opt
-// in this way rather than committing a marker.
+// in this way rather than committing a marker. Whether a given value
+// counts as "set" is decided by the envLookup callback passed to
+// CheckTrust — the production lookup treats 0/false/no/off as not set, so
+// an explicit disabling value leaves the gate in force.
 const envTrustBuild = "MDSMITH_TRUST_BUILD"
 
 // TrustResult is the verdict of the trust gate.
@@ -59,11 +62,12 @@ func TrustMarkerPath(configPath string) string {
 
 // CheckTrust decides whether the build pass may run recipes for the
 // config at configPath. The envLookup callback reports whether a named
-// environment variable is set to a non-empty value; production passes a
-// closure over os.Getenv so tests can inject a controlled environment.
+// environment variable should count as set; production passes a closure
+// that treats 0/false/no/off as not set, so a disabling value leaves the
+// gate in force. Tests inject a controlled lookup.
 //
 // Trust is granted when either:
-//   - MDSMITH_TRUST_BUILD is set (ViaEnv), or
+//   - envLookup(MDSMITH_TRUST_BUILD) is true (ViaEnv), or
 //   - the marker <configPath>.trust exists and its bytes are identical to
 //     the current config.
 //

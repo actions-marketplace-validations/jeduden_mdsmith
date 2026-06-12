@@ -57,21 +57,27 @@ func TestDiffSnapshots_DetectsModifiedContent(t *testing.T) {
 	root := t.TempDir()
 	other := filepath.Join(root, "other.txt")
 	require.NoError(t, os.WriteFile(other, []byte("aaaaa"), 0o644))
+	// Pin the mtime BEFORE the before-snapshot so that, after a same-size
+	// rewrite and an identical Chtimes, the after-file's cheap fields match
+	// the before-snapshot. That makes statFile hash the after-file too, so
+	// the verdict comes from two genuinely-computed content hashes — the
+	// content-preserving-rewrite path, not a zero-vs-real hash artifact.
+	fixedTime := time.Unix(1700000000, 0)
+	require.NoError(t, os.Chtimes(other, fixedTime, fixedTime))
 
 	before, err := snapshotDirs([]string{root}, snapshotCap, nil)
 	require.NoError(t, err)
-	// Same size, different content, with mtime reset to match so only the
-	// eagerly-captured content hash can distinguish the two snapshots —
-	// exercising the content-preserving-rewrite path.
-	fixedTime := time.Unix(1700000000, 0)
+	require.NotEqual(t, [32]byte{}, before[other].hash, "before hashes eagerly")
+
+	// Same size, different content, same mtime.
 	require.NoError(t, os.WriteFile(other, []byte("bbbbb"), 0o644))
 	require.NoError(t, os.Chtimes(other, fixedTime, fixedTime))
 	after, err := snapshotDirs([]string{root}, snapshotCap, before)
 	require.NoError(t, err)
-	// Force the before-state mtime to match the after-state mtime.
-	bs := before[other]
-	bs.mtime = after[other].mtime
-	before[other] = bs
+	// The after-file's cheap fields matched the before snapshot, so it was
+	// hashed; the two real hashes differ.
+	require.NotEqual(t, [32]byte{}, after[other].hash, "after hashes on cheap-field match")
+	require.NotEqual(t, before[other].hash, after[other].hash)
 
 	violations := diffSnapshots(before, after, map[string]struct{}{})
 	require.Len(t, violations, 1)

@@ -58,6 +58,22 @@ func TestE2E_Trust_EnvVarIsAlternateSource(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dir, "dst.txt"))
 }
 
+func TestE2E_Trust_EnvVarDisablingValueDoesNotGrant(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp not available on Windows")
+	}
+	dir := writeUntrustedBuildRepo(t, "    copy:\n      command: cp {inputs} {outputs}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("hi"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	// MDSMITH_TRUST_BUILD=0 must NOT grant trust.
+	_, stderr, code := runBinaryInDirEnv(t, dir, "", []string{"MDSMITH_TRUST_BUILD=0"},
+		"fix", "--no-color", "--build-only", "doc.md")
+	assert.Equal(t, 2, code, "a disabling value leaves the gate in force: %s", stderr)
+	assert.Contains(t, stderr, "not trusted")
+	assert.NoFileExists(t, filepath.Join(dir, "dst.txt"))
+}
+
 func TestE2E_Trust_NoBuildSkipsGate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("cp not available on Windows")

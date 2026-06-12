@@ -343,10 +343,12 @@ variable instead of a committed marker:
 MDSMITH_TRUST_BUILD=1 mdsmith fix .
 ```
 
-When `MDSMITH_TRUST_BUILD` is set to any non-empty value the gate is
-satisfied without a marker file. The variable is consumed by the gate
-only; it is **not** passed through to recipes (see the hermetic
-environment below). Set it only on a runner you control.
+When `MDSMITH_TRUST_BUILD` is set to an affirmative value (anything other
+than `0`, `false`, `no`, or `off`) the gate is satisfied without a marker
+file; setting it to a disabling value leaves the gate in force. The
+variable is consumed by the gate only; it is **not** passed through to
+recipes (see the hermetic environment below). Set it only on a runner you
+control.
 
 ### Hermetic execution environment
 

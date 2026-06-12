@@ -37,6 +37,23 @@ func buildPassCfg(recipesYAML string) *config.Config {
 	return cfg
 }
 
+func TestEnvIsSet_Truthiness(t *testing.T) {
+	const name = "MDSMITH_TEST_TRUST_FLAG"
+	truthy := []string{"1", "true", "yes", "on", "anything", " 1 ", "TRUE"}
+	falsy := []string{"", "0", "false", "no", "off", "FALSE", " 0 ", "  "}
+	for _, v := range truthy {
+		t.Setenv(name, v)
+		assert.True(t, envIsSet(name), "value %q should grant", v)
+	}
+	for _, v := range falsy {
+		t.Setenv(name, v)
+		assert.False(t, envIsSet(name), "value %q should not grant", v)
+	}
+	// Unset is falsy.
+	require.NoError(t, os.Unsetenv(name))
+	assert.False(t, envIsSet(name))
+}
+
 // trustRoot writes a .mdsmith.yml file and an identical trust marker in
 // root so the build pass trust gate is satisfied. Unit tests that drive
 // runBuildPass to actually execute a recipe call this; the file bytes are
