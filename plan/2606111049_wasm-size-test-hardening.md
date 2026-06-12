@@ -1,7 +1,7 @@
 ---
 id: 2606111049
 title: Harden WASM size test to match production build
-status: "🔳"
+status: "✅"
 summary: >-
   size_test.go builds without -no-debug, so it
   tests a larger artifact than ships. Add
@@ -100,6 +100,6 @@ const (
       a gzip-byte limit
 - [x] `maxGzipBytes` is above the current
       production gzip size with ≥10% headroom
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run` reports no
       issues

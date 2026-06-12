@@ -44,6 +44,11 @@ var shellOperators = []string{
 // (plan 2606101546) substitutes {outputs}/{inputs} for these lists.
 var reservedParamNames = []string{"inputs", "outputs"}
 
+// bodyTemplateReserved holds placeholder names that are only available in
+// body-template, not in recipe commands or hook commands. Mirrors
+// config.reservedParams in internal/config/build.go.
+var bodyTemplateReserved = map[string]bool{"alt": true}
+
 // placeholderRe matches a {name} placeholder where name is an identifier
 // ([A-Za-z_][A-Za-z0-9_]*), consistent with config validation.
 var placeholderRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -59,10 +64,19 @@ type recipe struct {
 	Optional []string
 }
 
+// hook holds the parsed fields for one before/after hook entry.
+type hook struct {
+	Command string
+	Params  map[string]string
+	Name    string
+}
+
 // Rule implements MDS040 (recipe-safety).
 type Rule struct {
-	Recipes    map[string]recipe
-	ConfigPath string
+	Recipes     map[string]recipe
+	ConfigPath  string
+	HooksBefore []hook
+	HooksAfter  []hook
 }
 
 // ID implements rule.Rule.
@@ -98,11 +112,70 @@ func (r *Rule) ApplySettings(settings map[string]any) error {
 				return fmt.Errorf("recipe-safety: config-path must be a string, got %T", v)
 			}
 			r.ConfigPath = s
+		case "hooks-before":
+			parsed, err := parseHooksSettings(v)
+			if err != nil {
+				return fmt.Errorf("recipe-safety: hooks-before: %w", err)
+			}
+			r.HooksBefore = parsed
+		case "hooks-after":
+			parsed, err := parseHooksSettings(v)
+			if err != nil {
+				return fmt.Errorf("recipe-safety: hooks-after: %w", err)
+			}
+			r.HooksAfter = parsed
 		default:
 			return fmt.Errorf("recipe-safety: unknown setting %q", k)
 		}
 	}
 	return nil
+}
+
+// parseHooksSettings deserialises a hooks list from []any.
+func parseHooksSettings(v any) ([]hook, error) {
+	rawSlice, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("must be a list, got %T", v)
+	}
+	out := make([]hook, 0, len(rawSlice))
+	for i, rawHook := range rawSlice {
+		hm, ok := rawHook.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("hook[%d] must be a map, got %T", i, rawHook)
+		}
+		rawCmd, ok := hm["command"]
+		if !ok {
+			return nil, fmt.Errorf("hook[%d]: missing required 'command' field", i)
+		}
+		cmd, ok := rawCmd.(string)
+		if !ok {
+			return nil, fmt.Errorf("hook[%d]: command must be a string, got %T", i, rawCmd)
+		}
+		h := hook{Command: cmd}
+		if rawName, hasName := hm["name"]; hasName {
+			name, ok := rawName.(string)
+			if !ok {
+				return nil, fmt.Errorf("hook[%d]: name must be a string, got %T", i, rawName)
+			}
+			h.Name = name
+		}
+		if rawParams, hasParams := hm["params"]; hasParams {
+			params, ok := rawParams.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("hook[%d]: params must be a map, got %T", i, rawParams)
+			}
+			h.Params = make(map[string]string, len(params))
+			for pk, pv := range params {
+				ps, ok := pv.(string)
+				if !ok {
+					return nil, fmt.Errorf("hook[%d]: param %q must be a string, got %T", i, pk, pv)
+				}
+				h.Params[pk] = ps
+			}
+		}
+		out = append(out, h)
+	}
+	return out, nil
 }
 
 // parseRecipesSettings deserialises the recipes map from map[string]any.
@@ -178,15 +251,24 @@ func toStringSlice(v any) ([]string, error) {
 // In production mode (ConfigPath != ""), Check only runs when f.Path
 // matches ConfigPath — the runner calls it once against a synthetic
 // lint.File for the config file. In fixture/test mode (ConfigPath == ""),
-// it always validates the configured recipes.
+// it always validates the configured recipes and hooks.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
-	if len(r.Recipes) == 0 {
+	hasRecipes := len(r.Recipes) > 0
+	hasHooks := len(r.HooksBefore) > 0 || len(r.HooksAfter) > 0
+	if !hasRecipes && !hasHooks {
 		return nil
 	}
 	if r.ConfigPath != "" && f.Path != r.ConfigPath {
 		return nil
 	}
-	return r.validateRecipes(f.Path)
+	var diags []lint.Diagnostic
+	if hasRecipes {
+		diags = append(diags, r.validateRecipes(f.Path)...)
+	}
+	if hasHooks {
+		diags = append(diags, r.validateHooks(f.Path)...)
+	}
+	return diags
 }
 
 // validateRecipes runs all six checks on every recipe and returns diagnostics.
@@ -201,6 +283,150 @@ func (r *Rule) validateRecipes(filePath string) []lint.Diagnostic {
 	diags := make([]lint.Diagnostic, 0, len(names))
 	for _, name := range names {
 		diags = append(diags, r.checkRecipe(filePath, name, r.Recipes[name])...)
+	}
+	return diags
+}
+
+// validateHooks runs all safety checks on both hook lists.
+func (r *Rule) validateHooks(filePath string) []lint.Diagnostic {
+	diags := make([]lint.Diagnostic, 0, len(r.HooksBefore)+len(r.HooksAfter))
+	for i, h := range r.HooksBefore {
+		label := hookLabel("before", i, h.Name)
+		diags = append(diags, r.checkHook(filePath, label, h)...)
+	}
+	for i, h := range r.HooksAfter {
+		label := hookLabel("after", i, h.Name)
+		diags = append(diags, r.checkHook(filePath, label, h)...)
+	}
+	return diags
+}
+
+// hookLabel returns a display label for a hook entry: the name if set,
+// else "before[i]" / "after[i]".
+func hookLabel(listName string, idx int, name string) string {
+	if name != "" {
+		return name
+	}
+	return fmt.Sprintf("%s[%d]", listName, idx)
+}
+
+// checkHook runs the same token-level safety checks as checkRecipe, but
+// adapted for hooks: no declared params.required/optional — the params map
+// keys are the allowed set. {inputs} and {outputs} are forbidden entirely
+// (no directive context).
+func (r *Rule) checkHook(filePath, label string, h hook) []lint.Diagnostic {
+	tokens := strings.Fields(h.Command)
+	if len(tokens) == 0 {
+		return []lint.Diagnostic{r.diag(filePath, lint.Error,
+			fmt.Sprintf("hook %q: command must not be empty", label))}
+	}
+	diags := r.checkHookExecutable(filePath, label, tokens[0])
+	diags = append(diags, r.checkHookTokens(filePath, label, tokens, h.Params)...)
+	diags = append(diags, r.checkUnusedHookParams(filePath, label, h)...)
+	return diags
+}
+
+// checkHookExecutable validates the first argv token of a hook command.
+// It mirrors checkExecutable but uses "hook" in messages.
+func (r *Rule) checkHookExecutable(filePath, label, exe string) []lint.Diagnostic {
+	var diags []lint.Diagnostic
+	if _, ok := shellInterpreters[exe]; ok {
+		diags = append(diags, r.diag(filePath, lint.Error,
+			fmt.Sprintf("hook %q: command uses shell interpreter %q — use the direct binary",
+				label, exe)))
+	}
+	if hasDotDotSegment(exe) {
+		diags = append(diags, r.diag(filePath, lint.Error,
+			fmt.Sprintf("hook %q: executable %q contains a .. path component",
+				label, exe)))
+	}
+	return diags
+}
+
+// checkHookTokens checks hook tokens for shell operators, fused placeholders,
+// and forbidden/undeclared {param} references. Unlike recipes, {inputs} and
+// {outputs} are always forbidden in hooks.
+func (r *Rule) checkHookTokens(filePath, label string, tokens []string, params map[string]string) []lint.Diagnostic {
+	var diags []lint.Diagnostic
+	for _, tok := range tokens {
+		isSinglePlaceholder := placeholderRe.FindString(tok) == tok
+		if !isSinglePlaceholder {
+			for _, op := range shellOperators {
+				if strings.Contains(tok, op) {
+					diags = append(diags, r.diag(filePath, lint.Error,
+						fmt.Sprintf("hook %q: command contains shell operator %q — use a wrapper script",
+							label, op)))
+					break
+				}
+			}
+		}
+		if fused := fusedRe.FindString(tok); fused != "" {
+			diags = append(diags, r.diag(filePath, lint.Error,
+				fmt.Sprintf("hook %q: command contains fused placeholders %q — separate with a delimiter",
+					label, fused)))
+		} else {
+			diags = append(diags, r.checkHookPlaceholders(filePath, label, tok, params)...)
+		}
+	}
+	return diags
+}
+
+// checkHookPlaceholders reports errors for reserved collective placeholders
+// ({inputs}/{outputs}), body-template-only reserved placeholders ({alt}), and
+// undeclared {param} tokens in a hook command token.
+func (r *Rule) checkHookPlaceholders(filePath, label, tok string, params map[string]string) []lint.Diagnostic {
+	var diags []lint.Diagnostic
+	for _, m := range placeholderRe.FindAllStringSubmatch(tok, -1) {
+		name := m[1]
+		if isReservedParamName(name) {
+			// In hooks, {inputs}/{outputs} are forbidden entirely (not just
+			// when embedded), because hooks have no directive context.
+			diags = append(diags, r.diag(filePath, lint.Error,
+				fmt.Sprintf("hook %q: command references {%s} which is not available in hooks "+
+					"(hooks have no directive context)",
+					label, name)))
+			continue
+		}
+		if bodyTemplateReserved[name] {
+			diags = append(diags, r.diag(filePath, lint.Error,
+				fmt.Sprintf("hook %q: command uses reserved placeholder {%s}; "+
+					"reserved placeholders are only available in body-template",
+					label, name)))
+			continue
+		}
+		if _, ok := params[name]; !ok {
+			diags = append(diags, r.diag(filePath, lint.Error,
+				fmt.Sprintf("hook %q: command references undeclared placeholder {%s}; "+
+					"declare it in params",
+					label, name)))
+		}
+	}
+	return diags
+}
+
+// checkUnusedHookParams reports a warning for each hook param key not
+// referenced by any {param} token in the command.
+func (r *Rule) checkUnusedHookParams(filePath, label string, h hook) []lint.Diagnostic {
+	if len(h.Params) == 0 {
+		return nil
+	}
+	cmdMatches := placeholderRe.FindAllStringSubmatch(h.Command, -1)
+	used := make(map[string]struct{}, len(cmdMatches))
+	for _, m := range cmdMatches {
+		used[m[1]] = struct{}{}
+	}
+	var unused []string
+	for k := range h.Params {
+		if _, ok := used[k]; !ok {
+			unused = append(unused, k)
+		}
+	}
+	sort.Strings(unused)
+	diags := make([]lint.Diagnostic, 0, len(unused))
+	for _, p := range unused {
+		diags = append(diags, r.diag(filePath, lint.Warning,
+			fmt.Sprintf("hook %q: declared param %q is not referenced in command",
+				label, p)))
 	}
 	return diags
 }

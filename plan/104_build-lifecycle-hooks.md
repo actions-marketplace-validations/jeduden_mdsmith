@@ -1,7 +1,7 @@
 ---
 id: 104
 title: Build lifecycle hooks (before/after)
-status: "🔲"
+status: "✅"
 summary: >-
   Add `build.hooks.before` and `build.hooks.after`
   config blocks: argv-tokenized commands run once
@@ -263,53 +263,53 @@ via PID file.
 
 ## Acceptance Criteria
 
-- [ ] `before` hooks run in declaration
+- [x] `before` hooks run in declaration
       order, once per `fix` build pass,
       before any recipe
-- [ ] `after` hooks run in declaration
+- [x] `after` hooks run in declaration
       order, once per build pass, after the
       recipe pass
-- [ ] A failing `before` aborts with no
+- [x] A failing `before` aborts with no
       recipes and no `after` hooks; lint-fix
       pass results are preserved
-- [ ] A failing `after` is reported but does
+- [x] A failing `after` is reported but does
       not prevent later `after` hooks from
       running
-- [ ] Final exit code prioritises lint-fix
+- [x] Final exit code prioritises lint-fix
       errors over `before-fail` over
       `recipe-fail` over `after-fail`
-- [ ] Hook `command` is split into argv and
+- [x] Hook `command` is split into argv and
       dispatched via `os/exec`; no shell
       interpreter is invoked
-- [ ] MDS040 flags hook commands that start
+- [x] MDS040 flags hook commands that start
       with `bash`/`sh`, contain shell
       operators, contain fused `{param}`
       placeholders, or reference reserved
       names (`inputs`, `outputs`)
-- [ ] `{param}` tokens in a hook `command`
+- [x] `{param}` tokens in a hook `command`
       expand from the hook's `params` map; an
       unmatched token is a config error
-- [ ] `mdsmith fix --build-no-hooks` skips
+- [x] `mdsmith fix --build-no-hooks` skips
       both lists and runs only the recipe
       pass
-- [ ] `mdsmith fix --no-build` skips both
+- [x] `mdsmith fix --no-build` skips both
       hooks and recipes (no build pass)
-- [ ] `mdsmith fix --build-dry-run` lists
+- [x] `mdsmith fix --build-dry-run` lists
       each hook alongside the recipes it
       bookends
-- [ ] `mdsmith fix --build-skip-hooks-when-fresh`
+- [x] `mdsmith fix --build-skip-hooks-when-fresh`
       skips both lists when no target is
       stale and runs both when any target
       is stale
-- [ ] A config without `build.hooks` parses
+- [x] A config without `build.hooks` parses
       cleanly and runs `mdsmith fix` without
       hook overhead
-- [ ] MDS040 rejects hook `params` values
+- [x] MDS040 rejects hook `params` values
       with NUL, newline, leading/trailing
       whitespace, or > 4 KB
-- [ ] Build pass refuses to run when MDS040
+- [x] Build pass refuses to run when MDS040
       reports any error against `build.hooks`
       or `build.recipes`
-- [ ] All tests pass: `go test ./...`
+- [x] All tests pass: `go test ./...`
 - [ ] `go tool golangci-lint run` reports no
       issues

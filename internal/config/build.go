@@ -10,6 +10,20 @@ import (
 // BuildConfig is the top-level build: section.
 type BuildConfig struct {
 	Recipes map[string]RecipeCfg `yaml:"recipes,omitempty"`
+	Hooks   HooksCfg             `yaml:"hooks,omitempty"`
+}
+
+// HooksCfg holds the before/after hook lists for the build pass.
+type HooksCfg struct {
+	Before []HookCfg `yaml:"before,omitempty"`
+	After  []HookCfg `yaml:"after,omitempty"`
+}
+
+// HookCfg is a single hook entry in build.hooks.before or build.hooks.after.
+type HookCfg struct {
+	Command string            `yaml:"command"`
+	Params  map[string]string `yaml:"params,omitempty"`
+	Name    string            `yaml:"name,omitempty"`
 }
 
 // RecipeCfg is a single user-defined recipe declaration.
@@ -45,9 +59,13 @@ var reservedParams = map[string]bool{"alt": true}
 // because commands are whitespace-tokenised and such a token would be split.
 var placeholderRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
+// maxHookParamBytes is the maximum allowed length for a hook param value.
+const maxHookParamBytes = 4 * 1024
+
 // ValidateBuildConfig returns an error if any recipe declares a reserved param
 // name or if its command references an unknown or reserved placeholder.
 // Recipe names are validated in sorted order for deterministic errors.
+// Hooks (before/after) are also validated.
 func ValidateBuildConfig(cfg *Config) error {
 	if cfg == nil {
 		return nil
@@ -60,6 +78,92 @@ func ValidateBuildConfig(cfg *Config) error {
 	for _, name := range names {
 		if err := validateRecipe(name, cfg.Build.Recipes[name]); err != nil {
 			return err
+		}
+	}
+	for i, hook := range cfg.Build.Hooks.Before {
+		if err := validateHook("before", i, hook); err != nil {
+			return err
+		}
+	}
+	for i, hook := range cfg.Build.Hooks.After {
+		if err := validateHook("after", i, hook); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateHook validates a single hook entry. listName is "before" or "after".
+func validateHook(listName string, idx int, hook HookCfg) error {
+	label := fmt.Sprintf("build.hooks.%s[%d]", listName, idx)
+	if hook.Command == "" {
+		return fmt.Errorf("%s: command must not be empty", label)
+	}
+	// Validate param values in sorted key order for deterministic errors.
+	paramKeys := make([]string, 0, len(hook.Params))
+	for k := range hook.Params {
+		paramKeys = append(paramKeys, k)
+	}
+	sort.Strings(paramKeys)
+	allowed := make(map[string]bool, len(hook.Params))
+	for _, k := range paramKeys {
+		allowed[k] = true
+		if err := validateHookParamValue(label, k, hook.Params[k]); err != nil {
+			return err
+		}
+	}
+	// Validate command placeholders: hooks may not reference {inputs} or
+	// {outputs} — those are directive-context collective placeholders.
+	return validateHookCommandPlaceholders(label, hook.Command, allowed)
+}
+
+// validateHookParamValue enforces the baseline constraints on a hook param value:
+// no NUL byte, no newline or carriage return, no leading/trailing whitespace,
+// and at most maxHookParamBytes bytes.
+func validateHookParamValue(label, paramName, value string) error {
+	if len(value) > maxHookParamBytes {
+		return fmt.Errorf("%s: param %q value exceeds 4 KB limit", label, paramName)
+	}
+	if strings.ContainsRune(value, '\x00') {
+		return fmt.Errorf("%s: param %q value must not contain a NUL byte", label, paramName)
+	}
+	if strings.ContainsAny(value, "\n\r") {
+		return fmt.Errorf("%s: param %q value must not contain a newline or carriage return", label, paramName)
+	}
+	if value != strings.TrimSpace(value) {
+		return fmt.Errorf("%s: param %q value must not have leading or trailing whitespace", label, paramName)
+	}
+	return nil
+}
+
+// validateHookCommandPlaceholders validates placeholders in a hook command.
+// For hooks, {inputs} and {outputs} are forbidden (they are meaningless without
+// a directive context), and any {param} token must appear in the allowed map.
+func validateHookCommandPlaceholders(label, command string, allowed map[string]bool) error {
+	for _, tok := range strings.Fields(command) {
+		for _, m := range placeholderRe.FindAllStringSubmatch(tok, -1) {
+			param := m[1]
+			if collectivePlaceholders[param] {
+				return fmt.Errorf(
+					"%s: command references {%s} which is not available in hooks "+
+						"(hooks have no directive context)",
+					label, param,
+				)
+			}
+			if reservedParams[param] {
+				return fmt.Errorf(
+					"%s: command uses reserved placeholder {%s}; "+
+						"reserved placeholders are only available in body-template",
+					label, param,
+				)
+			}
+			if !allowed[param] {
+				return fmt.Errorf(
+					"%s: command references undeclared placeholder {%s}; "+
+						"declare it in params",
+					label, param,
+				)
+			}
 		}
 	}
 	return nil
@@ -212,10 +316,10 @@ func validateCommandPlaceholders(recipeName, command string, allowed map[string]
 	return nil
 }
 
-// InjectBuildConfig copies cfg.Build.Recipes into the recipe-safety and
-// build rule settings. It is called after config loading in main so rules
-// receive their inputs through the normal ApplySettings path. cfgPath is
-// the path to the loaded .mdsmith.yml; it is set in the config-path
+// InjectBuildConfig copies cfg.Build.Recipes and cfg.Build.Hooks into the
+// recipe-safety and build rule settings. It is called after config loading in
+// main so rules receive their inputs through the normal ApplySettings path.
+// cfgPath is the path to the loaded .mdsmith.yml; it is set in the config-path
 // setting so MDS040 can report diagnostics against the right file.
 func InjectBuildConfig(cfg *Config, cfgPath string) {
 	if cfg == nil {
@@ -223,12 +327,14 @@ func InjectBuildConfig(cfg *Config, cfgPath string) {
 	}
 	recipes := serializeRecipes(cfg.Build.Recipes)
 
-	// Inject into recipe-safety (MDS040) with config-path.
+	// Inject into recipe-safety (MDS040) with config-path and hooks.
 	if rc, ok := cfg.Rules["recipe-safety"]; ok && rc.Enabled {
 		if rc.Settings == nil {
 			rc.Settings = make(map[string]any)
 		}
 		rc.Settings["recipes"] = recipes
+		rc.Settings["hooks-before"] = serializeHooks(cfg.Build.Hooks.Before)
+		rc.Settings["hooks-after"] = serializeHooks(cfg.Build.Hooks.After)
 		if cfgPath != "" {
 			rc.Settings["config-path"] = cfgPath
 		}
@@ -243,6 +349,27 @@ func InjectBuildConfig(cfg *Config, cfgPath string) {
 		rc.Settings["recipes"] = recipes
 		cfg.Rules["build"] = rc
 	}
+}
+
+// serializeHooks converts a []HookCfg to []any for transport through the
+// generic ApplySettings mechanism.
+func serializeHooks(hooks []HookCfg) []any {
+	out := make([]any, len(hooks))
+	for i, h := range hooks {
+		m := map[string]any{"command": h.Command}
+		if h.Name != "" {
+			m["name"] = h.Name
+		}
+		if len(h.Params) > 0 {
+			params := make(map[string]any, len(h.Params))
+			for k, v := range h.Params {
+				params[k] = v
+			}
+			m["params"] = params
+		}
+		out[i] = m
+	}
+	return out
 }
 
 // serializeRecipes converts RecipeCfg map to map[string]any for transport

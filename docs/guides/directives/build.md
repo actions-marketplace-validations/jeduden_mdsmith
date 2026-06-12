@@ -162,17 +162,19 @@ path.
 
 ### `mdsmith fix` build flags
 
-| Flag                  | Behavior                                                           |
-| --------------------- | ------------------------------------------------------------------ |
-| (none)                | Lint-fix pass, then build only stale targets                       |
-| `--no-build`          | Lint-fix pass only                                                 |
-| `--build-only`        | Build pass only                                                    |
-| `--build-recipe NAME` | Build only directives whose `recipe:` is `NAME`                    |
-| `--build-dry-run`     | Print each target's `STALE` or `FRESH` verdict; run no recipe      |
-| `--build-force`       | Rebuild every target; refresh all cache entries                    |
-| `--build-check-stale` | Print stale targets, exit non-zero if any are stale; run no recipe |
-| `--build-no-cache`    | Treat all targets as stale; do not read or write the cache         |
-| `--build-timeout DUR` | Per-recipe timeout (default `30s`)                                 |
+| Flag                            | Behavior                                                         |
+| ------------------------------- | ---------------------------------------------------------------- |
+| (none)                          | Lint-fix pass, then build only stale targets                     |
+| `--no-build`                    | Lint-fix pass only; skips the build pass, including hooks        |
+| `--build-only`                  | Build pass only                                                  |
+| `--build-recipe NAME`           | Build only directives whose `recipe:` is `NAME`; hooks still run |
+| `--build-dry-run`               | Print each target's `STALE` or `FRESH` verdict; run no recipe    |
+| `--build-force`                 | Rebuild every target; refresh all cache entries                  |
+| `--build-check-stale`           | Print stale targets, exit non-zero if any stale; run no recipe   |
+| `--build-no-cache`              | Treat all targets as stale; do not read or write the cache       |
+| `--build-timeout DUR`           | Per-recipe timeout (default `30s`)                               |
+| `--build-no-hooks`              | Run the build pass but skip both `before` and `after` hook lists |
+| `--build-skip-hooks-when-fresh` | Skip both hook lists when no target is stale; run them otherwise |
 
 `--no-build` and `--build-only` are mutually exclusive.
 `--build-force` cannot be combined with `--build-check-stale` or
@@ -181,6 +183,98 @@ path.
 `--build-check-stale` makes artifact freshness a CI signal: it runs no
 recipe and exits non-zero when any declared output is out of date, so a
 build step can fail a pull request that forgot to regenerate.
+
+## Build lifecycle hooks
+
+`build.hooks.before` and `build.hooks.after` declare commands to run
+once per `mdsmith fix` build pass — `before` hooks run before any
+recipe, `after` hooks run after the recipe pass. Use them to start a
+dev server before screenshot recipes and stop it after.
+
+### Configuration
+
+```yaml
+build:
+  hooks:
+    before:
+      - command: "make dev-server-start"
+        name: "start dev server"
+      - command: "scripts/wait-for-port {port}"
+        params:
+          port: "3000"
+    after:
+      - command: "make dev-server-stop"
+        name: "stop dev server"
+  recipes:
+    screenshot:
+      command: "capture-tool {url} {outputs}"
+      params:
+        required: [url]
+```
+
+Each hook entry has three fields:
+
+| Field     | Required | Description                                                      |
+| --------- | -------- | ---------------------------------------------------------------- |
+| `command` | yes      | Argv template — same `{param}` rules as recipes                  |
+| `params`  | no       | Map of param name to literal string value                        |
+| `name`    | no       | Display label for `OK`/`FAIL` output; defaults to the executable |
+
+Hooks have no directive surface. They are config-level and run once
+per `mdsmith fix` build pass, not once per directive.
+
+### Execution order
+
+```text
+1. Lint-fix pass (existing behavior)
+2. before[0], before[1], … (in declaration order)
+3. Recipe pass
+4. after[0], after[1], … (in declaration order)
+```
+
+### Failure semantics
+
+| Failing step  | Result                                                                |
+| ------------- | --------------------------------------------------------------------- |
+| `before` hook | Abort with the hook's exit code; recipes and `after` hooks do not run |
+| Recipe        | Finish the recipe pass, then run `after` hooks; exit non-zero         |
+| `after` hook  | Report and continue remaining `after` hooks; exit non-zero            |
+
+The exit code priority when multiple failures occur:
+lint-fix errors → `before`-fail → recipe-fail → `after`-fail → 0.
+
+The asymmetry is intentional. A failing `before` hook means setup is
+incomplete and recipes would produce garbage. A failing `after` hook
+means teardown is broken, but artifacts are already written.
+
+### Hook argv rules
+
+Hook commands follow the same no-shell rules as recipes (MDS040):
+
+- The first token must not be a shell interpreter (`bash`, `sh`, etc.)
+- The command must not contain shell operators (`&&`, `|`, `>`, etc.)
+- No fused `{param}` placeholders (`{a}{b}`)
+- No `..` in the executable token
+- The collective placeholders `{inputs}` and `{outputs}` are forbidden —
+  hooks have no directive context, so there are no input or output lists
+
+Hook `params` values are validated at config load: no NUL byte, no
+newline or carriage return, no leading or trailing whitespace, and at
+most 4 KB. Unused params are a warning at lint time.
+
+### When to use `--build-skip-hooks-when-fresh`
+
+By default `before` and `after` hooks run even when every target is
+fresh, because hooks may have effects beyond the recipe pass (publishing
+a deployment, sending a notification). To skip both hook lists when
+nothing would rebuild, pass `--build-skip-hooks-when-fresh`:
+
+```text
+mdsmith fix --build-skip-hooks-when-fresh
+```
+
+Use `--build-no-hooks` to skip hooks entirely and run only the recipe
+pass. Use `--no-build` to skip the build pass including hooks.
 
 ## Staleness and the build cache
 

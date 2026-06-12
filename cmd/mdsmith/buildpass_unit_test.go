@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -558,4 +559,305 @@ func TestDispatchOne_RefreshCacheEntryError(t *testing.T) {
 	outcome := dispatchOne(builder, bt, cfg, buildPassOpts{}, cache, time.Second, &buf)
 	assert.Equal(t, outcomeFailed, outcome)
 	assert.Contains(t, buf.String(), "FAIL")
+}
+
+// --- resolveHooks ---
+
+func TestResolveHooks_Nil_ReturnsEmpty(t *testing.T) {
+	assert.Empty(t, resolveHooks(nil))
+}
+
+func TestResolveHooks_EmptyCommand_Skipped(t *testing.T) {
+	hooks := []config.HookCfg{{Command: ""}}
+	assert.Empty(t, resolveHooks(hooks))
+}
+
+func TestResolveHooks_WithParamsAndName(t *testing.T) {
+	hooks := []config.HookCfg{{
+		Command: "scripts/wait {port}",
+		Params:  map[string]string{"port": "3000"},
+		Name:    "wait-server",
+	}}
+	result := resolveHooks(hooks)
+	require.Len(t, result, 1)
+	assert.Equal(t, []string{"scripts/wait", "3000"}, result[0].Tokens)
+	assert.Equal(t, "wait-server", result[0].Name)
+}
+
+// --- allFresh ---
+
+func TestAllFresh_Force_ReturnsFalse(t *testing.T) {
+	assert.False(t, allFresh(nil, &config.Config{}, buildexec.NewCache(), buildPassOpts{force: true}))
+}
+
+func TestAllFresh_NoCache_ReturnsFalse(t *testing.T) {
+	assert.False(t, allFresh(nil, &config.Config{}, buildexec.NewCache(), buildPassOpts{noCache: true}))
+}
+
+func TestAllFresh_EmptyTargets_ReturnsTrue(t *testing.T) {
+	assert.True(t, allFresh(nil, &config.Config{}, buildexec.NewCache(), buildPassOpts{}))
+}
+
+func TestAllFresh_StaleTarget_ReturnsFalse(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src.txt")
+	require.NoError(t, os.WriteFile(src, []byte("content"), 0o644))
+	cfg := buildPassCfg("    cp:\n      command: cp {inputs} {outputs}\n")
+	bt := buildTarget{
+		file: filepath.Join(root, "doc.md"),
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"src.txt"},
+			Outputs: []string{"out.txt"},
+		},
+	}
+	// Empty cache → target has never been built → Stale.
+	assert.False(t, allFresh([]buildTarget{bt}, cfg, buildexec.NewCache(), buildPassOpts{}))
+}
+
+// --- listHooksForDryRun ---
+
+func TestListHooksForDryRun_Empty_NoOutput(t *testing.T) {
+	var buf strings.Builder
+	listHooksForDryRun("before", nil, &buf)
+	assert.Empty(t, buf.String())
+}
+
+func TestListHooksForDryRun_WithName(t *testing.T) {
+	var buf strings.Builder
+	listHooksForDryRun("before", []config.HookCfg{{Command: "make start", Name: "start-server"}}, &buf)
+	assert.Contains(t, buf.String(), "start-server")
+	assert.Contains(t, buf.String(), "DRY-RUN")
+}
+
+func TestListHooksForDryRun_WithoutName_UsesFirstToken(t *testing.T) {
+	var buf strings.Builder
+	listHooksForDryRun("after", []config.HookCfg{{Command: "make stop"}}, &buf)
+	assert.Contains(t, buf.String(), "make")
+	assert.Contains(t, buf.String(), "DRY-RUN")
+}
+
+// --- checkMDS040Gate ---
+
+func TestCheckMDS040Gate_NoRecipeSafetyRule_ReturnsTrue(t *testing.T) {
+	cfg := &config.Config{Rules: map[string]config.RuleCfg{}}
+	var buf strings.Builder
+	assert.True(t, checkMDS040Gate(cfg, "cfg.yml", &buf))
+}
+
+func TestCheckMDS040Gate_DisabledRule_ReturnsTrue(t *testing.T) {
+	cfg := &config.Config{Rules: map[string]config.RuleCfg{
+		"recipe-safety": {Enabled: false},
+	}}
+	var buf strings.Builder
+	assert.True(t, checkMDS040Gate(cfg, "cfg.yml", &buf))
+}
+
+func TestCheckMDS040Gate_EnabledNoErrors_ReturnsTrue(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+	cfg := &config.Config{
+		Rules: map[string]config.RuleCfg{
+			"recipe-safety": {Enabled: true, Settings: map[string]any{
+				"config-path": cfgPath,
+				"recipes":     map[string]any{},
+			}},
+		},
+	}
+	var buf strings.Builder
+	assert.True(t, checkMDS040Gate(cfg, cfgPath, &buf))
+}
+
+func TestCheckMDS040Gate_EnabledWithBadHook_ReturnsFalse(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+	cfg := &config.Config{
+		Rules: map[string]config.RuleCfg{
+			"recipe-safety": {Enabled: true, Settings: map[string]any{
+				"config-path": cfgPath,
+				"recipes":     map[string]any{},
+				"hooks-before": []any{map[string]any{
+					"command": "bash unsafe.sh",
+				}},
+			}},
+		},
+	}
+	var buf strings.Builder
+	assert.False(t, checkMDS040Gate(cfg, cfgPath, &buf))
+	assert.Contains(t, buf.String(), "MDS040")
+}
+
+// --- dispatchWithHooks ---
+
+func TestDispatchWithHooks_BeforeAndAfterHooksRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	beforeSentinel := filepath.Join(root, "before.txt")
+	afterSentinel := filepath.Join(root, "after.txt")
+	cfg := &config.Config{
+		Build: config.BuildConfig{
+			Hooks: config.HooksCfg{
+				Before: []config.HookCfg{{Command: "touch before.txt"}},
+				After:  []config.HookCfg{{Command: "touch after.txt"}},
+			},
+		},
+	}
+	builder := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error { return nil }}
+	var buf strings.Builder
+	code := dispatchWithHooks(builder, nil, cfg, root, buildPassOpts{}, buildexec.NewCache(), time.Second, nil, &buf)
+	assert.Equal(t, 0, code)
+	assert.FileExists(t, beforeSentinel, "before-hook must have run")
+	assert.FileExists(t, afterSentinel, "after-hook must have run")
+}
+
+func TestDispatchWithHooks_BeforeHookFails_AbortsAfterHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("false command not available on Windows")
+	}
+	root := t.TempDir()
+	afterSentinel := filepath.Join(root, "after.txt")
+	cfg := &config.Config{
+		Build: config.BuildConfig{
+			Hooks: config.HooksCfg{
+				Before: []config.HookCfg{{Command: "false"}},
+				After:  []config.HookCfg{{Command: "touch after.txt"}},
+			},
+		},
+	}
+	builder := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error { return nil }}
+	var buf strings.Builder
+	code := dispatchWithHooks(builder, nil, cfg, root, buildPassOpts{}, buildexec.NewCache(), time.Second, nil, &buf)
+	assert.NotEqual(t, 0, code)
+	assert.NoFileExists(t, afterSentinel, "after-hook must not run when before-hook fails")
+}
+
+func TestDispatchWithHooks_SkipHooksWhenFreshEmptyTargets(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	beforeSentinel := filepath.Join(root, "before.txt")
+	cfg := &config.Config{
+		Build: config.BuildConfig{
+			Hooks: config.HooksCfg{
+				Before: []config.HookCfg{{Command: "touch before.txt"}},
+			},
+		},
+	}
+	builder := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error { return nil }}
+	var buf strings.Builder
+	// With no targets, allFresh returns true → hooks are skipped.
+	code := dispatchWithHooks(builder, nil, cfg, root,
+		buildPassOpts{skipHooksWhenFresh: true}, buildexec.NewCache(), time.Second, nil, &buf)
+	assert.Equal(t, 0, code)
+	assert.NoFileExists(t, beforeSentinel, "hooks must be skipped when all targets are fresh")
+}
+
+// TestCheckMDS040Gate_ApplySettingsError_ReturnsFalse covers the error path
+// (lines 68-71) when ApplySettings rejects an unknown settings key.
+func TestCheckMDS040Gate_ApplySettingsError_ReturnsFalse(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+	cfg := &config.Config{
+		Rules: map[string]config.RuleCfg{
+			"recipe-safety": {Enabled: true, Settings: map[string]any{
+				"unknown-key": "triggers-error",
+			}},
+		},
+	}
+	var buf strings.Builder
+	assert.False(t, checkMDS040Gate(cfg, cfgPath, &buf))
+	assert.Contains(t, buf.String(), "settings error")
+}
+
+// TestRunBuildPass_MDS040GateFails_Returns2 covers the gate-fail branch
+// (lines 102-104) where checkMDS040Gate returns false inside runBuildPass.
+func TestRunBuildPass_MDS040GateFails_Returns2(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+	cfg := &config.Config{
+		Rules: map[string]config.RuleCfg{
+			"recipe-safety": {Enabled: true, Settings: map[string]any{
+				"config-path": cfgPath,
+				"recipes":     map[string]any{},
+				"hooks-before": []any{map[string]any{
+					"command": "bash unsafe.sh",
+				}},
+			}},
+		},
+	}
+	var buf strings.Builder
+	code := runBuildPass(cfg, cfgPath, nil, buildPassOpts{}, &buf)
+	assert.Equal(t, 2, code)
+	assert.Contains(t, buf.String(), "MDS040")
+}
+
+// TestDispatchWithHooks_BeforeHookFail_CollectionErrors_Returns2 covers the
+// branch (lines 178-180) where collection errors take priority over a
+// before-hook failure.
+func TestDispatchWithHooks_BeforeHookFail_CollectionErrors_Returns2(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("false command not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := &config.Config{
+		Build: config.BuildConfig{
+			Hooks: config.HooksCfg{
+				Before: []config.HookCfg{{Command: "false", Name: "fail-hook"}},
+			},
+		},
+	}
+	builder := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error { return nil }}
+	var buf strings.Builder
+	errs := []error{errors.New("collection error")}
+	code := dispatchWithHooks(
+		builder, nil, cfg, root, buildPassOpts{}, buildexec.NewCache(), time.Second, errs, &buf,
+	)
+	assert.Equal(t, 2, code, "collection errors must take priority over before-hook failure")
+}
+
+// TestDispatchWithHooks_AfterHookFails_ReturnsNonZero covers the afterCode
+// path (lines 204-206) when an after-hook exits non-zero.
+func TestDispatchWithHooks_AfterHookFails_ReturnsNonZero(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("false command not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := &config.Config{
+		Build: config.BuildConfig{
+			Hooks: config.HooksCfg{
+				After: []config.HookCfg{{Command: "false", Name: "cleanup"}},
+			},
+		},
+	}
+	builder := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error { return nil }}
+	var buf strings.Builder
+	code := dispatchWithHooks(
+		builder, nil, cfg, root, buildPassOpts{}, buildexec.NewCache(), time.Second, nil, &buf,
+	)
+	assert.NotEqual(t, 0, code, "after-hook failure exit code must be propagated")
+}
+
+// TestAllFresh_CheckStalenessError_ReturnsFalse covers the error branch
+// (lines 245-247) when CheckStaleness returns an error (glob matching no files).
+func TestAllFresh_CheckStalenessError_ReturnsFalse(t *testing.T) {
+	root := t.TempDir()
+	cfg := buildPassCfg("    cp:\n      command: cp {inputs} {outputs}\n")
+	bt := buildTarget{
+		file: filepath.Join(root, "doc.md"),
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"*.nonexistent"},
+			Outputs: []string{"out.txt"},
+		},
+	}
+	// A glob matching no files causes CheckStaleness to return an error;
+	// allFresh must return false rather than true.
+	assert.False(t, allFresh([]buildTarget{bt}, cfg, buildexec.NewCache(), buildPassOpts{}))
 }

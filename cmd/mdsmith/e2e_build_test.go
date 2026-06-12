@@ -457,3 +457,265 @@ func TestE2E_Check_RunsNoRecipe(t *testing.T) {
 	_, _, _ = runBinaryInDir(t, dir, "", "check", "--no-color", "doc.md")
 	assert.NoFileExists(t, filepath.Join(dir, "dst.txt"), "check must never run a recipe")
 }
+
+// --- Plan 104: build lifecycle hooks ---
+
+// writeBuildRepoWithHooks sets up a repo with recipes and hooks.
+func writeBuildRepoWithHooks(t *testing.T, recipesYAML, hooksYAML string) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	cfg := "rules: {}\nbuild:\n  recipes:\n" + recipesYAML + "\n  hooks:\n" + hooksYAML
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"), []byte(cfg), 0o644))
+	return dir
+}
+
+func TestE2E_Build_BeforeHookRunsBeforeRecipe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch/cp not available on Windows")
+	}
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: cp {inputs} {outputs}\n",
+		"    before:\n      - command: touch before-sentinel.txt\n",
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("hi"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	out := stdout + stderr
+	assert.Equal(t, 0, code, "fix with before hook should succeed: %s", out)
+	assert.FileExists(t, filepath.Join(dir, "before-sentinel.txt"), "before hook must have run")
+	assert.FileExists(t, filepath.Join(dir, "dst.txt"), "recipe must have run")
+	assert.Contains(t, out, "hook touch: OK")
+}
+
+func TestE2E_Build_AfterHookRunsAfterRecipe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch/cp not available on Windows")
+	}
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: cp {inputs} {outputs}\n",
+		"    after:\n      - command: touch after-sentinel.txt\n",
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("hi"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	out := stdout + stderr
+	assert.Equal(t, 0, code, "fix with after hook should succeed: %s", out)
+	assert.FileExists(t, filepath.Join(dir, "dst.txt"), "recipe must have run")
+	assert.FileExists(t, filepath.Join(dir, "after-sentinel.txt"), "after hook must have run")
+}
+
+func TestE2E_Build_FailingBeforeHookAbortsRecipesAndAfterHooks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("false/touch not available on Windows")
+	}
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: touch {outputs}\n",
+		"    before:\n      - command: false\n        name: fail-before\n"+
+			"    after:\n      - command: touch after-sentinel.txt\n",
+	)
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "", "dst.txt"))
+
+	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	out := stdout + stderr
+	assert.NotEqual(t, 0, code, "failing before-hook must exit non-zero: %s", out)
+	assert.Contains(t, out, "fail-before: FAIL")
+	assert.NoFileExists(t, filepath.Join(dir, "dst.txt"), "recipe must not run after before-fail")
+	assert.NoFileExists(t, filepath.Join(dir, "after-sentinel.txt"), "after-hook must not run after before-fail")
+}
+
+func TestE2E_Build_FailingAfterHookReportedButContinues(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch/false not available on Windows")
+	}
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: touch {outputs}\n",
+		"    after:\n"+
+			"      - command: false\n        name: fail-after\n"+
+			"      - command: touch after-second.txt\n",
+	)
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "", "dst.txt"))
+
+	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	out := stdout + stderr
+	assert.NotEqual(t, 0, code, "failing after-hook must exit non-zero: %s", out)
+	assert.Contains(t, out, "fail-after: FAIL")
+	assert.FileExists(t, filepath.Join(dir, "dst.txt"), "recipe must still have run")
+	assert.FileExists(t, filepath.Join(dir, "after-second.txt"), "second after-hook must still run")
+}
+
+func TestE2E_Build_NoHooksSkipsBothLists(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: touch {outputs}\n",
+		"    before:\n      - command: touch before-sentinel.txt\n"+
+			"    after:\n      - command: touch after-sentinel.txt\n",
+	)
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "", "dst.txt"))
+
+	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix",
+		"--no-color", "--build-only", "--build-no-hooks", "doc.md")
+	out := stdout + stderr
+	assert.Equal(t, 0, code, "fix --build-no-hooks should succeed: %s", out)
+	assert.FileExists(t, filepath.Join(dir, "dst.txt"), "recipe must still run")
+	assert.NoFileExists(t, filepath.Join(dir, "before-sentinel.txt"), "--build-no-hooks must skip before hooks")
+	assert.NoFileExists(t, filepath.Join(dir, "after-sentinel.txt"), "--build-no-hooks must skip after hooks")
+}
+
+func TestE2E_Build_DryRunListsHooks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp not available on Windows")
+	}
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: cp {inputs} {outputs}\n",
+		"    before:\n      - command: make dev-server-start\n        name: start server\n"+
+			"    after:\n      - command: make dev-server-stop\n        name: stop server\n",
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("x"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	_, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-dry-run", "--build-only", "doc.md")
+	assert.Equal(t, 0, code, "dry-run should succeed: %s", stderr)
+	assert.Contains(t, stderr, "DRY-RUN", "--build-dry-run must list hooks")
+	assert.NoFileExists(t, filepath.Join(dir, "dst.txt"), "--build-dry-run must not run recipes")
+}
+
+func TestE2E_Build_NoBuildSkipsHooks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: touch {outputs}\n",
+		"    before:\n      - command: touch before-sentinel.txt\n"+
+			"    after:\n      - command: touch after-sentinel.txt\n",
+	)
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "", "dst.txt"))
+
+	// --no-build skips the entire build pass including hooks.
+	_, _, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--no-build", "doc.md")
+	assert.Equal(t, 0, code)
+	assert.NoFileExists(t, filepath.Join(dir, "before-sentinel.txt"), "--no-build must skip hooks")
+	assert.NoFileExists(t, filepath.Join(dir, "after-sentinel.txt"), "--no-build must skip hooks")
+}
+
+func TestE2E_Build_SkipHooksWhenFresh_AllFresh_SkipsHooks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp/touch not available on Windows")
+	}
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: cp {inputs} {outputs}\n",
+		"    before:\n      - command: touch before-sentinel.txt\n",
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("x"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	// Build once to make everything fresh. Use --build-no-hooks so the
+	// sentinel is NOT created on the first run (we want to detect if it gets
+	// created on the second run).
+	_, _, code1 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "--build-no-hooks", "doc.md")
+	require.Equal(t, 0, code1)
+	// Sentinel must not exist after the first run (hooks were skipped).
+	assert.NoFileExists(t, filepath.Join(dir, "before-sentinel.txt"))
+
+	// Run with --build-skip-hooks-when-fresh: all targets are fresh, hooks must be skipped.
+	_, _, code2 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only",
+		"--build-skip-hooks-when-fresh", "doc.md")
+	assert.Equal(t, 0, code2)
+	assert.NoFileExists(t, filepath.Join(dir, "before-sentinel.txt"),
+		"--build-skip-hooks-when-fresh with all-fresh must skip before hooks")
+}
+
+func TestE2E_Build_SkipHooksWhenFresh_AnyStale_RunsHooks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cp/touch not available on Windows")
+	}
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: cp {inputs} {outputs}\n",
+		"    before:\n      - command: touch before-sentinel.txt\n",
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("v1"), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "src.txt", "dst.txt"))
+
+	// Build once then update input to make it stale again.
+	_, _, code1 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "--build-no-hooks", "doc.md")
+	require.Equal(t, 0, code1)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src.txt"), []byte("v2"), 0o644))
+	// Remove the sentinel so we can detect if it gets created.
+	_ = os.Remove(filepath.Join(dir, "before-sentinel.txt"))
+
+	// Run with --build-skip-hooks-when-fresh: one target is stale, hooks must run.
+	_, _, code2 := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only",
+		"--build-skip-hooks-when-fresh", "doc.md")
+	assert.Equal(t, 0, code2)
+	assert.FileExists(t, filepath.Join(dir, "before-sentinel.txt"),
+		"--build-skip-hooks-when-fresh with a stale target must run hooks")
+}
+
+func TestE2E_Build_HookWithParams(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	// The hook command references {name} param, which should be substituted.
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: touch {outputs}\n",
+		"    before:\n      - command: touch {name}\n        params:\n          name: param-sentinel.txt\n",
+	)
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "", "dst.txt"))
+
+	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	out := stdout + stderr
+	assert.Equal(t, 0, code, "hook with params should succeed: %s", out)
+	assert.FileExists(t, filepath.Join(dir, "param-sentinel.txt"), "hook param must be substituted")
+}
+
+func TestE2E_Build_MDS040GateBlocksShellInterpreterHook(t *testing.T) {
+	// The build pass must refuse to run when MDS040 emits an error
+	// against build.hooks. A hook using a shell interpreter is an
+	// MDS040 error; the gate must print the error and exit 2 without
+	// running any hook or recipe.
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: touch {outputs}\n",
+		"    before:\n      - command: bash -c echo hello\n",
+	)
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "", "dst.txt"))
+
+	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	out := stdout + stderr
+	assert.Equal(t, 2, code, "MDS040 gate must block: %s", out)
+	assert.Contains(t, out, "MDS040", "must report the MDS040 error")
+	assert.NoFileExists(t, filepath.Join(dir, "dst.txt"), "recipe must not run when MDS040 blocks")
+}
+
+func TestE2E_Build_MDS040GateBlocksShellInterpreterRecipe(t *testing.T) {
+	// MDS040 gate blocks a recipe using a shell interpreter.
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	cfg := "rules: {}\nbuild:\n  recipes:\n    bad:\n      command: bash -c echo\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"), []byte(cfg), 0o644))
+	writeFixture(t, dir, "doc.md", buildDirective("bad", "", "dst.txt"))
+
+	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "doc.md")
+	out := stdout + stderr
+	assert.Equal(t, 2, code, "MDS040 gate must block bad recipe: %s", out)
+	assert.Contains(t, out, "MDS040", "must report the MDS040 error")
+	assert.NoFileExists(t, filepath.Join(dir, "dst.txt"), "recipe must not run when MDS040 blocks")
+}
+
+func TestE2E_Build_MDS040GateAllowsNoBuildFlag(t *testing.T) {
+	// --no-build skips the build pass entirely, so the MDS040 gate
+	// also does not run. The bad hook should not block the lint-fix pass.
+	dir := writeBuildRepoWithHooks(t,
+		"    copy:\n      command: touch {outputs}\n",
+		"    before:\n      - command: bash -c echo hello\n",
+	)
+	writeFixture(t, dir, "doc.md", buildDirective("copy", "", "dst.txt"))
+
+	_, _, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--no-build", "doc.md")
+	// --no-build skips the build pass; the lint pass may exit 0 or 1
+	// (depending on lint issues in doc.md), but never 2 from the gate.
+	assert.NotEqual(t, 2, code, "--no-build must not trigger the MDS040 gate")
+}
