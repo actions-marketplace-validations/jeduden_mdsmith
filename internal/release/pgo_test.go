@@ -157,3 +157,157 @@ func pgoOutputFlag(args []string) string {
 	}
 	return ""
 }
+
+// TestPGODefaultsWorkdir covers the empty-workdir branch: PGO must
+// substitute defaultBenchWorkdir when the caller passes "".
+func TestPGODefaultsWorkdir(t *testing.T) {
+	// fakeRunner exits 0 but writes no binary, so the post-build
+	// existence check trips — but only after the default-workdir
+	// substitution on line 87 has run.
+	workdir := t.TempDir()
+	err := NewWithDeps(osFS{}, &fakeRunner{}).PGO(t.TempDir(), "")
+	// Clean up any directory PGO created under the default workdir.
+	t.Cleanup(func() { _ = os.RemoveAll(defaultBenchWorkdir) })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mdsmith")
+	// Confirm the substituted path, not the empty string, is in the error.
+	assert.NotContains(t, err.Error(), workdir)
+}
+
+// TestPGOMkdirFails covers the MkdirAll error path in PGO.
+func TestPGOMkdirFails(t *testing.T) {
+	fs := newFakeFS()
+	fs.failOnMkdirAllCall = 1
+	err := NewWithDeps(fs, &fakeRunner{}).PGO(t.TempDir(), t.TempDir())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errInjected)
+}
+
+// TestPGOBuildFails covers the go-build error path in PGO: when
+// RunCommand returns an error the method must wrap and surface it.
+func TestPGOBuildFails(t *testing.T) {
+	err := NewWithDeps(osFS{}, &fakeRunner{failOnCall: 1}).PGO(t.TempDir(), t.TempDir())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errInjected)
+	assert.Contains(t, err.Error(), "build mdsmith")
+}
+
+// TestCollectProfileMissing covers the error when a profile run
+// exits without writing its profile file.
+func TestCollectProfileMissing(t *testing.T) {
+	workdir := t.TempDir()
+	run := pgoProfileRun{
+		prof: filepath.Join(workdir, "cpu.prof"),
+		args: []string{"check", workdir},
+	}
+	// fakeRunner exits 0 but writes no file unless MDSMITH_CPUPROFILE
+	// is set — clear it so the write is skipped.
+	t.Setenv("MDSMITH_CPUPROFILE", "")
+	err := NewWithDeps(osFS{}, &fakeRunner{}).collectProfile("mdsmith", run)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no profile")
+}
+
+// TestCollectProfileRestoresEnvVar covers the had==true restore
+// branch: when MDSMITH_CPUPROFILE was set before the call, it must
+// be restored to its original value after.
+func TestCollectProfileRestoresEnvVar(t *testing.T) {
+	workdir := t.TempDir()
+	profPath := filepath.Join(workdir, "cpu.prof")
+	run := pgoProfileRun{prof: profPath, args: []string{"check", workdir}}
+
+	// Pre-set the env var; t.Setenv ensures it is cleared at test end.
+	t.Setenv("MDSMITH_CPUPROFILE", "original-value")
+
+	// pgoFakeRunner's default branch reads MDSMITH_CPUPROFILE and
+	// writes to it, so it will write to profPath while the call is
+	// in flight, then collectProfile's defer restores "original-value".
+	require.NoError(t, NewWithDeps(osFS{}, &pgoFakeRunner{}).collectProfile("mdsmith", run))
+	assert.Equal(t, "original-value", os.Getenv("MDSMITH_CPUPROFILE"))
+}
+
+// TestPGOPackageLevelPropagatesError covers the package-level PGO()
+// delegation shim: it must not swallow errors from Toolkit.PGO.
+func TestPGOPackageLevelPropagatesError(t *testing.T) {
+	// A root with no ./cmd/mdsmith package causes go build to fail,
+	// which is enough to confirm the delegation surfaces errors.
+	err := PGO(t.TempDir(), t.TempDir())
+	require.Error(t, err)
+}
+
+// pgoBinaryOnlyRunner writes the mdsmith binary on go build and returns
+// nil on every other call without writing any output files. Used to
+// drive the collectProfile-missing-profile error path inside PGO.
+type pgoBinaryOnlyRunner struct{}
+
+func (r *pgoBinaryOnlyRunner) RunCommand(dir, name string, args ...string) error {
+	if name == "go" && len(args) >= 5 && args[0] == "build" && args[1] == "-pgo=off" && args[2] == "-o" {
+		return os.WriteFile(args[3], []byte("BIN"), 0o755)
+	}
+	return nil
+}
+
+// pgoMergeErrRunner handles build + corpus + profiles normally, but
+// injects a failure into the go-tool-pprof merge step (or, when
+// noOutput is true, makes pprof exit 0 while writing no output file).
+type pgoMergeErrRunner struct{ noOutput bool }
+
+func (r *pgoMergeErrRunner) RunCommand(dir, name string, args ...string) error {
+	switch {
+	case name == "go" && len(args) >= 5 && args[0] == "build" && args[1] == "-pgo=off" && args[2] == "-o":
+		return os.WriteFile(args[3], []byte("BIN"), 0o755)
+	case name == "go" && len(args) >= 2 && args[0] == "tool" && args[1] == "pprof":
+		if r.noOutput {
+			return nil // exits 0 but writes nothing
+		}
+		return errInjected
+	default:
+		if p := os.Getenv("MDSMITH_CPUPROFILE"); p != "" {
+			return os.WriteFile(p, []byte("PROF"), 0o644)
+		}
+		return nil
+	}
+}
+
+// TestPGOBuildCorporaFails covers the buildCorpora error path: a
+// non-git root causes git ls-files to fail, which buildCorpora wraps
+// and returns to PGO.
+func TestPGOBuildCorporaFails(t *testing.T) {
+	// pgoFakeRunner writes the binary, so the post-build check passes,
+	// but the root has no .git so exec.Command("git", "ls-files") fails.
+	root := t.TempDir()
+	err := NewWithDeps(osFS{}, &pgoFakeRunner{}).PGO(root, t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "git ls-files")
+}
+
+// TestPGOCollectProfileLoopFails covers the loop's early-return when
+// the first collectProfile call errors (runner writes binary but never
+// writes a profile file, so collectProfile returns "no profile").
+func TestPGOCollectProfileLoopFails(t *testing.T) {
+	root := t.TempDir()
+	stageMinimalRepo(t, root)
+	err := NewWithDeps(osFS{}, &pgoBinaryOnlyRunner{}).PGO(root, t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no profile")
+}
+
+// TestPGOMergeFails covers the go-tool-pprof merge-failure path.
+func TestPGOMergeFails(t *testing.T) {
+	root := t.TempDir()
+	stageMinimalRepo(t, root)
+	err := NewWithDeps(osFS{}, &pgoMergeErrRunner{}).PGO(root, t.TempDir())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errInjected)
+	assert.Contains(t, err.Error(), "merge profiles")
+}
+
+// TestPGOMergeNoOutput covers the "merged profile not written" error
+// when go tool pprof exits 0 but writes no output file.
+func TestPGOMergeNoOutput(t *testing.T) {
+	root := t.TempDir()
+	stageMinimalRepo(t, root)
+	err := NewWithDeps(osFS{}, &pgoMergeErrRunner{noOutput: true}).PGO(root, t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "merged profile not written")
+}
