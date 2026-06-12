@@ -3,6 +3,7 @@ package build
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -151,4 +152,70 @@ func TestDiffSnapshots_DetectsRemoval(t *testing.T) {
 	violations := diffSnapshots(before, after, map[string]struct{}{})
 	require.Len(t, violations, 1)
 	assert.Equal(t, "removed", violations[0].kind)
+}
+
+func TestSnapshotDirs_DeduplicatesDirs(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644))
+
+	// Passing the same dir twice must not double-count entries.
+	snap, err := snapshotDirs([]string{root, root}, snapshotCap, nil)
+	require.NoError(t, err)
+	assert.Len(t, snap, 1)
+}
+
+func TestSnapshotDirs_ReadDirError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("running as root — chmod 000 still allows reads")
+	}
+	root := t.TempDir()
+	unreadable := filepath.Join(root, "locked")
+	require.NoError(t, os.Mkdir(unreadable, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o700) })
+
+	_, err := snapshotDirs([]string{unreadable}, snapshotCap, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scanning")
+}
+
+func TestSnapshotDirs_SymlinkEntry(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "target.txt")
+	link := filepath.Join(root, "link.txt")
+	require.NoError(t, os.WriteFile(target, []byte("hello"), 0o644))
+	require.NoError(t, os.Symlink(target, link))
+
+	snap, err := snapshotDirs([]string{root}, snapshotCap, nil)
+	require.NoError(t, err)
+
+	entry, ok := snap[link]
+	require.True(t, ok, "symlink entry must be snapshotted")
+	assert.Equal(t, target, entry.link)
+}
+
+func TestDiffSnapshots_SortsTwoViolations(t *testing.T) {
+	root := t.TempDir()
+	// Take an empty before-snapshot, then add two files so both appear
+	// as "added" violations. The sort comparison function only fires with
+	// 2+ violations.
+	before, err := snapshotDirs([]string{root}, snapshotCap, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, "b.txt"), []byte("b"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o644))
+
+	after, err := snapshotDirs([]string{root}, snapshotCap, before)
+	require.NoError(t, err)
+
+	violations := diffSnapshots(before, after, map[string]struct{}{})
+	require.Len(t, violations, 2)
+	// Violations must be sorted by path.
+	assert.Less(t, violations[0].path, violations[1].path)
+	assert.Equal(t, "added", violations[0].kind)
 }

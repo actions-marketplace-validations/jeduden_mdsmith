@@ -19,6 +19,15 @@ func recipeCmd(command string) RecipeSpec {
 	return RecipeSpec{Command: command}
 }
 
+func TestNewCustomBuilderExec(t *testing.T) {
+	recipes := map[string]RecipeSpec{"r": recipeCmd("echo")}
+	ec := ExecConfig{Path: "/custom/bin"}
+	b := NewCustomBuilderExec(recipes, ec)
+	require.NotNil(t, b)
+	assert.Equal(t, ec.Path, b.exec.Path)
+	assert.Len(t, b.recipes, 1)
+}
+
 func TestBuild_SingleOutputCp(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("cp is not available on Windows")

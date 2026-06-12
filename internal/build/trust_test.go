@@ -3,6 +3,7 @@ package build
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -127,4 +128,104 @@ func TestTrustDiff_IdenticalNoChange(t *testing.T) {
 	_, changed, err := TrustDiff(cfg)
 	require.NoError(t, err)
 	assert.False(t, changed)
+}
+
+func TestConfigPathForRoot(t *testing.T) {
+	got := ConfigPathForRoot("/some/root")
+	assert.Equal(t, filepath.Join("/some/root", ".mdsmith.yml"), got)
+}
+
+func TestTrustMarkerPath_EmptyConfigPath(t *testing.T) {
+	// An empty configPath falls back to the default config name so the
+	// marker is still named after the file the gate actually pins.
+	got := TrustMarkerPath("")
+	assert.Equal(t, ".mdsmith.yml"+trustMarkerSuffix, got)
+}
+
+func TestCheckTrust_EmptyConfigPath(t *testing.T) {
+	// With an empty configPath the gate falls back to ".mdsmith.yml" in the
+	// process working directory; since that file doesn't exist in our temp
+	// dir the result is not-trusted.
+	dir := t.TempDir()
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	res := CheckTrust("", func(string) bool { return false })
+	assert.False(t, res.Trusted)
+}
+
+func TestCheckTrust_MarkerReadError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("running as root — chmod 000 still allows reads")
+	}
+	dir := t.TempDir()
+	body := []byte("build: {}\n")
+	cfg := cfgIn(t, dir, body)
+	markerPath := cfg + ".trust"
+	require.NoError(t, os.WriteFile(markerPath, body, 0o000))
+
+	res := CheckTrust(cfg, func(string) bool { return false })
+	assert.False(t, res.Trusted)
+	assert.NotEmpty(t, res.Reason)
+}
+
+func TestWriteTrustMarker_EmptyConfigPath(t *testing.T) {
+	dir := t.TempDir()
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	body := []byte("build: {}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"), body, 0o644))
+
+	require.NoError(t, WriteTrustMarker(""))
+	got, err := os.ReadFile(filepath.Join(dir, ".mdsmith.yml.trust"))
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
+}
+
+func TestWriteTrustMarker_MissingConfig(t *testing.T) {
+	err := WriteTrustMarker(filepath.Join(t.TempDir(), "nonexistent.yml"))
+	require.Error(t, err)
+}
+
+func TestTrustDiff_EmptyConfigPath(t *testing.T) {
+	// Empty configPath falls back to .mdsmith.yml in cwd; if absent,
+	// TrustDiff returns an error rather than a diff.
+	dir := t.TempDir()
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	_, _, err = TrustDiff("")
+	require.Error(t, err)
+}
+
+func TestTrustDiff_MissingConfig(t *testing.T) {
+	_, _, err := TrustDiff(filepath.Join(t.TempDir(), "nonexistent.yml"))
+	require.Error(t, err)
+}
+
+func TestTrustDiff_MarkerReadError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("running as root — chmod 000 still allows reads")
+	}
+	dir := t.TempDir()
+	body := []byte("a: 1\n")
+	cfg := cfgIn(t, dir, body)
+	markerPath := cfg + ".trust"
+	require.NoError(t, os.WriteFile(markerPath, []byte("old\n"), 0o000))
+
+	_, _, err := TrustDiff(cfg)
+	require.Error(t, err)
 }

@@ -81,6 +81,22 @@ func envMap(env []string) map[string]string {
 	return m
 }
 
+func TestBuildEnv_SkipsEmptyAndPathPassThroughNames(t *testing.T) {
+	// An empty name and the literal "PATH" in the pass-through list must be
+	// silently skipped: PATH is set explicitly and an empty name is meaningless.
+	t.Setenv("PATH", "/injected")
+	cfg := ExecConfig{
+		Path:           "/custom/bin",
+		EnvPassThrough: []string{"", "PATH"},
+	}
+	env := buildEnv(cfg, defaultExecConfig())
+	got := envMap(env)
+	// PATH must come from cfg.Path, not from the environment.
+	assert.Equal(t, "/custom/bin", got["PATH"])
+	// Only PATH should be in the map; empty name produces no entry.
+	assert.Len(t, got, 1)
+}
+
 func TestRunRecipe_HermeticEnvVisibleToProcess(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh not available on Windows")
