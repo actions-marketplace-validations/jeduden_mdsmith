@@ -1,7 +1,7 @@
 ---
 id: 2606101547
 title: Build execution UX (stdout/stderr, debug, parallel)
-status: "🔲"
+status: "✅"
 summary: >-
   Make the build pass debuggable. Capture
   per-recipe stdout/stderr to per-target log
@@ -284,35 +284,35 @@ spikes](../docs/research/build-orchestrator/go-only.md).
 
 ## Acceptance Criteria
 
-- [ ] Recipe stdout/stderr is captured
+- [x] Recipe stdout/stderr is captured
       to `.mdsmith/build-logs/<action-id>.log`
       with `[stdout]` / `[stderr]` line
       prefixes
-- [ ] Default mode prints `OK | FAIL |
+- [x] Default mode prints `OK | FAIL |
       SKIP` per target; on failure it
       prints the six-field block plus
       the last 20 lines of stderr
-- [ ] `--build-stream` forwards recipe
+- [x] `--build-stream` forwards recipe
       streams live with target-name
       prefix; log file is still written
-- [ ] Timeout fires the diagnostic block
+- [x] Timeout fires the diagnostic block
       before SIGTERM (plan 2606101548)
-- [ ] `--build-explain TARGET` prints
+- [x] `--build-explain TARGET` prints
       every ActionID input field and the
       cache verdict; runs no recipe
-- [ ] `--build-verify` runs every recipe
+- [x] `--build-verify` runs every recipe
       twice and warns on output mismatch;
       the cache records an `unstable`
       flag on the target
-- [ ] `--build-jobs N` (default 1) runs
+- [x] `--build-jobs N` (default 1) runs
       up to N recipes concurrently;
       overlapping `outputs:` paths are
       already rejected at target-graph
       load (plan 103)
-- [ ] Cache eviction deletes the matching
+- [x] Cache eviction deletes the matching
       log file; orphan logs from a prior
       `--build-no-cache` run are deleted at
       the start of the next `mdsmith fix`
-- [ ] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run`
+- [x] All tests pass: `go test ./...`
+- [x] `go tool golangci-lint run`
       reports no issues
