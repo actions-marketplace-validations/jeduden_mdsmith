@@ -324,10 +324,6 @@ clone:
 The marker is per-clone, not per-repository: list it in `.gitignore`
 alongside the build cache and staging dir.
 
-```text
-.mdsmith.yml.trust
-```
-
 Run `mdsmith trust` to review and trust a config. It prints a unified
 diff between the stored marker and the current `.mdsmith.yml`, prompts
 for confirmation, and rewrites the marker (mode `0600`) on accept. Pass

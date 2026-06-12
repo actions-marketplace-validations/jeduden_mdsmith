@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -166,23 +168,17 @@ func TestResolveRankSelection_ByNotInDefaultsGetsAppended(t *testing.T) {
 // --- writeRankOutput ---
 
 func TestWriteRankOutput_UnknownFormat_Error(t *testing.T) {
-	err := writeRankOutput("xml", nil, nil)
+	err := writeRankOutput(&bytes.Buffer{}, "xml", nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown format")
 }
 
 func TestWriteRankOutput_TextFormat_NoError(t *testing.T) {
-	captureStdout(func() {
-		err := writeRankOutput("text", nil, nil)
-		assert.NoError(t, err)
-	})
+	assert.NoError(t, writeRankOutput(&bytes.Buffer{}, "text", nil, nil))
 }
 
 func TestWriteRankOutput_JSONFormat_NoError(t *testing.T) {
-	captureStdout(func() {
-		err := writeRankOutput("json", nil, nil)
-		assert.NoError(t, err)
-	})
+	assert.NoError(t, writeRankOutput(&bytes.Buffer{}, "json", nil, nil))
 }
 
 // --- writeMetricsListText ---
@@ -191,10 +187,9 @@ func TestWriteMetricsListText_PrintsHeaderAndRows(t *testing.T) {
 	defs := []metricspkg.Definition{
 		{ID: "m1", Name: "Metric One", Scope: metricspkg.ScopeFile, DefaultOrder: "desc", Description: "a test metric"},
 	}
-	out := captureStdout(func() {
-		err := writeMetricsListText(defs)
-		assert.NoError(t, err)
-	})
+	var buf bytes.Buffer
+	require.NoError(t, writeMetricsListText(&buf, defs))
+	out := buf.String()
 	assert.Contains(t, out, "ID")
 	assert.Contains(t, out, "NAME")
 	assert.Contains(t, out, "m1")
@@ -203,11 +198,15 @@ func TestWriteMetricsListText_PrintsHeaderAndRows(t *testing.T) {
 }
 
 func TestWriteMetricsListText_EmptyDefs_HeaderOnly(t *testing.T) {
-	out := captureStdout(func() {
-		err := writeMetricsListText(nil)
-		assert.NoError(t, err)
-	})
-	assert.Contains(t, out, "ID")
+	var buf bytes.Buffer
+	require.NoError(t, writeMetricsListText(&buf, nil))
+	assert.Contains(t, buf.String(), "ID")
+}
+
+func TestWriteMetricsListText_WriteError(t *testing.T) {
+	err := writeMetricsListText(&errWriter{err: errors.New("disk full")},
+		[]metricspkg.Definition{{ID: "m1", Name: "M"}})
+	require.Error(t, err)
 }
 
 // --- writeMetricsListJSON ---
@@ -216,10 +215,9 @@ func TestWriteMetricsListJSON_ValidJSONArray(t *testing.T) {
 	defs := []metricspkg.Definition{
 		{ID: "m1", Name: "Metric One", Description: "desc"},
 	}
-	out := captureStdout(func() {
-		err := writeMetricsListJSON(defs)
-		assert.NoError(t, err)
-	})
+	var buf bytes.Buffer
+	require.NoError(t, writeMetricsListJSON(&buf, defs))
+	out := buf.String()
 	assert.Contains(t, out, `"id"`)
 	assert.Contains(t, out, `"m1"`)
 	assert.Contains(t, out, `"name"`)
@@ -227,11 +225,9 @@ func TestWriteMetricsListJSON_ValidJSONArray(t *testing.T) {
 }
 
 func TestWriteMetricsListJSON_EmptyDefs_EmptyArray(t *testing.T) {
-	out := captureStdout(func() {
-		err := writeMetricsListJSON(nil)
-		assert.NoError(t, err)
-	})
-	assert.Contains(t, out, "[]")
+	var buf bytes.Buffer
+	require.NoError(t, writeMetricsListJSON(&buf, nil))
+	assert.Contains(t, buf.String(), "[]")
 }
 
 // --- writeMetricsRankText ---
@@ -241,10 +237,9 @@ func TestWriteMetricsRankText_PrintsHeaderAndRows(t *testing.T) {
 	rows := []metricspkg.Row{
 		{Path: "a.md", Metrics: map[string]metricspkg.Value{"bytes": metricspkg.AvailableValue(100)}},
 	}
-	out := captureStdout(func() {
-		err := writeMetricsRankText(rows, defs)
-		assert.NoError(t, err)
-	})
+	var buf bytes.Buffer
+	require.NoError(t, writeMetricsRankText(&buf, rows, defs))
+	out := buf.String()
 	assert.Contains(t, out, "BYTES")
 	assert.Contains(t, out, "PATH")
 	assert.Contains(t, out, "a.md")
@@ -252,11 +247,18 @@ func TestWriteMetricsRankText_PrintsHeaderAndRows(t *testing.T) {
 
 func TestWriteMetricsRankText_Empty_HeaderOnly(t *testing.T) {
 	defs := []metricspkg.Definition{{ID: "bytes", Name: "bytes"}}
-	out := captureStdout(func() {
-		err := writeMetricsRankText(nil, defs)
-		assert.NoError(t, err)
-	})
-	assert.Contains(t, out, "BYTES")
+	var buf bytes.Buffer
+	require.NoError(t, writeMetricsRankText(&buf, nil, defs))
+	assert.Contains(t, buf.String(), "BYTES")
+}
+
+func TestWriteMetricsRankText_WriteError(t *testing.T) {
+	defs := []metricspkg.Definition{{ID: "bytes", Name: "bytes"}}
+	rows := []metricspkg.Row{
+		{Path: "a.md", Metrics: map[string]metricspkg.Value{"bytes": metricspkg.AvailableValue(100)}},
+	}
+	err := writeMetricsRankText(&errWriter{err: errors.New("disk full")}, rows, defs)
+	require.Error(t, err)
 }
 
 // --- writeMetricsRankJSON ---
@@ -266,20 +268,17 @@ func TestWriteMetricsRankJSON_ValidJSONArray(t *testing.T) {
 	rows := []metricspkg.Row{
 		{Path: "a.md", Metrics: map[string]metricspkg.Value{"bytes": metricspkg.AvailableValue(100)}},
 	}
-	out := captureStdout(func() {
-		err := writeMetricsRankJSON(rows, defs)
-		assert.NoError(t, err)
-	})
+	var buf bytes.Buffer
+	require.NoError(t, writeMetricsRankJSON(&buf, rows, defs))
+	out := buf.String()
 	assert.Contains(t, out, `"path"`)
 	assert.Contains(t, out, `"a.md"`)
 }
 
 func TestWriteMetricsRankJSON_Empty_EmptyArray(t *testing.T) {
-	out := captureStdout(func() {
-		err := writeMetricsRankJSON(nil, nil)
-		assert.NoError(t, err)
-	})
-	assert.Contains(t, out, "[]")
+	var buf bytes.Buffer
+	require.NoError(t, writeMetricsRankJSON(&buf, nil, nil))
+	assert.Contains(t, buf.String(), "[]")
 }
 
 // --- runMetrics dispatch ---
@@ -402,10 +401,9 @@ func TestWriteMetricsListText_MultipleRows(t *testing.T) {
 		{ID: "m1", Name: "Alpha", Scope: metricspkg.ScopeFile, DefaultOrder: "asc"},
 		{ID: "m2", Name: "Beta", Scope: metricspkg.ScopeFile, DefaultOrder: "desc"},
 	}
-	out := captureStdout(func() {
-		err := writeMetricsListText(defs)
-		assert.NoError(t, err)
-	})
+	var buf bytes.Buffer
+	require.NoError(t, writeMetricsListText(&buf, defs))
+	out := buf.String()
 	assert.Contains(t, out, "m1")
 	assert.Contains(t, out, "m2")
 	assert.Contains(t, out, "Alpha")
@@ -427,10 +425,9 @@ func TestWriteMetricsRankText_MultipleMetrics(t *testing.T) {
 			"lines": metricspkg.AvailableValue(10),
 		}},
 	}
-	out := captureStdout(func() {
-		err := writeMetricsRankText(rows, defs)
-		assert.NoError(t, err)
-	})
+	var buf bytes.Buffer
+	require.NoError(t, writeMetricsRankText(&buf, rows, defs))
+	out := buf.String()
 	assert.True(t, strings.Contains(out, "a.md"))
 	assert.True(t, strings.Contains(out, "b.md"))
 }
