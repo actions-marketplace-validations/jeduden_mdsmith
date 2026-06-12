@@ -678,33 +678,6 @@ func countUnescapedPipes(b []byte) int {
 	return n
 }
 
-// splitCells splits a row body on unescaped pipes. A `\|` pair is
-// kept inside the current cell as a literal escaped pipe, matching
-// tablefmt's GFM rule. Two leading backslashes do not enter a parity
-// dance — `\\|` is a literal backslash followed by an escaped pipe,
-// one cell — because tablefmt parses it that way and the structure
-// pass must agree.
-func splitCells(s string) []string {
-	var cells []string
-	var cur strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c == '\\' && i+1 < len(s) && s[i+1] == '|':
-			cur.WriteByte('\\')
-			cur.WriteByte('|')
-			i++ // skip the escaped pipe
-		case c == '|':
-			cells = append(cells, cur.String())
-			cur.Reset()
-		default:
-			cur.WriteByte(c)
-		}
-	}
-	cells = append(cells, cur.String())
-	return cells
-}
-
 func isBlank(line []byte) bool {
 	return len(bytes.TrimSpace(line)) == 0
 }

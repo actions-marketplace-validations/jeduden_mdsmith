@@ -468,8 +468,10 @@ func splitRow(row string) []string {
 		row = row[:len(row)-1]
 	}
 
-	// Split on unescaped pipes.
-	var cells []string
+	// Split on unescaped pipes. Pre-size to avoid slice-growth allocs in
+	// the tryParseTable hot path; pipe count is an upper bound (escaped
+	// pipes \| are not delimiters but counted anyway).
+	cells := make([]string, 0, strings.Count(row, "|")+1)
 	var current strings.Builder
 	for i := 0; i < len(row); i++ {
 		if row[i] == '\\' && i+1 < len(row) && row[i+1] == '|' {
@@ -501,7 +503,11 @@ func splitRowBytes(row []byte) []string {
 		row = row[:len(row)-1]
 	}
 
-	var cells []string
+	// Pre-size to avoid slice-growth allocs; over-estimates slightly for
+	// escaped \| pairs (which are not delimiters) but that is fine for
+	// capacity. []byte("|") is a stack-allocated needle; escape analysis
+	// confirms bytes.Count does not retain it.
+	cells := make([]string, 0, bytes.Count(row, []byte("|"))+1)
 	var current strings.Builder
 	for i := 0; i < len(row); i++ {
 		if row[i] == '\\' && i+1 < len(row) && row[i+1] == '|' {

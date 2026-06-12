@@ -1054,3 +1054,52 @@ func TestTable_StructFieldsRoundTrip(t *testing.T) {
 		t.Errorf("tableEqual(tbl, tbl) must be true")
 	}
 }
+
+// --- Allocation budget tests ---
+
+// TestSplitRowBytes_AllocBudget verifies that splitRowBytes pre-sizes the
+// cells slice via make([]string, 0, n), eliminating append-growth allocs
+// in the tryParseTable hot path. Budget: make + builder-buf + one String()
+// per cell; no slice-growth allocs.
+func TestSplitRowBytes_AllocBudget(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	if raceEnabled {
+		t.Skip("alloc gate skipped under -race")
+	}
+	row := []byte("| col one | col two | col three |")
+	_ = splitRowBytes(row) // warm up
+	const (
+		runs   = 100
+		budget = 7 // make(1) + builder-buf-growths(~3) + String()×3; no slice-growth allocs
+	)
+	allocs := testing.AllocsPerRun(runs, func() {
+		_ = splitRowBytes(row)
+	})
+	require.LessOrEqualf(t, allocs, float64(budget),
+		"splitRowBytes allocs/op = %.0f (budget=%d); pre-size cells slice to fix",
+		allocs, budget)
+}
+
+// TestSplitRow_AllocBudget verifies that splitRow pre-sizes its cells slice.
+func TestSplitRow_AllocBudget(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	if raceEnabled {
+		t.Skip("alloc gate skipped under -race")
+	}
+	row := "| col one | col two | col three |"
+	_ = splitRow(row) // warm up
+	const (
+		runs   = 100
+		budget = 7 // make(1) + builder-buf-growths(~3) + String()×3; no slice-growth allocs
+	)
+	allocs := testing.AllocsPerRun(runs, func() {
+		_ = splitRow(row)
+	})
+	require.LessOrEqualf(t, allocs, float64(budget),
+		"splitRow allocs/op = %.0f (budget=%d); pre-size cells slice to fix",
+		allocs, budget)
+}

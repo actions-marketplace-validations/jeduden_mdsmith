@@ -548,20 +548,6 @@ func TestContainsUnescapedPipe(t *testing.T) {
 	assert.False(t, containsUnescapedPipe([]byte("plain text")))
 }
 
-func TestSplitCells_EscapedPipe(t *testing.T) {
-	// GFM (per tablefmt) treats `\|` as an escaped-pipe literal in a
-	// cell. The structure pass uses the same rule so the two passes
-	// agree on cell counts and edge detection for inputs containing
-	// `\|` or `\\|`. CommonMark's full backslash grammar (where `\\`
-	// would be a literal `\` so `\\|` becomes literal-backslash +
-	// unescaped-pipe-delimiter) is intentionally NOT honored inside
-	// table cells, matching tablefmt and GitHub's renderer.
-	assert.Equal(t, []string{"\\|"}, splitCells("\\|"))
-	assert.Equal(t, []string{"\\\\|"}, splitCells("\\\\|"))
-	assert.Equal(t, []string{"\\\\\\|"}, splitCells("\\\\\\|"))
-	assert.Equal(t, []string{"a ", " b"}, splitCells("a | b"))
-}
-
 func TestEscapedPipeOnlyParagraphNotHeader(t *testing.T) {
 	// "A \| B" contains only an escaped pipe; even when followed by a
 	// delimiter-looking row, it is not a table header.
