@@ -22,17 +22,17 @@ import (
 // never runs from pkg/mdsmith, the WASM bindings, the LSP fix path, or
 // the merge driver.
 type buildPassOpts struct {
-	noBuild             bool          // --no-build: skip the build pass entirely
-	buildOnly           bool          // --build-only: run only the build pass
-	recipe              string        // --build-recipe: only this recipe's directives
-	dryRun              bool          // --build-dry-run: enumerate targets, run nothing
-	force               bool          // --build-force: rebuild every target
-	checkStale          bool          // --build-check-stale: report stale targets, run nothing
-	noCache             bool          // --build-no-cache: ignore and do not write the cache
-	timeout             time.Duration // --build-timeout: per-recipe timeout
-	maxBytes            int64         // file-size cap inherited from the fix run
-	noHooks             bool          // --build-no-hooks: skip both before/after hook lists
-	skipHooksWhenFresh  bool          // --build-skip-hooks-when-fresh: skip hooks when no target is stale
+	noBuild            bool          // --no-build: skip the build pass entirely
+	buildOnly          bool          // --build-only: run only the build pass
+	recipe             string        // --build-recipe: only this recipe's directives
+	dryRun             bool          // --build-dry-run: enumerate targets, run nothing
+	force              bool          // --build-force: rebuild every target
+	checkStale         bool          // --build-check-stale: report stale targets, run nothing
+	noCache            bool          // --build-no-cache: ignore and do not write the cache
+	timeout            time.Duration // --build-timeout: per-recipe timeout
+	maxBytes           int64         // file-size cap inherited from the fix run
+	noHooks            bool          // --build-no-hooks: skip both before/after hook lists
+	skipHooksWhenFresh bool          // --build-skip-hooks-when-fresh: skip hooks when no target is stale
 }
 
 // buildTarget pairs a resolved build.Target with the file and line it
@@ -150,10 +150,8 @@ func runBuildPass(
 	// --build-skip-hooks-when-fresh: skip hooks only when every target is
 	// fresh (i.e. nothing would rebuild). Evaluate staleness without running
 	// recipes first.
-	if runHooks && opts.skipHooksWhenFresh {
-		if allFresh(targets, cfg, cache, opts) {
-			runHooks = false
-		}
+	if runHooks && opts.skipHooksWhenFresh && allFresh(targets, cfg, cache, opts) {
+		runHooks = false
 	}
 
 	// Run before-hooks. A failure aborts the recipe pass and after-hooks.

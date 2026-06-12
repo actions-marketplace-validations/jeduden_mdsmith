@@ -557,7 +557,8 @@ func TestE2E_Build_NoHooksSkipsBothLists(t *testing.T) {
 	)
 	writeFixture(t, dir, "doc.md", buildDirective("copy", "", "dst.txt"))
 
-	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color", "--build-only", "--build-no-hooks", "doc.md")
+	stdout, stderr, code := runBinaryInDir(t, dir, "", "fix",
+		"--no-color", "--build-only", "--build-no-hooks", "doc.md")
 	out := stdout + stderr
 	assert.Equal(t, 0, code, "fix --build-no-hooks should succeed: %s", out)
 	assert.FileExists(t, filepath.Join(dir, "dst.txt"), "recipe must still run")

@@ -289,7 +289,7 @@ func (r *Rule) validateRecipes(filePath string) []lint.Diagnostic {
 
 // validateHooks runs all safety checks on both hook lists.
 func (r *Rule) validateHooks(filePath string) []lint.Diagnostic {
-	var diags []lint.Diagnostic
+	diags := make([]lint.Diagnostic, 0, len(r.HooksBefore)+len(r.HooksAfter))
 	for i, h := range r.HooksBefore {
 		label := hookLabel("before", i, h.Name)
 		diags = append(diags, r.checkHook(filePath, label, h)...)
