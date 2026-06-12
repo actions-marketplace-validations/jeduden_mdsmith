@@ -858,6 +858,70 @@ func TestApplySettings_HooksBefore_MissingCommand_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "command")
 }
 
+func TestApplySettings_HooksAfter_NotList_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{"hooks-after": "not a list"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hooks-after")
+}
+
+func TestApplySettings_ParseHooks_EntryNotMap_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"hooks-before": []any{"not a map"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be a map")
+}
+
+func TestApplySettings_ParseHooks_CommandNotString_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"hooks-before": []any{map[string]any{"command": 42}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command")
+}
+
+func TestApplySettings_ParseHooks_NameNotString_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"hooks-before": []any{map[string]any{"command": "make start", "name": 99}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "name")
+}
+
+func TestApplySettings_ParseHooks_ParamsNotMap_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"hooks-before": []any{map[string]any{"command": "make start", "params": "bad"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "params")
+}
+
+func TestApplySettings_ParseHooks_ParamValueNotString_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"hooks-before": []any{map[string]any{
+			"command": "scripts/wait {port}",
+			"params":  map[string]any{"port": 3000},
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "port")
+}
+
+func TestCheck_Hook_ReservedAlt_InCommand_Error(t *testing.T) {
+	r := newRuleWithHooks([]hook{{Command: "tool {alt}"}}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Error, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, "{alt}")
+	assert.Contains(t, diags[0].Message, "reserved placeholder")
+}
+
 // --- Diagnostic fields ---
 
 func TestCheck_DiagnosticFields(t *testing.T) {

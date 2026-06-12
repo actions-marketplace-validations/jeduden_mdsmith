@@ -242,5 +242,33 @@ func TestRunHook_NonExistentBinary_ReturnsFailure(t *testing.T) {
 	assert.Error(t, result.Err)
 }
 
+func TestRunAfterHooks_EmptyTokens_Skipped(t *testing.T) {
+	hooks := []HookEntry{{Tokens: nil, Name: "empty"}}
+	result := RunAfterHooks(context.Background(), hooks, t.TempDir(), silentDiscard{})
+	assert.Nil(t, result)
+}
+
+func TestRunAfterHooks_UnnamedHook_UsesFirstToken(t *testing.T) {
+	var w bytes.Buffer
+	h := echoEntry("echo", "hello")
+	h.Name = "" // force the name-from-token path
+	result := RunAfterHooks(context.Background(), []HookEntry{h}, t.TempDir(), &w)
+	assert.Nil(t, result)
+	assert.Contains(t, w.String(), "hook echo: running")
+}
+
+// TestRunHook_SignalKilled_NormalizesExitCode exercises the code < 0 branch:
+// a process killed by a signal yields ExitCode() == -1, which runHook normalizes to 1.
+// Only meaningful on Unix (Windows processes don't signal-kill the same way).
+func TestRunHook_SignalKilled_NormalizesExitCode(t *testing.T) {
+	if os.Getenv("GOOS") == "windows" {
+		t.Skip("signal kill not available on windows")
+	}
+	// `sh -c 'kill -9 $$'` kills the shell with SIGKILL, giving exit code -1.
+	result := runHook(context.Background(), []string{"sh", "-c", "kill -9 $$"}, t.TempDir())
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.ExitCode, "negative signal exit code must be normalized to 1")
+}
+
 // Ensure fmt import is used (compiler would catch this anyway, but making explicit).
 var _ = fmt.Sprintf

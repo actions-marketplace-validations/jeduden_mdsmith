@@ -645,6 +645,23 @@ func TestCopyBuildConfig_HooksSurviveCopy(t *testing.T) {
 	assert.Equal(t, "make stop", cp.Hooks.After[0].Command)
 }
 
+func TestCopyBuildConfig_HookParams_CopiedAndIsolated(t *testing.T) {
+	orig := BuildConfig{
+		Hooks: HooksCfg{
+			Before: []HookCfg{{
+				Command: "scripts/wait {port}",
+				Params:  map[string]string{"port": "3000"},
+			}},
+		},
+	}
+	cp := copyBuildConfig(orig)
+	require.Len(t, cp.Hooks.Before, 1)
+	assert.Equal(t, "3000", cp.Hooks.Before[0].Params["port"])
+	// Mutation of the copy's params must not affect the original.
+	cp.Hooks.Before[0].Params["port"] = "changed"
+	assert.Equal(t, "3000", orig.Hooks.Before[0].Params["port"])
+}
+
 func TestCopyBuildConfig_HooksMutationIsolated(t *testing.T) {
 	orig := BuildConfig{
 		Hooks: HooksCfg{
@@ -998,6 +1015,37 @@ func TestValidateBuildConfig_Hook_UnusedParam_Warning(t *testing.T) {
 	}
 	// Config-level validate should pass; MDS040 is where warnings are emitted.
 	assert.NoError(t, ValidateBuildConfig(cfg))
+}
+
+func TestValidateBuildConfig_Hook_AfterHook_EmptyCommand_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				After: []HookCfg{{Command: ""}},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command must not be empty")
+	assert.Contains(t, err.Error(), "after")
+}
+
+func TestValidateBuildConfig_Hook_ReservedAlt_InHookCommand_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{{
+					Command: "scripts/gen {alt}",
+					Params:  map[string]string{"alt": "desc"},
+				}},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved placeholder")
+	assert.Contains(t, err.Error(), "{alt}")
 }
 
 // --- InjectBuildConfig with hooks ---
