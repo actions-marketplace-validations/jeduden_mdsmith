@@ -494,6 +494,29 @@ func TestExplain_InputIsDirectory_ReturnsHashError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestExplain_ComputeActionIDError covers the computeActionIDFromResolved error
+// path in Explain (lines 261-263). The first hashFile call (for exInputs)
+// succeeds; the second call inside computeActionIDFromResolved is injected to
+// fail via the package-level hashFileFn variable.
+func TestExplain_ComputeActionIDError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("data"), 0o644))
+
+	// Replace hashFileFn so the invocation inside computeActionIDFromResolved fails.
+	// Explain's display-hash loop calls hashFile directly; only computeActionIDFromResolved
+	// uses hashFileFn, so this injection fails exactly the right call.
+	orig := hashFileFn
+	hashFileFn = func(_ string) (string, error) {
+		return "", errors.New("injected hash failure")
+	}
+	t.Cleanup(func() { hashFileFn = orig })
+
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"out.txt"}, nil)
+	_, err := Explain(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "injected hash failure")
+}
+
 func TestExplain_NoInputsNoOutputs_EmptyFields(t *testing.T) {
 	root := t.TempDir()
 	// No inputs, no outputs: Explain must still return a valid ActionID.

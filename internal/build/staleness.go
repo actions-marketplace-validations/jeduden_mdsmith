@@ -20,6 +20,9 @@ import (
 // globCapFn is the CheckGlobMatchCap implementation; tests may replace it.
 var globCapFn = buildrule.CheckGlobMatchCap
 
+// hashFileFn is the hashFile implementation; tests may replace it.
+var hashFileFn = hashFile
+
 // Verdict is the staleness result for one target.
 type Verdict int
 
@@ -184,7 +187,7 @@ func computeActionIDFromResolved(in StalenessInput, inputs, outputs []string) (s
 	var contents strings.Builder
 	for _, rel := range inputs {
 		abs := filepath.Join(in.Target.Root, filepath.FromSlash(rel))
-		sum, err := hashFile(abs)
+		sum, err := hashFileFn(abs)
 		if err != nil {
 			return "", err
 		}

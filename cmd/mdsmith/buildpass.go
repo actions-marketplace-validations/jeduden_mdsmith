@@ -17,6 +17,9 @@ import (
 	"github.com/jeduden/mdsmith/internal/rule"
 )
 
+// pruneOrphanLogsFn is the buildexec.PruneOrphanLogs implementation; tests may replace it.
+var pruneOrphanLogsFn = buildexec.PruneOrphanLogs
+
 // buildPassOpts bundles the build-pass knobs parsed from the fix CLI
 // flags. The build pass is CLI-only — it lives here in cmd/mdsmith and
 // never runs from pkg/mdsmith, the WASM bindings, the LSP fix path, or
@@ -209,7 +212,7 @@ func runBuildPass(
 	}
 
 	cache := loadBuildCache(root, opts, w)
-	if err := buildexec.PruneOrphanLogs(root, cache); err != nil {
+	if err := pruneOrphanLogsFn(root, cache); err != nil {
 		_, _ = fmt.Fprintf(w, "mdsmith: %v\n", err)
 	}
 	return dispatchWithHooks(builder, targets, cfg, root, opts, cache, timeout, errs, w)

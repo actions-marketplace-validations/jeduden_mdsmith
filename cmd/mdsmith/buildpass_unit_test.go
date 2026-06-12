@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1176,4 +1177,189 @@ func TestToPassOpts_VerifyAndStreamMapped(t *testing.T) {
 	assert.True(t, opts.verify)
 	assert.True(t, opts.stream)
 	assert.Equal(t, 8, opts.jobs)
+}
+
+// TestBuildFixFlags_Register_RegistersNewFlags covers the register() lines
+// that wire up --build-stream, --build-verify, --build-jobs, --build-explain.
+func TestBuildFixFlags_Register_RegistersNewFlags(t *testing.T) {
+	var b buildFixFlags
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	b.register(fs)
+
+	require.NoError(t, fs.Parse([]string{
+		"--build-stream",
+		"--build-verify",
+		"--build-jobs", "4",
+		"--build-explain", "out.txt",
+	}))
+	assert.True(t, b.stream)
+	assert.True(t, b.verify)
+	assert.Equal(t, 4, b.jobs)
+	assert.Equal(t, "out.txt", b.explain)
+}
+
+// --- runBuildPass extra branches ---
+
+// TestRunBuildPass_Explain_ReturnsResult covers the opts.explain != "" branch
+// in runBuildPass (lines 136-138): when explain is set, explainTarget is called
+// and its exit code is returned.
+func TestRunBuildPass_Explain_ReturnsResult(t *testing.T) {
+	root := t.TempDir()
+	cfg := buildPassCfg("    cp:\n      command: cp {inputs} {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+	md := buildPassDirective("cp", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	var buf strings.Builder
+	// "out.txt" matches the target — explainTarget returns 0.
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{explain: "out.txt"}, &buf)
+	assert.Equal(t, 0, code)
+	assert.Contains(t, buf.String(), "out.txt")
+}
+
+// TestRunBuildPass_PruneOrphanLogsError_ContinuesAndWarns covers the
+// pruneOrphanLogsFn error branch in runBuildPass: when log pruning fails,
+// a warning is printed but the build still proceeds.
+func TestRunBuildPass_PruneOrphanLogsError_ContinuesAndWarns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	// Inject a failure into pruneOrphanLogsFn.
+	orig := pruneOrphanLogsFn
+	pruneOrphanLogsFn = func(_ string, _ *buildexec.Cache) error {
+		return errors.New("injected prune failure")
+	}
+	t.Cleanup(func() { pruneOrphanLogsFn = orig })
+
+	var buf strings.Builder
+	// Build should still succeed despite the log pruning error.
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{timeout: time.Second}, &buf)
+	assert.Equal(t, 0, code)
+	assert.Contains(t, buf.String(), "injected prune failure")
+}
+
+// TestRunBuildPass_JobsGreaterThanOne_RunsConcurrently covers the jobs > 1 branch
+// in dispatchTargets (line 375): when jobs is set > 1, runConcurrent is used.
+func TestRunBuildPass_JobsGreaterThanOne_RunsConcurrently(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	var buf strings.Builder
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{jobs: 2, timeout: time.Second}, &buf)
+	assert.Equal(t, 0, code)
+	assert.Contains(t, buf.String(), "OK")
+	assert.FileExists(t, filepath.Join(root, "out.txt"))
+}
+
+// --- targetName ---
+
+// TestTargetName_WithOutputs covers the first branch (len > 0 path).
+func TestTargetName_WithOutputs(t *testing.T) {
+	bt := buildTarget{
+		target: buildexec.Target{Outputs: []string{"out.txt", "other.txt"}},
+	}
+	assert.Equal(t, "out.txt", targetName(bt))
+}
+
+// TestTargetName_NoOutputs covers the fallback branch (no outputs declared).
+func TestTargetName_NoOutputs(t *testing.T) {
+	bt := buildTarget{file: "docs/guide.md", line: 42}
+	assert.Equal(t, "docs/guide.md:42", targetName(bt))
+}
+
+// --- decideAndRun extra branches ---
+
+// TestDispatchOne_VerdictError_OutcomeFailed covers the verdictErr != nil branch
+// in decideAndRun: when targetVerdict returns an error, dispatchOne returns
+// outcomeFailed and prints a FAIL line.
+func TestDispatchOne_VerdictError_OutcomeFailed(t *testing.T) {
+	root := t.TempDir()
+	cfg := buildPassCfg("    cp:\n      command: cp {inputs} {outputs}\n")
+	// "absent.txt" does not exist on disk — resolveInputs returns an error.
+	bt := buildTarget{
+		file: "doc.md",
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"absent.txt"},
+			Outputs: []string{"out.txt"},
+		},
+	}
+	builder := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error { return nil }}
+	cache := buildexec.NewCache()
+	var buf strings.Builder
+	outcome := dispatchOne(builder, bt, cfg, buildPassOpts{}, cache, time.Second, &buf)
+	assert.Equal(t, outcomeFailed, outcome)
+	assert.Contains(t, buf.String(), "FAIL")
+}
+
+// TestDispatchOne_VerifyEnabled_RunsTwice covers the opts.verify branch in
+// decideAndRun: when verify is set and the recipe succeeds, verifyTarget is
+// called (running the recipe twice).
+func TestDispatchOne_VerifyEnabled_RunsTwice(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("touch not available on Windows")
+	}
+	root := t.TempDir()
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	targets, errs := collectBuildTargets([]string{p}, root, "", 0)
+	require.Empty(t, errs)
+	require.Len(t, targets, 1)
+
+	builder := buildexec.NewCustomBuilder(buildRecipeSpecs(cfg))
+	cache := buildexec.NewCache()
+	var buf strings.Builder
+	outcome := dispatchOne(builder, targets[0], cfg, buildPassOpts{verify: true, timeout: time.Second},
+		cache, time.Second, &buf)
+	assert.Equal(t, outcomeRebuilt, outcome)
+}
+
+// TestDispatchOne_StreamEnabled_LiveForwards covers the opts.stream branch in
+// runOneTarget: when stream is set, recipe stdout/stderr is forwarded to w live.
+func TestDispatchOne_StreamEnabled_LiveForwards(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("echo not available on Windows")
+	}
+	root := t.TempDir()
+	bindir := t.TempDir()
+	script := writeShScript(t, bindir, "emit.sh", `echo "live output"; touch "$1"`)
+	cfg := buildPassCfg("    emit:\n      command: " + script + " {outputs}\n")
+	bt := buildTarget{
+		file: "doc.md",
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "emit",
+			Root:    root,
+			Outputs: []string{"out.txt"},
+		},
+	}
+	builder := buildexec.NewCustomBuilder(map[string]buildexec.RecipeSpec{
+		"emit": {Command: script + " {outputs}"},
+	})
+	cache := buildexec.NewCache()
+	var buf strings.Builder
+	outcome := dispatchOne(builder, bt, cfg, buildPassOpts{stream: true, timeout: time.Second},
+		cache, time.Second, &buf)
+	assert.Equal(t, outcomeRebuilt, outcome)
+	assert.Contains(t, buf.String(), "live output")
 }
