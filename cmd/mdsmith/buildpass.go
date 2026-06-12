@@ -437,6 +437,9 @@ func dispatchTargets(
 	if opts.jobs > 1 && opts.dryRun {
 		_, _ = fmt.Fprintf(w, "mdsmith: --build-jobs ignored with --build-dry-run\n")
 	}
+	if opts.jobs > 1 && opts.checkStale {
+		_, _ = fmt.Fprintf(w, "mdsmith: --build-jobs ignored with --build-check-stale\n")
+	}
 	if opts.jobs > 1 && !opts.checkStale && !opts.dryRun {
 		runConcurrent(builder, targets, cfg, opts, cache, timeout, w, fold)
 	} else {
@@ -470,8 +473,9 @@ func dispatchOne(
 	builder buildexec.Builder, bt buildTarget, cfg *config.Config,
 	opts buildPassOpts, cache *buildexec.Cache, timeout time.Duration, w io.Writer,
 ) targetOutcome {
-	verdict, serr := targetVerdict(stalenessFor(bt, cfg), cache, opts)
-	outcome, entry := decideAndRun(builder, bt, cfg, opts, verdict, serr, timeout, w)
+	stin := stalenessFor(bt, cfg)
+	verdict, serr := targetVerdict(stin, cache, opts)
+	outcome, entry := decideAndRun(builder, bt, opts, stin, verdict, serr, timeout, w)
 	if entry != nil {
 		cache.Put(*entry)
 	}
@@ -484,12 +488,11 @@ func dispatchOne(
 // or --build-no-cache is set). It touches no shared cache, so concurrent
 // callers can run it in parallel and apply the returned entries serially.
 func decideAndRun(
-	builder buildexec.Builder, bt buildTarget, cfg *config.Config,
-	opts buildPassOpts, verdict buildexec.Verdict, verdictErr error,
+	builder buildexec.Builder, bt buildTarget,
+	opts buildPassOpts, stin buildexec.StalenessInput, verdict buildexec.Verdict, verdictErr error,
 	timeout time.Duration, w io.Writer,
 ) (targetOutcome, *buildexec.CacheEntry) {
 	label := fmt.Sprintf("%s:%d (%s)", bt.file, bt.line, bt.target.Recipe)
-	stin := stalenessFor(bt, cfg)
 
 	if verdictErr != nil {
 		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, verdictErr)
@@ -583,7 +586,9 @@ type targetRunResult struct {
 // runOneTarget dispatches a single target with a per-recipe timeout,
 // capturing streams to the action-id log file. opts.stream forwards the
 // recipe's lines live to w. A failed ActionID computation is returned as
-// the run error so reportBuildFailure can display it.
+// the run error so reportBuildFailure can display it. Log capture is
+// suppressed when --build-no-cache is set to prevent orphaned log files
+// (no cache entry is written to reference them for later pruning).
 func runOneTarget(
 	b buildexec.Builder, bt buildTarget, stin buildexec.StalenessInput,
 	opts buildPassOpts, timeout time.Duration, w io.Writer,
@@ -592,7 +597,11 @@ func runOneTarget(
 	if err != nil {
 		return targetRunResult{Result: buildexec.Result{Err: err}}
 	}
-	bopts := buildexec.Options{LogRoot: bt.target.Root, TargetName: targetName(bt), ActionID: id}
+	bopts := buildexec.Options{TargetName: targetName(bt)}
+	if !opts.noCache {
+		bopts.LogRoot = bt.target.Root
+		bopts.ActionID = id
+	}
 	if opts.stream {
 		bopts.LiveSink = w
 	}

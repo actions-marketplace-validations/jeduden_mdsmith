@@ -102,7 +102,8 @@ const diagTailLines = 20
 // reportBuildFailure prints the rich diagnostic for a failed recipe. A
 // timeout prints the hung-recipe block (last lines of both streams before
 // SIGTERM); any other failure prints the six-field block plus the last 20
-// lines of stderr.
+// lines of stderr. When the recipe never ran (Argv is empty, e.g. ActionID
+// computation failed before dispatch), only the error is printed.
 func reportBuildFailure(bt buildTarget, res targetRunResult, w io.Writer) {
 	name := targetName(bt)
 	if res.TimedOut {
@@ -111,6 +112,12 @@ func reportBuildFailure(bt buildTarget, res targetRunResult, w io.Writer) {
 	}
 	_, _ = fmt.Fprintf(w, "FAIL %s (recipe: %s)\n", name, bt.target.Recipe)
 	_, _ = fmt.Fprintf(w, "  source:   %s:%d <?build?>\n", bt.file, bt.line)
+	if len(res.Argv) == 0 {
+		if res.Err != nil {
+			_, _ = fmt.Fprintf(w, "  error:    %v\n", res.Err)
+		}
+		return
+	}
 	_, _ = fmt.Fprintf(w, "  argv:     %s\n", strings.Join(res.Argv, " "))
 	_, _ = fmt.Fprintf(w, "  cwd:      %s\n", res.Cwd)
 	_, _ = fmt.Fprintf(w, "  exit:     %d\n", res.ExitCode)
@@ -177,9 +184,13 @@ func verifyTarget(
 	vctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	verifyOpts := buildexec.Options{TargetName: targetName(bt), LogRoot: bt.target.Root}
-	if id, err := buildexec.ComputeActionID(stin); err == nil {
-		verifyOpts.ActionID = "verify-" + id
+	id, idErr := buildexec.ComputeActionID(stin)
+	if idErr != nil {
+		_, _ = fmt.Fprintf(w, "WARN %s: verify ActionID failed: %v\n", targetName(bt), idErr)
+		res.Unstable = true
+		return
 	}
+	verifyOpts.ActionID = "verify-" + id
 	if opts.stream {
 		verifyOpts.LiveSink = w
 	}

@@ -33,10 +33,12 @@ func runConcurrent(
 
 	// Verdicts read the shared cache; compute them serially up front so the
 	// concurrent workers touch no shared cache state.
+	stins := make([]buildexec.StalenessInput, len(targets))
 	verdicts := make([]buildexec.Verdict, len(targets))
 	verdictErrs := make([]error, len(targets))
 	for i, bt := range targets {
-		verdicts[i], verdictErrs[i] = targetVerdict(stalenessFor(bt, cfg), cache, opts)
+		stins[i] = stalenessFor(bt, cfg)
+		verdicts[i], verdictErrs[i] = targetVerdict(stins[i], cache, opts)
 	}
 
 	results := make([]concurrentResult, len(targets))
@@ -49,7 +51,7 @@ func runConcurrent(
 			defer wg.Done()
 			defer func() { <-sem }()
 			outcome, entry := decideAndRun(
-				builder, bt, cfg, opts, verdicts[i], verdictErrs[i], timeout, sw)
+				builder, bt, opts, stins[i], verdicts[i], verdictErrs[i], timeout, sw)
 			results[i] = concurrentResult{index: i, outcome: outcome, entry: entry}
 		}(i, bt)
 	}

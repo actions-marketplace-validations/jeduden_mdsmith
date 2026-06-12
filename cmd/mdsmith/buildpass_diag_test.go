@@ -487,6 +487,126 @@ func TestRunBuildPass_NoCacheSkipsPruneOrphanLogs(t *testing.T) {
 	assert.False(t, called, "pruneOrphanLogsFn must not be called with --build-no-cache")
 }
 
+// TestVerifyTarget_ComputeActionIDError_SetsUnstable covers the new error
+// branch in verifyTarget: when ComputeActionID fails (e.g. missing input),
+// verifyTarget prints a WARN, sets Unstable, and returns without running the
+// recipe a second time.
+func TestVerifyTarget_ComputeActionIDError_SetsUnstable(t *testing.T) {
+	root := t.TempDir()
+	// Output exists so snapshotOutputs can capture it; input is absent so
+	// ComputeActionID's resolveInputs call fails.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "out.txt"), []byte("result"), 0o644))
+	called := false
+	mock := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error {
+		called = true
+		return nil
+	}}
+	bt := buildTarget{
+		file: "doc.md",
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"absent.txt"},
+			Outputs: []string{"out.txt"},
+		},
+	}
+	stin := buildexec.StalenessInput{
+		Target:  bt.target,
+		Command: "cp {inputs} {outputs}",
+	}
+	res := &targetRunResult{}
+	var buf strings.Builder
+	verifyTarget(context.Background(), mock, bt, stin, buildPassOpts{}, time.Second, res, &buf)
+	assert.True(t, res.Unstable)
+	assert.Contains(t, buf.String(), "WARN")
+	assert.Contains(t, buf.String(), "ActionID")
+	assert.False(t, called, "builder must not be invoked when ActionID computation fails")
+}
+
+// TestReportBuildFailure_ActionIDError_NoBuildFields covers the len(Argv)==0
+// guard: when the recipe never ran (ActionID error before dispatch), the
+// six-field block is omitted and only FAIL + error: are printed.
+func TestReportBuildFailure_ActionIDError_NoBuildFields(t *testing.T) {
+	bt := buildTarget{
+		file: "doc.md",
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    t.TempDir(),
+			Outputs: []string{"out.txt"},
+		},
+	}
+	res := targetRunResult{
+		Result: buildexec.Result{
+			Err: errors.New("hashing src.txt: is a directory"),
+		},
+	}
+	var buf strings.Builder
+	reportBuildFailure(bt, res, &buf)
+	out := buf.String()
+	assert.Contains(t, out, "FAIL")
+	assert.Contains(t, out, "error:")
+	assert.NotContains(t, out, "argv:")
+	assert.NotContains(t, out, "exit:")
+}
+
+// TestDispatchTargets_JobsWithCheckStale_PrintsWarning covers the new
+// --build-jobs warning for --build-check-stale: when both are set, a
+// diagnostic line is printed because jobs has no effect in stale-check mode.
+func TestDispatchTargets_JobsWithCheckStale_PrintsWarning(t *testing.T) {
+	root := t.TempDir()
+	cfg := buildPassCfg("    cp:\n      command: cp {inputs} {outputs}\n")
+	bt := buildTarget{
+		file: "doc.md",
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Outputs: []string{"out.txt"},
+		},
+	}
+	builder := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error { return nil }}
+	cache := buildexec.NewCache()
+	var buf strings.Builder
+	dispatchTargets(builder, []buildTarget{bt}, cfg, root,
+		buildPassOpts{jobs: 2, checkStale: true},
+		cache, time.Second, &buf)
+	assert.Contains(t, buf.String(), "--build-jobs ignored with --build-check-stale")
+}
+
+// TestRunOneTarget_NoCacheDoesNotWriteLogs covers the noCache guard in
+// runOneTarget: when --build-no-cache is set, no log directory is created
+// (LogRoot/ActionID are not passed to BuildWithResult).
+func TestRunOneTarget_NoCacheDoesNotWriteLogs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh not available on Windows")
+	}
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("x"), 0o644))
+	script := writeShScript(t, root, "cp.sh", `cp "$1" "$2"`)
+	cmd := script + " {inputs} {outputs}"
+	builder := buildexec.NewCustomBuilder(map[string]buildexec.RecipeSpec{
+		"cp": {Command: cmd},
+	})
+	bt := buildTarget{
+		file: "doc.md",
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"src.txt"},
+			Outputs: []string{"out.txt"},
+		},
+	}
+	stin := buildexec.StalenessInput{Target: bt.target, Command: cmd}
+	var buf strings.Builder
+	res := runOneTarget(builder, bt, stin, buildPassOpts{noCache: true}, time.Second, &buf)
+	require.NoError(t, res.Err)
+	_, err := os.Stat(filepath.Join(root, ".mdsmith", "build-logs"))
+	assert.True(t, os.IsNotExist(err), "no log directory must be created when --build-no-cache is set")
+}
+
 // TestVerifyTarget_StreamEnabled_ForwardsLiveOutput covers Fix 6: when
 // stream is true, verifyOpts.LiveSink is set so the verify re-run forwards
 // recipe output to w.

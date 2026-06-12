@@ -495,18 +495,21 @@ func TestExplain_InputIsDirectory_ReturnsHashError(t *testing.T) {
 }
 
 // TestExplain_ComputeActionIDError covers the computeActionIDFromResolved error
-// path in Explain (lines 261-263). The first hashFile call (for exInputs)
-// succeeds; the second call inside computeActionIDFromResolved is injected to
-// fail via the package-level hashFileFn variable.
+// path in Explain. Explain calls hashFileFn once per input in its display loop
+// and then once more inside computeActionIDFromResolved. Letting the first call
+// succeed (display loop) and failing the second (computeActionIDFromResolved)
+// covers the return Explanation{}, err path.
 func TestExplain_ComputeActionIDError(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("data"), 0o644))
 
-	// Replace hashFileFn so the invocation inside computeActionIDFromResolved fails.
-	// Explain's display-hash loop calls hashFile directly; only computeActionIDFromResolved
-	// uses hashFileFn, so this injection fails exactly the right call.
+	callCount := 0
 	orig := hashFileFn
-	hashFileFn = func(_ string) (string, error) {
+	hashFileFn = func(p string) (string, error) {
+		callCount++
+		if callCount == 1 {
+			return hashFile(p)
+		}
 		return "", errors.New("injected hash failure")
 	}
 	t.Cleanup(func() { hashFileFn = orig })
