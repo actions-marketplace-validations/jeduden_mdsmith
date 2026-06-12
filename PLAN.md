@@ -38,7 +38,7 @@ footer: |
 | 101        | ✅     | sonnet | [build directive and MDS039 lint rule](plan/101_build-directive-mds039.md)                                                              |
 | 102        | ✅     | opus   | [Multi-output `<?build?>` directive](plan/102_build-subcommand.md)                                                                      |
 | 103        | ✅     | opus   | [Build target staleness and dependency tracking](plan/103_build-staleness-and-deps.md)                                                  |
-| 104        | 🔲     | sonnet | [Build lifecycle hooks (before/after)](plan/104_build-lifecycle-hooks.md)                                                               |
+| 104        | ✅     | sonnet | [Build lifecycle hooks (before/after)](plan/104_build-lifecycle-hooks.md)                                                               |
 | 105        | ✅     | sonnet | [No inline HTML rule](plan/105_no-inline-html.md)                                                                                       |
 | 106        | ✅     | sonnet | [Emphasis style rule](plan/106_emphasis-style.md)                                                                                       |
 | 107        | ✅     | opus   | [No reference-style links rule](plan/107_no-reference-style.md)                                                                         |
@@ -184,6 +184,6 @@ footer: |
 | 2606110517 | ✅     | sonnet | [tinygo wasm build under the 8 MiB budget](plan/247_tinygo-wasm-build.md)                                                               |
 | 2606110639 | ✅     |        | [Audience split for website-published docs](plan/2606110639_website-docs-audience-split.md)                                             |
 | 2606111048 | 🔲     |        | [Consolidate tinygo compat stubs into internal/oscompat](plan/2606111048_arch-fix-oscompat-consolidation.md)                            |
-| 2606111049 | 🔳     |        | [Harden WASM size test to match production build](plan/2606111049_wasm-size-test-hardening.md)                                          |
+| 2606111049 | ✅     |        | [Harden WASM size test to match production build](plan/2606111049_wasm-size-test-hardening.md)                                          |
 | 2606111050 | ✅     |        | [Guard schema.chmodFile with a mutex like fix.chmodFile](plan/2606111050_schema-chmodfile-mutex.md)                                     |
 <?/catalog?>

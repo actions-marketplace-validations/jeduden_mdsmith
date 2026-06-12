@@ -43,14 +43,16 @@ func runFix(args []string) int {
 // Separating them keeps parseFixFlags under the funlen limit and
 // co-locates the build-flag descriptions with their defaults.
 type buildFixFlags struct {
-	noBuild    bool
-	buildOnly  bool
-	dryRun     bool
-	force      bool
-	checkStale bool
-	noCache    bool
-	recipe     string
-	timeout    time.Duration
+	noBuild            bool
+	buildOnly          bool
+	dryRun             bool
+	force              bool
+	checkStale         bool
+	noCache            bool
+	recipe             string
+	timeout            time.Duration
+	noHooks            bool
+	skipHooksWhenFresh bool
 }
 
 func (b *buildFixFlags) register(fs *flag.FlagSet) {
@@ -65,6 +67,10 @@ func (b *buildFixFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&b.noCache, "build-no-cache", false,
 		"Treat all targets as stale; do not read or write the build cache")
 	fs.DurationVar(&b.timeout, "build-timeout", 30*time.Second, "Per-recipe timeout (e.g. 30s, 2m)")
+	fs.BoolVar(&b.noHooks, "build-no-hooks", false,
+		"Run the build pass but skip both before and after hook lists")
+	fs.BoolVar(&b.skipHooksWhenFresh, "build-skip-hooks-when-fresh", false,
+		"Skip both hook lists when no build target is stale; run them otherwise")
 }
 
 // conflict returns a non-empty message when the build-flag combination is
@@ -81,14 +87,16 @@ func (b buildFixFlags) conflict() string {
 
 func (b buildFixFlags) toPassOpts() buildPassOpts {
 	return buildPassOpts{
-		noBuild:    b.noBuild,
-		buildOnly:  b.buildOnly,
-		recipe:     b.recipe,
-		dryRun:     b.dryRun,
-		force:      b.force,
-		checkStale: b.checkStale,
-		noCache:    b.noCache,
-		timeout:    b.timeout,
+		noBuild:            b.noBuild,
+		buildOnly:          b.buildOnly,
+		recipe:             b.recipe,
+		dryRun:             b.dryRun,
+		force:              b.force,
+		checkStale:         b.checkStale,
+		noCache:            b.noCache,
+		timeout:            b.timeout,
+		noHooks:            b.noHooks,
+		skipHooksWhenFresh: b.skipHooksWhenFresh,
 	}
 }
 

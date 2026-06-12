@@ -674,6 +674,190 @@ func TestCheck_StandaloneReservedPlaceholder_NoDiagnostic(t *testing.T) {
 	assert.Empty(t, diags)
 }
 
+// --- Hook checks ---
+
+// newRuleWithHooks builds a Rule with no recipes but with hook lists.
+func newRuleWithHooks(before, after []hook) *Rule {
+	return &Rule{HooksBefore: before, HooksAfter: after}
+}
+
+func TestCheck_Hook_NoHooksNoRecipes_ReturnsNil(t *testing.T) {
+	r := &Rule{}
+	assert.Nil(t, r.Check(newFile(t, "f.md")))
+}
+
+func TestCheck_Hook_EmptyCommand_Error(t *testing.T) {
+	r := newRuleWithHooks([]hook{{Command: ""}}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Error, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, "command must not be empty")
+}
+
+func TestCheck_Hook_ShellInterpreter_Error(t *testing.T) {
+	r := newRuleWithHooks([]hook{{Command: "bash start.sh"}}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Error, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, "shell interpreter")
+}
+
+func TestCheck_Hook_ShellOperator_Error(t *testing.T) {
+	r := newRuleWithHooks([]hook{{Command: "make start && make wait"}}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.GreaterOrEqual(t, len(diags), 1)
+	assert.Equal(t, lint.Error, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, "shell operator")
+}
+
+func TestCheck_Hook_FusedPlaceholders_Error(t *testing.T) {
+	r := newRuleWithHooks([]hook{
+		{Command: "tool {a}{b}", Params: map[string]string{"a": "x", "b": "y"}},
+	}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Error, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, "fused placeholders")
+}
+
+func TestCheck_Hook_DotDot_Executable_Error(t *testing.T) {
+	r := newRuleWithHooks([]hook{{Command: "../../scripts/start.sh"}}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Error, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, "..")
+}
+
+func TestCheck_Hook_ReservedInputs_Error(t *testing.T) {
+	r := newRuleWithHooks([]hook{{Command: "tool {inputs}"}}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Error, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, "{inputs}")
+	assert.Contains(t, diags[0].Message, "not available in hooks")
+}
+
+func TestCheck_Hook_ReservedOutputs_Error(t *testing.T) {
+	r := newRuleWithHooks([]hook{{Command: "tool {outputs}"}}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Error, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, "{outputs}")
+	assert.Contains(t, diags[0].Message, "not available in hooks")
+}
+
+func TestCheck_Hook_UndeclaredParam_Error(t *testing.T) {
+	r := newRuleWithHooks([]hook{{Command: "tool {port}"}}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Error, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, "undeclared placeholder")
+	assert.Contains(t, diags[0].Message, "{port}")
+}
+
+func TestCheck_Hook_UnusedParam_Warning(t *testing.T) {
+	r := newRuleWithHooks([]hook{
+		{Command: "make start", Params: map[string]string{"unused": "value"}},
+	}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Equal(t, lint.Warning, diags[0].Severity)
+	assert.Contains(t, diags[0].Message, `"unused"`)
+	assert.Contains(t, diags[0].Message, "not referenced")
+}
+
+func TestCheck_Hook_ValidCommand_NoDiagnostics(t *testing.T) {
+	r := newRuleWithHooks(
+		[]hook{{Command: "make dev-server-start"}},
+		[]hook{{Command: "make dev-server-stop"}},
+	)
+	diags := r.Check(newFile(t, "f.md"))
+	assert.Empty(t, diags)
+}
+
+func TestCheck_Hook_WithParams_NoDiagnostics(t *testing.T) {
+	r := newRuleWithHooks([]hook{
+		{Command: "scripts/wait-for-port {port}", Params: map[string]string{"port": "3000"}},
+	}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	assert.Empty(t, diags)
+}
+
+func TestCheck_Hook_AfterList_Validated(t *testing.T) {
+	r := newRuleWithHooks(nil, []hook{{Command: "bash stop.sh"}})
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Contains(t, diags[0].Message, "shell interpreter")
+	assert.Contains(t, diags[0].Message, "after")
+}
+
+func TestCheck_Hook_Name_UsedInDiagnostic(t *testing.T) {
+	r := newRuleWithHooks([]hook{{Command: "bash x.sh", Name: "start server"}}, nil)
+	diags := r.Check(newFile(t, "f.md"))
+	require.Len(t, diags, 1)
+	assert.Contains(t, diags[0].Message, "start server")
+}
+
+func TestCheck_Hook_ConfigPath_GatingWorks(t *testing.T) {
+	r := newRuleWithHooks([]hook{{Command: "bash x.sh"}}, nil)
+	r.ConfigPath = "/project/.mdsmith.yml"
+	// Wrong file — should not produce diagnostics.
+	assert.Nil(t, r.Check(newFile(t, "other.md")))
+	// Correct file — should produce diagnostics.
+	diags := r.Check(newFile(t, "/project/.mdsmith.yml"))
+	require.Len(t, diags, 1)
+}
+
+func TestApplySettings_HooksBefore_Valid(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"hooks-before": []any{
+			map[string]any{
+				"command": "make start",
+				"name":    "start server",
+			},
+			map[string]any{
+				"command": "scripts/wait {port}",
+				"params":  map[string]any{"port": "3000"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, r.HooksBefore, 2)
+	assert.Equal(t, "make start", r.HooksBefore[0].Command)
+	assert.Equal(t, "start server", r.HooksBefore[0].Name)
+	assert.Equal(t, "scripts/wait {port}", r.HooksBefore[1].Command)
+	assert.Equal(t, "3000", r.HooksBefore[1].Params["port"])
+}
+
+func TestApplySettings_HooksAfter_Valid(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"hooks-after": []any{
+			map[string]any{"command": "make stop"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, r.HooksAfter, 1)
+	assert.Equal(t, "make stop", r.HooksAfter[0].Command)
+}
+
+func TestApplySettings_HooksBefore_NotList_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{"hooks-before": "not a list"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hooks-before")
+}
+
+func TestApplySettings_HooksBefore_MissingCommand_Error(t *testing.T) {
+	r := &Rule{}
+	err := r.ApplySettings(map[string]any{
+		"hooks-before": []any{map[string]any{"name": "no-cmd"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command")
+}
+
 // --- Diagnostic fields ---
 
 func TestCheck_DiagnosticFields(t *testing.T) {

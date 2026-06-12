@@ -130,12 +130,9 @@ func copyUserConventions(m map[string]UserConvention) map[string]UserConvention 
 }
 
 // copyBuildConfig returns a deep copy of a BuildConfig, duplicating the
-// Recipes map and each recipe's Params slices so callers can mutate them
-// independently.
+// Recipes map, each recipe's Params slices, and the Hooks lists so callers
+// can mutate them independently.
 func copyBuildConfig(b BuildConfig) BuildConfig {
-	if len(b.Recipes) == 0 {
-		return BuildConfig{}
-	}
 	recipes := make(map[string]RecipeCfg, len(b.Recipes))
 	for name, r := range b.Recipes {
 		recipes[name] = RecipeCfg{
@@ -148,7 +145,29 @@ func copyBuildConfig(b BuildConfig) BuildConfig {
 			DefaultInputs: copyStrings(r.DefaultInputs),
 		}
 	}
-	return BuildConfig{Recipes: recipes}
+	return BuildConfig{
+		Recipes: recipes,
+		Hooks: HooksCfg{
+			Before: copyHooks(b.Hooks.Before),
+			After:  copyHooks(b.Hooks.After),
+		},
+	}
+}
+
+// copyHooks returns a shallow copy of a hook list.
+func copyHooks(hooks []HookCfg) []HookCfg {
+	if len(hooks) == 0 {
+		return nil
+	}
+	out := make([]HookCfg, len(hooks))
+	for i, h := range hooks {
+		params := make(map[string]string, len(h.Params))
+		for k, v := range h.Params {
+			params[k] = v
+		}
+		out[i] = HookCfg{Command: h.Command, Name: h.Name, Params: params}
+	}
+	return out
 }
 
 // copyKinds returns a deep copy of a kinds map, including each RuleCfg's

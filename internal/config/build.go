@@ -119,6 +119,9 @@ func validateHook(listName string, idx int, hook HookCfg) error {
 // no NUL byte, no newline or carriage return, no leading/trailing whitespace,
 // and at most maxHookParamBytes bytes.
 func validateHookParamValue(label, paramName, value string) error {
+	if len(value) > maxHookParamBytes {
+		return fmt.Errorf("%s: param %q value exceeds 4 KB limit", label, paramName)
+	}
 	if strings.ContainsRune(value, '\x00') {
 		return fmt.Errorf("%s: param %q value must not contain a NUL byte", label, paramName)
 	}
@@ -127,9 +130,6 @@ func validateHookParamValue(label, paramName, value string) error {
 	}
 	if value != strings.TrimSpace(value) {
 		return fmt.Errorf("%s: param %q value must not have leading or trailing whitespace", label, paramName)
-	}
-	if len(value) > maxHookParamBytes {
-		return fmt.Errorf("%s: param %q value exceeds 4 KB limit", label, paramName)
 	}
 	return nil
 }
@@ -314,10 +314,10 @@ func validateCommandPlaceholders(recipeName, command string, allowed map[string]
 	return nil
 }
 
-// InjectBuildConfig copies cfg.Build.Recipes into the recipe-safety and
-// build rule settings. It is called after config loading in main so rules
-// receive their inputs through the normal ApplySettings path. cfgPath is
-// the path to the loaded .mdsmith.yml; it is set in the config-path
+// InjectBuildConfig copies cfg.Build.Recipes and cfg.Build.Hooks into the
+// recipe-safety and build rule settings. It is called after config loading in
+// main so rules receive their inputs through the normal ApplySettings path.
+// cfgPath is the path to the loaded .mdsmith.yml; it is set in the config-path
 // setting so MDS040 can report diagnostics against the right file.
 func InjectBuildConfig(cfg *Config, cfgPath string) {
 	if cfg == nil {
@@ -325,12 +325,14 @@ func InjectBuildConfig(cfg *Config, cfgPath string) {
 	}
 	recipes := serializeRecipes(cfg.Build.Recipes)
 
-	// Inject into recipe-safety (MDS040) with config-path.
+	// Inject into recipe-safety (MDS040) with config-path and hooks.
 	if rc, ok := cfg.Rules["recipe-safety"]; ok && rc.Enabled {
 		if rc.Settings == nil {
 			rc.Settings = make(map[string]any)
 		}
 		rc.Settings["recipes"] = recipes
+		rc.Settings["hooks-before"] = serializeHooks(cfg.Build.Hooks.Before)
+		rc.Settings["hooks-after"] = serializeHooks(cfg.Build.Hooks.After)
 		if cfgPath != "" {
 			rc.Settings["config-path"] = cfgPath
 		}
@@ -345,6 +347,27 @@ func InjectBuildConfig(cfg *Config, cfgPath string) {
 		rc.Settings["recipes"] = recipes
 		cfg.Rules["build"] = rc
 	}
+}
+
+// serializeHooks converts a []HookCfg to []any for transport through the
+// generic ApplySettings mechanism.
+func serializeHooks(hooks []HookCfg) []any {
+	out := make([]any, len(hooks))
+	for i, h := range hooks {
+		m := map[string]any{"command": h.Command}
+		if h.Name != "" {
+			m["name"] = h.Name
+		}
+		if len(h.Params) > 0 {
+			params := make(map[string]any, len(h.Params))
+			for k, v := range h.Params {
+				params[k] = v
+			}
+			m["params"] = params
+		}
+		out[i] = m
+	}
+	return out
 }
 
 // serializeRecipes converts RecipeCfg map to map[string]any for transport

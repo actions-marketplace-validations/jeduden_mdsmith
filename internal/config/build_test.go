@@ -630,6 +630,58 @@ func TestSerializeRecipes_BothParams(t *testing.T) {
 
 // --- copyBuildConfig isolation ---
 
+func TestCopyBuildConfig_HooksSurviveCopy(t *testing.T) {
+	orig := BuildConfig{
+		Hooks: HooksCfg{
+			Before: []HookCfg{{Command: "make start", Name: "start server"}},
+			After:  []HookCfg{{Command: "make stop"}},
+		},
+	}
+	cp := copyBuildConfig(orig)
+	require.Len(t, cp.Hooks.Before, 1)
+	assert.Equal(t, "make start", cp.Hooks.Before[0].Command)
+	assert.Equal(t, "start server", cp.Hooks.Before[0].Name)
+	require.Len(t, cp.Hooks.After, 1)
+	assert.Equal(t, "make stop", cp.Hooks.After[0].Command)
+}
+
+func TestCopyBuildConfig_HooksMutationIsolated(t *testing.T) {
+	orig := BuildConfig{
+		Hooks: HooksCfg{
+			Before: []HookCfg{{Command: "make start"}},
+		},
+	}
+	cp := copyBuildConfig(orig)
+	cp.Hooks.Before[0] = HookCfg{Command: "changed"}
+	// Original must be unaffected.
+	assert.Equal(t, "make start", orig.Hooks.Before[0].Command)
+}
+
+func TestMerge_PreservesHooks(t *testing.T) {
+	defaults := &Config{
+		Rules: map[string]RuleCfg{
+			"recipe-safety": {Enabled: true},
+		},
+	}
+	loaded := &Config{
+		Rules: map[string]RuleCfg{
+			"recipe-safety": {Enabled: true},
+		},
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{{Command: "make start"}},
+				After:  []HookCfg{{Command: "make stop"}},
+			},
+		},
+	}
+	merged := Merge(defaults, loaded)
+	require.NotNil(t, merged)
+	require.Len(t, merged.Build.Hooks.Before, 1)
+	assert.Equal(t, "make start", merged.Build.Hooks.Before[0].Command)
+	require.Len(t, merged.Build.Hooks.After, 1)
+	assert.Equal(t, "make stop", merged.Build.Hooks.After[0].Command)
+}
+
 func TestCopyBuildConfig_MutationDoesNotAliasOriginal(t *testing.T) {
 	orig := BuildConfig{
 		Recipes: map[string]RecipeCfg{
@@ -946,6 +998,98 @@ func TestValidateBuildConfig_Hook_UnusedParam_Warning(t *testing.T) {
 	}
 	// Config-level validate should pass; MDS040 is where warnings are emitted.
 	assert.NoError(t, ValidateBuildConfig(cfg))
+}
+
+// --- InjectBuildConfig with hooks ---
+
+func TestInjectBuildConfig_HooksInjected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{
+					{Command: "make start", Name: "start server"},
+					{Command: "scripts/wait {port}", Params: map[string]string{"port": "3000"}},
+				},
+				After: []HookCfg{
+					{Command: "make stop"},
+				},
+			},
+		},
+		Rules: map[string]RuleCfg{
+			"recipe-safety": {Enabled: true},
+		},
+	}
+	InjectBuildConfig(cfg, ".mdsmith.yml")
+
+	rc := cfg.Rules["recipe-safety"]
+	require.NotNil(t, rc.Settings)
+
+	rawBefore, ok := rc.Settings["hooks-before"]
+	require.True(t, ok, "hooks-before key must be present")
+	before, ok := rawBefore.([]any)
+	require.True(t, ok)
+	require.Len(t, before, 2)
+
+	h0, ok := before[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "make start", h0["command"])
+	assert.Equal(t, "start server", h0["name"])
+
+	rawAfter, ok := rc.Settings["hooks-after"]
+	require.True(t, ok, "hooks-after key must be present")
+	after, ok := rawAfter.([]any)
+	require.True(t, ok)
+	require.Len(t, after, 1)
+}
+
+func TestInjectBuildConfig_EmptyHooks_StillInjects(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{},
+		Rules: map[string]RuleCfg{
+			"recipe-safety": {Enabled: true},
+		},
+	}
+	InjectBuildConfig(cfg, "")
+	rc := cfg.Rules["recipe-safety"]
+	require.NotNil(t, rc.Settings)
+	rawBefore, ok := rc.Settings["hooks-before"]
+	require.True(t, ok)
+	before, ok := rawBefore.([]any)
+	require.True(t, ok)
+	assert.Empty(t, before)
+}
+
+// --- serializeHooks ---
+
+func TestSerializeHooks_Empty(t *testing.T) {
+	out := serializeHooks(nil)
+	assert.Empty(t, out)
+}
+
+func TestSerializeHooks_Command(t *testing.T) {
+	out := serializeHooks([]HookCfg{{Command: "make start"}})
+	require.Len(t, out, 1)
+	m, ok := out[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "make start", m["command"])
+	assert.NotContains(t, m, "name")
+	assert.NotContains(t, m, "params")
+}
+
+func TestSerializeHooks_WithNameAndParams(t *testing.T) {
+	out := serializeHooks([]HookCfg{{
+		Command: "scripts/wait {port}",
+		Name:    "wait for port",
+		Params:  map[string]string{"port": "3000"},
+	}})
+	require.Len(t, out, 1)
+	m, ok := out[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "scripts/wait {port}", m["command"])
+	assert.Equal(t, "wait for port", m["name"])
+	params, ok := m["params"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "3000", params["port"])
 }
 
 // --- Build survives Merge ---

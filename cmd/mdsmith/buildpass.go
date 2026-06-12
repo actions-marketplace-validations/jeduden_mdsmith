@@ -14,6 +14,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/bytelimit"
 	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/lint"
+	"github.com/jeduden/mdsmith/internal/rule"
 )
 
 // buildPassOpts bundles the build-pass knobs parsed from the fix CLI
@@ -21,15 +22,17 @@ import (
 // never runs from pkg/mdsmith, the WASM bindings, the LSP fix path, or
 // the merge driver.
 type buildPassOpts struct {
-	noBuild    bool          // --no-build: skip the build pass entirely
-	buildOnly  bool          // --build-only: run only the build pass
-	recipe     string        // --build-recipe: only this recipe's directives
-	dryRun     bool          // --build-dry-run: enumerate targets, run nothing
-	force      bool          // --build-force: rebuild every target
-	checkStale bool          // --build-check-stale: report stale targets, run nothing
-	noCache    bool          // --build-no-cache: ignore and do not write the cache
-	timeout    time.Duration // --build-timeout: per-recipe timeout
-	maxBytes   int64         // file-size cap inherited from the fix run
+	noBuild             bool          // --no-build: skip the build pass entirely
+	buildOnly           bool          // --build-only: run only the build pass
+	recipe              string        // --build-recipe: only this recipe's directives
+	dryRun              bool          // --build-dry-run: enumerate targets, run nothing
+	force               bool          // --build-force: rebuild every target
+	checkStale          bool          // --build-check-stale: report stale targets, run nothing
+	noCache             bool          // --build-no-cache: ignore and do not write the cache
+	timeout             time.Duration // --build-timeout: per-recipe timeout
+	maxBytes            int64         // file-size cap inherited from the fix run
+	noHooks             bool          // --build-no-hooks: skip both before/after hook lists
+	skipHooksWhenFresh  bool          // --build-skip-hooks-when-fresh: skip hooks when no target is stale
 }
 
 // buildTarget pairs a resolved build.Target with the file and line it
@@ -38,6 +41,46 @@ type buildTarget struct {
 	file   string
 	line   int
 	target buildexec.Target
+}
+
+// checkMDS040Gate runs MDS040 (recipe-safety) against the current config and
+// returns true (gate open) when no errors are found. If errors exist it prints
+// each one to w and returns false. The gate is skipped when cfg.Rules does not
+// have "recipe-safety" enabled (i.e. MDS040 is disabled by the user).
+func checkMDS040Gate(cfg *config.Config, cfgPath string, w io.Writer) bool {
+	rc, ok := cfg.Rules["recipe-safety"]
+	if !ok || !rc.Enabled {
+		return true
+	}
+	r := rule.ByID("MDS040")
+	if r == nil {
+		return true
+	}
+	c, ok := r.(interface {
+		ApplySettings(map[string]any) error
+		Check(f *lint.File) []lint.Diagnostic
+	})
+	if !ok {
+		return true
+	}
+	if rc.Settings != nil {
+		if err := c.ApplySettings(rc.Settings); err != nil {
+			_, _ = fmt.Fprintf(w, "mdsmith: MDS040 settings error: %v\n", err)
+			return false
+		}
+	}
+	// Use an empty config file as the synthetic lint target. MDS040 is a
+	// ConfigTarget rule: it checks only when f.Path matches its ConfigPath.
+	f, _ := lint.NewFile(cfgPath, []byte(""))
+	diags := c.Check(f)
+	hasErrors := false
+	for _, d := range diags {
+		if d.Severity == lint.Error {
+			_, _ = fmt.Fprintf(w, "%s:%d: %s [%s]\n", d.File, d.Line, d.Message, d.RuleID)
+			hasErrors = true
+		}
+	}
+	return !hasErrors
 }
 
 // runBuildPass collects every <?build?> directive across files, then
@@ -52,6 +95,12 @@ func runBuildPass(
 	cfg *config.Config, cfgPath string, files []string, opts buildPassOpts, w io.Writer,
 ) int {
 	root := rootDirFromConfig(cfgPath)
+
+	// Gate: refuse to run if MDS040 emits any error against build.hooks or
+	// build.recipes. --no-build bypasses this check (no build pass runs).
+	if !checkMDS040Gate(cfg, cfgPath, w) {
+		return 2
+	}
 
 	// Filter out ignored files so the build pass honours the same
 	// cfg.Ignore patterns the lint pass applies internally. When a
@@ -93,11 +142,102 @@ func runBuildPass(
 	}
 
 	cache := loadBuildCache(root, opts, w)
+
+	// Resolve whether to skip hooks. Dry-run and check-stale never run hooks.
+	runHooks := !opts.noHooks && !opts.dryRun && !opts.checkStale
+
+	// --build-skip-hooks-when-fresh: skip hooks only when every target is
+	// fresh (i.e. nothing would rebuild). Evaluate staleness without running
+	// recipes first.
+	if runHooks && opts.skipHooksWhenFresh {
+		if allFresh(targets, cfg, cache, opts) {
+			runHooks = false
+		}
+	}
+
+	// Run before-hooks. A failure aborts the recipe pass and after-hooks.
+	if runHooks && len(cfg.Build.Hooks.Before) > 0 {
+		before := resolveHooks(cfg.Build.Hooks.Before)
+		ctx := context.Background()
+		if result := buildexec.RunHooks(ctx, before, root, w); result != nil {
+			return result.ExitCode
+		}
+	}
+
+	// Dry-run: list hooks alongside recipes, run nothing.
+	if opts.dryRun {
+		listHooksForDryRun("before", cfg.Build.Hooks.Before, w)
+	}
+
 	code := dispatchTargets(builder, targets, cfg, root, opts, cache, timeout, w)
-	if len(errs) > 0 && code == 0 {
+
+	// Dry-run: list after-hooks.
+	if opts.dryRun {
+		listHooksForDryRun("after", cfg.Build.Hooks.After, w)
+	}
+
+	// Run after-hooks regardless of recipe result (but not on abort from before-fail).
+	afterCode := 0
+	if runHooks && len(cfg.Build.Hooks.After) > 0 {
+		after := resolveHooks(cfg.Build.Hooks.After)
+		ctx := context.Background()
+		if result := buildexec.RunAfterHooks(ctx, after, root, w); result != nil {
+			afterCode = result.ExitCode
+		}
+	}
+
+	if len(errs) > 0 && code == 0 && afterCode == 0 {
 		return 2
 	}
-	return code
+	if code != 0 {
+		return code
+	}
+	return afterCode
+}
+
+// resolveHooks converts []config.HookCfg to []buildexec.HookEntry by
+// tokenizing each command and substituting params.
+func resolveHooks(hooks []config.HookCfg) []buildexec.HookEntry {
+	out := make([]buildexec.HookEntry, 0, len(hooks))
+	for _, h := range hooks {
+		tokens := buildexec.TokenizeHook(h.Command, h.Params)
+		if len(tokens) == 0 {
+			continue
+		}
+		out = append(out, buildexec.HookEntry{
+			Tokens: tokens,
+			Name:   h.Name,
+		})
+	}
+	return out
+}
+
+// allFresh returns true when every target's staleness verdict is Fresh.
+// This is used to decide whether to skip hooks under --build-skip-hooks-when-fresh.
+func allFresh(targets []buildTarget, cfg *config.Config, cache *buildexec.Cache, opts buildPassOpts) bool {
+	for _, bt := range targets {
+		stin := stalenessFor(bt, cfg)
+		verdict, err := buildexec.CheckStaleness(stin, cache)
+		if err != nil {
+			return false
+		}
+		if verdict.Verdict != buildexec.Fresh {
+			return false
+		}
+	}
+	return true
+}
+
+// listHooksForDryRun writes one line per hook to w, prefixed with listName
+// ("before" or "after"). Used during --build-dry-run.
+func listHooksForDryRun(listName string, hooks []config.HookCfg, w io.Writer) {
+	for i, h := range hooks {
+		name := h.Name
+		if name == "" && len(strings.Fields(h.Command)) > 0 {
+			name = strings.Fields(h.Command)[0]
+		}
+		_, _ = fmt.Fprintf(w, "hook %s[%d] %s: DRY-RUN\n", listName, i, name)
+	}
 }
 
 // detectOverlap maps the collected targets to OverlapTargets and runs the
