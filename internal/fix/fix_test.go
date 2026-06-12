@@ -1337,14 +1337,13 @@ func TestComputeWouldFixAggregated_DedupesByDiagnosticFile(t *testing.T) {
 	// entry is keyed by the diagnostic's File, and the count is not
 	// inflated by the number of host markdown files.
 	hostA := "a.md"
-	hostB := "b.md"
 	target := ".gitattributes"
 	allBefore := []lint.Diagnostic{
 		{File: target, Line: 1, Column: 1, RuleID: "MDS048", RuleName: "git-hook-sync", Message: "drift"},
 		{File: target, Line: 1, Column: 1, RuleID: "MDS048", RuleName: "git-hook-sync", Message: "drift"},
 	}
 	allAfter := []lint.Diagnostic{} // fixed across the run
-	bytesChangedByPath := map[string]bool{hostA: true, hostB: false}
+	bytesChangedByPath := map[string]struct{}{hostA: {}} // hostB omitted: bytes unchanged
 
 	files, total := computeWouldFixAggregated(allBefore, allAfter, bytesChangedByPath)
 	require.Equal(t, 1, total, "deduped MDS048 must contribute exactly 1 to WouldFix")

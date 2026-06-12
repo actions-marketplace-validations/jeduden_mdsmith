@@ -233,9 +233,9 @@ func (f *Fixer) fixOnce(paths []string) *Result {
 	// sums would inflate Failures and WouldFix to N when only one
 	// underlying issue exists.
 	var allBefore, allAfter []lint.Diagnostic
-	var bytesChangedByPath map[string]bool
+	var bytesChangedByPath map[string]struct{}
 	if f.DryRun {
-		bytesChangedByPath = make(map[string]bool)
+		bytesChangedByPath = make(map[string]struct{})
 	}
 	for _, path := range paths {
 		if config.IsIgnored(f.Config.Ignore, path) {
@@ -251,7 +251,7 @@ func (f *Fixer) fixOnce(paths []string) *Result {
 			res.Modified = append(res.Modified, modified)
 		}
 		if f.DryRun && bytesChanged {
-			bytesChangedByPath[path] = true
+			bytesChangedByPath[path] = struct{}{}
 		}
 		res.Errors = append(res.Errors, errs...)
 	}
@@ -399,7 +399,7 @@ func keyOf(d lint.Diagnostic) diagKey {
 // WouldFix total by the number of files in the repo.
 func computeWouldFixAggregated(
 	allBefore, allAfter []lint.Diagnostic,
-	bytesChangedByPath map[string]bool,
+	bytesChangedByPath map[string]struct{},
 ) ([]WouldFixFile, int) {
 	beforeByFile := groupDiagsByFile(lint.DedupeDiagnostics(allBefore))
 	afterByFile := groupDiagsByFile(lint.DedupeDiagnostics(allAfter))
@@ -423,7 +423,8 @@ func computeWouldFixAggregated(
 	result := make([]WouldFixFile, 0, len(paths))
 	total := 0
 	for _, p := range paths {
-		wf := computeWouldFix(p, beforeByFile[p], afterByFile[p], bytesChangedByPath[p])
+		_, bytesChanged := bytesChangedByPath[p]
+		wf := computeWouldFix(p, beforeByFile[p], afterByFile[p], bytesChanged)
 		if wf == nil {
 			continue
 		}

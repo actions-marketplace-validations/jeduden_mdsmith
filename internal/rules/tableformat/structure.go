@@ -685,7 +685,9 @@ func countUnescapedPipes(b []byte) int {
 // one cell — because tablefmt parses it that way and the structure
 // pass must agree.
 func splitCells(s string) []string {
-	var cells []string
+	// Pre-size to avoid slice-growth allocs; pipe count over-estimates for
+	// escaped \| pairs but is cheap and keeps the hot path allocation-free.
+	cells := make([]string, 0, strings.Count(s, "|")+1)
 	var cur strings.Builder
 	for i := 0; i < len(s); i++ {
 		c := s[i]

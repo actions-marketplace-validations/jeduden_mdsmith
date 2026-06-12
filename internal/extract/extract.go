@@ -426,15 +426,15 @@ func (p *projector) tableRows(n ast.Node) []any {
 			// keys, silently dropping every cell but the last.
 			// Surface it as a projection collision (once) rather
 			// than emitting lossy rows.
-			seen := make(map[string]bool, len(cols))
+			seen := make(map[string]struct{}, len(cols))
 			for _, c := range cols {
 				if c == "" {
 					continue
 				}
-				if seen[c] {
+				if _, ok := seen[c]; ok {
 					p.collision(c, "duplicate table column header")
 				}
-				seen[c] = true
+				seen[c] = struct{}{}
 			}
 			continue
 		}
