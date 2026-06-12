@@ -33,6 +33,10 @@ type buildPassOpts struct {
 	maxBytes           int64         // file-size cap inherited from the fix run
 	noHooks            bool          // --build-no-hooks: skip both before/after hook lists
 	skipHooksWhenFresh bool          // --build-skip-hooks-when-fresh: skip hooks when no target is stale
+	stream             bool          // --build-stream: live-forward recipe streams to the terminal
+	verify             bool          // --build-verify: run each recipe twice and diff outputs
+	jobs               int           // --build-jobs N: concurrent recipe dispatch (default 1)
+	explain            string        // --build-explain TARGET: print ActionID inputs; run nothing
 }
 
 // buildTarget pairs a resolved build.Target with the file and line it
@@ -463,19 +467,37 @@ func dispatchOne(
 		return outcomeNeutral
 	}
 	if verdict == buildexec.Fresh {
-		_, _ = fmt.Fprintf(w, "build %s: SKIP\n", label)
+		_, _ = fmt.Fprintf(w, "SKIP %s\n", targetName(bt))
 		return outcomeNeutral
 	}
-	if err := runOneTarget(builder, bt, timeout); err != nil {
+
+	res := runOneTarget(builder, bt, stin, opts, timeout, w)
+	if res.Err != nil {
+		reportBuildFailure(bt, res, w)
+		return outcomeFailed
+	}
+	if opts.verify {
+		verifyTarget(builder, bt, stin, opts, timeout, &res, w)
+	}
+	entry, err := buildCacheEntry(stin, opts, res.Unstable)
+	if err != nil {
 		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, err)
 		return outcomeFailed
 	}
-	if err := refreshCacheEntry(stin, cache, opts); err != nil {
-		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, err)
-		return outcomeFailed
+	if entry != nil {
+		cache.Put(*entry)
 	}
-	_, _ = fmt.Fprintf(w, "build %s: OK\n", label)
+	_, _ = fmt.Fprintf(w, "OK %s\n", targetName(bt))
 	return outcomeRebuilt
+}
+
+// targetName returns the target's display name: its first declared output
+// path, or the source label when no output is declared.
+func targetName(bt buildTarget) string {
+	if len(bt.target.Outputs) > 0 {
+		return bt.target.Outputs[0]
+	}
+	return fmt.Sprintf("%s:%d", bt.file, bt.line)
 }
 
 // targetVerdict returns the staleness verdict for one target, honouring
@@ -497,28 +519,48 @@ func targetVerdict(
 	return res.Verdict, nil
 }
 
-// refreshCacheEntry records a rebuilt target's cache entry, stamping
-// built-at. With --build-no-cache it is a no-op.
-func refreshCacheEntry(
-	stin buildexec.StalenessInput, cache *buildexec.Cache, opts buildPassOpts,
-) error {
+// buildCacheEntry records a rebuilt target's cache entry, stamping
+// built-at and the unstable flag. With --build-no-cache it returns nil.
+func buildCacheEntry(
+	stin buildexec.StalenessInput, opts buildPassOpts, unstable bool,
+) (*buildexec.CacheEntry, error) {
 	if opts.noCache {
-		return nil
+		return nil, nil
 	}
 	entry, err := buildexec.RecordBuild(stin)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	entry.BuiltAt = time.Now().UTC().Format(time.RFC3339)
-	cache.Put(entry)
-	return nil
+	entry.Unstable = unstable
+	return &entry, nil
 }
 
-// runOneTarget dispatches a single target with a per-recipe timeout.
-func runOneTarget(b buildexec.Builder, bt buildTarget, timeout time.Duration) error {
+// targetRunResult is one recipe run's outcome plus the unstable flag set
+// by --build-verify.
+type targetRunResult struct {
+	buildexec.BuildResult
+	Unstable bool
+}
+
+// runOneTarget dispatches a single target with a per-recipe timeout,
+// capturing streams to the action-id log file. opts.stream forwards the
+// recipe's lines live to w. A failed ActionID computation is reported as
+// the run error.
+func runOneTarget(
+	b buildexec.Builder, bt buildTarget, stin buildexec.StalenessInput,
+	opts buildPassOpts, timeout time.Duration, w io.Writer,
+) targetRunResult {
+	bopts := buildexec.BuildOptions{LogRoot: bt.target.Root, TargetName: targetName(bt)}
+	if id, err := buildexec.ComputeActionID(stin); err == nil {
+		bopts.ActionID = id
+	}
+	if opts.stream {
+		bopts.LiveSink = w
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return b.Build(ctx, bt.target)
+	return targetRunResult{BuildResult: b.BuildWithResult(ctx, bt.target, bopts)}
 }
 
 // buildRecipeSpecs converts the loaded config's build.recipes into the

@@ -87,3 +87,17 @@ func TestStreamCapture_PartialLineFlushedOnClose(t *testing.T) {
 	assert.Contains(t, string(data), "[stdout] no newline here")
 	assert.Equal(t, []string{"no newline here"}, sc.stdoutTail())
 }
+
+func TestNewStreamCapture_ErrorWhenLogPathIsDir(t *testing.T) {
+	dir := t.TempDir()
+	// Place a directory at the logPath so os.Create fails.
+	logPath := filepath.Join(dir, "logs")
+	require.NoError(t, os.MkdirAll(logPath, 0o755))
+	_, err := newStreamCapture(logPath, "tgt", nil)
+	require.Error(t, err)
+}
+
+func TestLastN_FewerElementsThanN_ReturnsAll(t *testing.T) {
+	lines := []string{"a", "b", "c"}
+	assert.Equal(t, lines, lastN(lines, 10))
+}

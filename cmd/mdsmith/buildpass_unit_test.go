@@ -386,10 +386,9 @@ func TestRefreshCacheEntry_NoCache_IsNoop(t *testing.T) {
 		},
 		Command: "cp {inputs} {outputs}",
 	}
-	cache := buildexec.NewCache()
-	err := refreshCacheEntry(stin, cache, buildPassOpts{noCache: true})
+	entry, err := buildCacheEntry(stin, buildPassOpts{noCache: true}, false)
 	require.NoError(t, err)
-	assert.Empty(t, cache.Entries, "noCache must not write to cache")
+	assert.Nil(t, entry, "noCache must not produce a cache entry")
 }
 
 // --- targetVerdict with force + error ---
