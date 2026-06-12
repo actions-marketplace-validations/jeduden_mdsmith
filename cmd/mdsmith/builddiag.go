@@ -6,11 +6,93 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	buildexec "github.com/jeduden/mdsmith/internal/build"
+	"github.com/jeduden/mdsmith/internal/config"
 )
+
+// explainTarget prints the ActionID inputs and the cache verdict for the
+// target whose first declared output equals name. No recipe runs. It
+// returns 0 on success or 2 when no target matches.
+func explainTarget(
+	targets []buildTarget, name string, cfg *config.Config,
+	cache *buildexec.Cache, w io.Writer,
+) int {
+	want := normalizeTargetName(name)
+	for _, bt := range targets {
+		if len(bt.target.Outputs) == 0 {
+			continue
+		}
+		if normalizeTargetName(bt.target.Outputs[0]) != want {
+			continue
+		}
+		return printExplanation(bt, cfg, cache, w)
+	}
+	_, _ = fmt.Fprintf(w, "mdsmith: no target named %q\n", name)
+	return 2
+}
+
+// normalizeTargetName slash-normalizes and cleans a target name for the
+// --build-explain match.
+func normalizeTargetName(p string) string {
+	return filepath.ToSlash(filepath.Clean(p))
+}
+
+// printExplanation writes the full ActionID breakdown for one target.
+func printExplanation(
+	bt buildTarget, cfg *config.Config, cache *buildexec.Cache, w io.Writer,
+) int {
+	stin := stalenessFor(bt, cfg)
+	ex, err := buildexec.Explain(stin)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "mdsmith: %v\n", err)
+		return 2
+	}
+	_, _ = fmt.Fprintf(w, "explain %s\n", targetName(bt))
+	_, _ = fmt.Fprintf(w, "  recipe.command: %s\n", ex.Command)
+	_, _ = fmt.Fprintf(w, "  params:\n")
+	for _, k := range sortedKeys(ex.Params) {
+		_, _ = fmt.Fprintf(w, "    %s: %s\n", k, ex.Params[k])
+	}
+	_, _ = fmt.Fprintf(w, "  inputs:\n")
+	for _, in := range ex.Inputs {
+		_, _ = fmt.Fprintf(w, "    %s  %s\n", in.Path, in.Hash)
+	}
+	_, _ = fmt.Fprintf(w, "  outputs:\n")
+	for _, o := range ex.Outputs {
+		_, _ = fmt.Fprintf(w, "    %s\n", o)
+	}
+	_, _ = fmt.Fprintf(w, "  cache.version: %d\n", ex.CacheVersion)
+	_, _ = fmt.Fprintf(w, "  action-id: %s\n", ex.ActionID)
+	printVerdict(stin, cache, w)
+	return 0
+}
+
+// printVerdict appends the cache verdict line and an unstable note.
+func printVerdict(stin buildexec.StalenessInput, cache *buildexec.Cache, w io.Writer) {
+	res, err := buildexec.CheckStaleness(stin, cache)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "  verdict: ERROR: %v\n", err)
+		return
+	}
+	_, _ = fmt.Fprintf(w, "  verdict: %s\n", res.Verdict)
+	if entry, ok := cache.Lookup(stin.Target.Outputs); ok && entry.Unstable {
+		_, _ = fmt.Fprintf(w, "  unstable: true\n")
+	}
+}
+
+// sortedKeys returns the sorted keys of a string map.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 // diagTailLines is the number of trailing stream lines printed in the
 // failure and timeout diagnostics.

@@ -170,6 +170,11 @@ func runBuildPass(
 		return 2
 	}
 
+	if opts.explain != "" {
+		cache := loadBuildCache(root, opts, w)
+		return explainTarget(targets, opts.explain, cfg, cache, w)
+	}
+
 	if len(targets) == 0 {
 		if len(errs) > 0 {
 			return 2
@@ -204,6 +209,9 @@ func runBuildPass(
 	}
 
 	cache := loadBuildCache(root, opts, w)
+	if err := buildexec.PruneOrphanLogs(root, cache); err != nil {
+		_, _ = fmt.Fprintf(w, "mdsmith: %v\n", err)
+	}
 	return dispatchWithHooks(builder, targets, cfg, root, opts, cache, timeout, errs, w)
 }
 
@@ -400,17 +408,17 @@ const (
 )
 
 // dispatchTargets runs the staleness check, dispatch, and cache refresh
-// loop. It returns the build pass exit code.
+// loop. It returns the build pass exit code. With opts.jobs > 1 recipes
+// run concurrently; cache entries apply serially in declared order after
+// all recipes finish.
 func dispatchTargets(
 	builder buildexec.Builder, targets []buildTarget, cfg *config.Config,
 	root string, opts buildPassOpts, cache *buildexec.Cache,
 	timeout time.Duration, w io.Writer,
 ) int {
-	failed := false
-	anyStale := false
-	rebuilt := false
-	for _, bt := range targets {
-		switch dispatchOne(builder, bt, cfg, opts, cache, timeout, w) {
+	var failed, anyStale, rebuilt bool
+	var fold = func(o targetOutcome) {
+		switch o {
 		case outcomeFailed:
 			failed = true
 		case outcomeStale:
@@ -418,6 +426,14 @@ func dispatchTargets(
 		case outcomeRebuilt:
 			rebuilt = true
 		case outcomeNeutral:
+		}
+	}
+
+	if opts.jobs > 1 && !opts.checkStale && !opts.dryRun {
+		runConcurrent(builder, targets, cfg, opts, cache, timeout, w, fold)
+	} else {
+		for _, bt := range targets {
+			fold(dispatchOne(builder, bt, cfg, opts, cache, timeout, w))
 		}
 	}
 
@@ -439,42 +455,58 @@ func dispatchTargets(
 	return 0
 }
 
-// dispatchOne handles a single target: staleness verdict, then report or
-// rebuild per the active flags. It returns the outcome the caller folds
-// into the run-level state.
+// dispatchOne handles a single target end to end against a shared cache,
+// used by the serial path. It computes the verdict, reports or rebuilds,
+// and applies the cache entry directly.
 func dispatchOne(
 	builder buildexec.Builder, bt buildTarget, cfg *config.Config,
 	opts buildPassOpts, cache *buildexec.Cache, timeout time.Duration, w io.Writer,
 ) targetOutcome {
+	verdict, serr := targetVerdict(stalenessFor(bt, cfg), cache, opts)
+	outcome, entry := decideAndRun(builder, bt, cfg, opts, verdict, serr, timeout, w)
+	if entry != nil {
+		cache.Put(*entry)
+	}
+	return outcome
+}
+
+// decideAndRun decides the per-target action from a precomputed verdict
+// and, when a rebuild is warranted, runs the recipe. It returns the
+// outcome and an optional cache entry to apply (nil when nothing changed
+// or --build-no-cache is set). It touches no shared cache, so concurrent
+// callers can run it in parallel and apply the returned entries serially.
+func decideAndRun(
+	builder buildexec.Builder, bt buildTarget, cfg *config.Config,
+	opts buildPassOpts, verdict buildexec.Verdict, verdictErr error,
+	timeout time.Duration, w io.Writer,
+) (targetOutcome, *buildexec.CacheEntry) {
 	label := fmt.Sprintf("%s:%d (%s)", bt.file, bt.line, bt.target.Recipe)
 	stin := stalenessFor(bt, cfg)
 
-	verdict, serr := targetVerdict(stin, cache, opts)
-	if serr != nil {
-		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, serr)
-		return outcomeFailed
+	if verdictErr != nil {
+		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, verdictErr)
+		return outcomeFailed, nil
 	}
-
 	if opts.checkStale {
 		if verdict == buildexec.Stale {
 			_, _ = fmt.Fprintf(w, "build %s: STALE\n", label)
-			return outcomeStale
+			return outcomeStale, nil
 		}
-		return outcomeNeutral
+		return outcomeNeutral, nil
 	}
 	if opts.dryRun {
 		_, _ = fmt.Fprintf(w, "build %s: %s\n", label, verdict)
-		return outcomeNeutral
+		return outcomeNeutral, nil
 	}
 	if verdict == buildexec.Fresh {
 		_, _ = fmt.Fprintf(w, "SKIP %s\n", targetName(bt))
-		return outcomeNeutral
+		return outcomeNeutral, nil
 	}
 
 	res := runOneTarget(builder, bt, stin, opts, timeout, w)
 	if res.Err != nil {
 		reportBuildFailure(bt, res, w)
-		return outcomeFailed
+		return outcomeFailed, nil
 	}
 	if opts.verify {
 		verifyTarget(builder, bt, stin, opts, timeout, &res, w)
@@ -482,13 +514,10 @@ func dispatchOne(
 	entry, err := buildCacheEntry(stin, opts, res.Unstable)
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, err)
-		return outcomeFailed
-	}
-	if entry != nil {
-		cache.Put(*entry)
+		return outcomeFailed, nil
 	}
 	_, _ = fmt.Fprintf(w, "OK %s\n", targetName(bt))
-	return outcomeRebuilt
+	return outcomeRebuilt, entry
 }
 
 // targetName returns the target's display name: its first declared output

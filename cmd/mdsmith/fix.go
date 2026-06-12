@@ -54,6 +54,10 @@ type buildFixFlags struct {
 	timeout            time.Duration
 	noHooks            bool
 	skipHooksWhenFresh bool
+	stream             bool
+	verify             bool
+	jobs               int
+	explain            string
 }
 
 func (b *buildFixFlags) register(fs *flag.FlagSet) {
@@ -72,6 +76,13 @@ func (b *buildFixFlags) register(fs *flag.FlagSet) {
 		"Run the build pass but skip both before and after hook lists")
 	fs.BoolVar(&b.skipHooksWhenFresh, "build-skip-hooks-when-fresh", false,
 		"Skip both hook lists when no build target is stale; run them otherwise")
+	fs.BoolVar(&b.stream, "build-stream", false,
+		"Live-forward each recipe's stdout/stderr to the terminal, prefixed with the target name")
+	fs.BoolVar(&b.verify, "build-verify", false,
+		"Run each recipe twice in separate staging dirs and warn when the outputs differ")
+	fs.IntVar(&b.jobs, "build-jobs", 1, "Run up to N recipes concurrently")
+	fs.StringVar(&b.explain, "build-explain", "",
+		"Print the ActionID inputs and cache verdict for TARGET; run no recipe")
 }
 
 // conflict returns a non-empty message when the build-flag combination is
@@ -82,6 +93,18 @@ func (b buildFixFlags) conflict() string {
 	}
 	if b.force && (b.checkStale || b.noCache) {
 		return "--build-force cannot be combined with --build-check-stale or --build-no-cache"
+	}
+	if b.explain != "" && b.verify {
+		return "--build-explain and --build-verify are mutually exclusive"
+	}
+	if b.explain != "" && (b.dryRun || b.checkStale) {
+		return "--build-explain cannot be combined with --build-dry-run or --build-check-stale"
+	}
+	if b.verify && (b.dryRun || b.checkStale) {
+		return "--build-verify cannot be combined with --build-dry-run or --build-check-stale"
+	}
+	if b.jobs < 1 {
+		return "--build-jobs must be at least 1"
 	}
 	return ""
 }
@@ -98,6 +121,10 @@ func (b buildFixFlags) toPassOpts() buildPassOpts {
 		timeout:            b.timeout,
 		noHooks:            b.noHooks,
 		skipHooksWhenFresh: b.skipHooksWhenFresh,
+		stream:             b.stream,
+		verify:             b.verify,
+		jobs:               b.jobs,
+		explain:            b.explain,
 	}
 }
 

@@ -218,6 +218,59 @@ func ComputeActionID(in StalenessInput) (string, error) {
 	return computeActionIDFromResolved(in, inputs, outputs)
 }
 
+// ExplainInput is one resolved input path with its content sha, for the
+// --build-explain breakdown.
+type ExplainInput struct {
+	Path string
+	Hash string
+}
+
+// Explanation is the full ActionID-input breakdown for one target: the
+// recipe command, the canonical params, the resolved inputs with content
+// shas, the resolved outputs, the cache version, and the resulting
+// ActionID. It answers "why is this fresh?" without diving into JSON.
+type Explanation struct {
+	Command      string
+	Params       map[string]string
+	Inputs       []ExplainInput
+	Outputs      []string
+	CacheVersion int
+	ActionID     string
+}
+
+// Explain resolves a target's ActionID inputs and returns the breakdown.
+func Explain(in StalenessInput) (Explanation, error) {
+	inputs, err := resolveInputs(in)
+	if err != nil {
+		return Explanation{}, err
+	}
+	outputs, err := resolveOutputs(in)
+	if err != nil {
+		return Explanation{}, err
+	}
+	exInputs := make([]ExplainInput, 0, len(inputs))
+	for _, rel := range inputs {
+		abs := filepath.Join(in.Target.Root, filepath.FromSlash(rel))
+		sum, err := hashFile(abs)
+		if err != nil {
+			return Explanation{}, err
+		}
+		exInputs = append(exInputs, ExplainInput{Path: rel, Hash: "sha256-" + sum})
+	}
+	actionID, err := computeActionIDFromResolved(in, inputs, outputs)
+	if err != nil {
+		return Explanation{}, err
+	}
+	return Explanation{
+		Command:      in.Command,
+		Params:       in.Target.Params,
+		Inputs:       exInputs,
+		Outputs:      outputs,
+		CacheVersion: CacheVersion,
+		ActionID:     actionID,
+	}, nil
+}
+
 // hashFile returns the lowercase-hex sha256 of a file's content. It
 // streams through the shared hashFileSum primitive so large inputs never
 // have to fit in memory.
