@@ -1077,3 +1077,103 @@ func TestAllFresh_CheckStalenessError_ReturnsFalse(t *testing.T) {
 	// allFresh must return false rather than true.
 	assert.False(t, allFresh([]buildTarget{bt}, cfg, buildexec.NewCache(), buildPassOpts{}))
 }
+
+// --- buildFixFlags.conflict ---
+
+func TestConflict_NoBuildAndBuildOnly_Conflict(t *testing.T) {
+	b := buildFixFlags{noBuild: true, buildOnly: true}
+	assert.NotEmpty(t, b.conflict())
+}
+
+func TestConflict_ForceAndCheckStale_Conflict(t *testing.T) {
+	b := buildFixFlags{force: true, checkStale: true}
+	assert.NotEmpty(t, b.conflict())
+}
+
+func TestConflict_ForceAndNoCache_Conflict(t *testing.T) {
+	b := buildFixFlags{force: true, noCache: true}
+	assert.NotEmpty(t, b.conflict())
+}
+
+func TestConflict_ExplainAndVerify_Conflict(t *testing.T) {
+	b := buildFixFlags{explain: "out.txt", verify: true}
+	assert.NotEmpty(t, b.conflict())
+}
+
+func TestConflict_ExplainAndDryRun_Conflict(t *testing.T) {
+	b := buildFixFlags{explain: "out.txt", dryRun: true}
+	assert.NotEmpty(t, b.conflict())
+}
+
+func TestConflict_ExplainAndCheckStale_Conflict(t *testing.T) {
+	b := buildFixFlags{explain: "out.txt", checkStale: true}
+	assert.NotEmpty(t, b.conflict())
+}
+
+func TestConflict_VerifyAndDryRun_Conflict(t *testing.T) {
+	b := buildFixFlags{verify: true, dryRun: true}
+	assert.NotEmpty(t, b.conflict())
+}
+
+func TestConflict_VerifyAndCheckStale_Conflict(t *testing.T) {
+	b := buildFixFlags{verify: true, checkStale: true}
+	assert.NotEmpty(t, b.conflict())
+}
+
+func TestConflict_JobsLessThanOne_Conflict(t *testing.T) {
+	b := buildFixFlags{jobs: 0}
+	assert.NotEmpty(t, b.conflict())
+}
+
+func TestConflict_ValidFlags_NoConflict(t *testing.T) {
+	b := buildFixFlags{jobs: 2, explain: "out.txt"}
+	assert.Empty(t, b.conflict())
+}
+
+// --- buildFixFlags.toPassOpts ---
+
+func TestToPassOpts_MapsAllNewFlags(t *testing.T) {
+	b := buildFixFlags{
+		noBuild:            true,
+		buildOnly:          false,
+		dryRun:             true,
+		force:              false,
+		checkStale:         false,
+		noCache:            true,
+		recipe:             "copy",
+		timeout:            5 * time.Second,
+		noHooks:            true,
+		skipHooksWhenFresh: true,
+		stream:             true,
+		verify:             false,
+		jobs:               4,
+		explain:            "out.txt",
+	}
+	opts := b.toPassOpts()
+	assert.True(t, opts.noBuild)
+	assert.False(t, opts.buildOnly)
+	assert.True(t, opts.dryRun)
+	assert.False(t, opts.force)
+	assert.False(t, opts.checkStale)
+	assert.True(t, opts.noCache)
+	assert.Equal(t, "copy", opts.recipe)
+	assert.Equal(t, 5*time.Second, opts.timeout)
+	assert.True(t, opts.noHooks)
+	assert.True(t, opts.skipHooksWhenFresh)
+	assert.True(t, opts.stream)
+	assert.False(t, opts.verify)
+	assert.Equal(t, 4, opts.jobs)
+	assert.Equal(t, "out.txt", opts.explain)
+}
+
+func TestToPassOpts_VerifyAndStreamMapped(t *testing.T) {
+	b := buildFixFlags{
+		verify: true,
+		stream: true,
+		jobs:   8,
+	}
+	opts := b.toPassOpts()
+	assert.True(t, opts.verify)
+	assert.True(t, opts.stream)
+	assert.Equal(t, 8, opts.jobs)
+}

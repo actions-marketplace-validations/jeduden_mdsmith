@@ -309,3 +309,65 @@ func TestVerifyTarget_FailingReRunSetsUnstable(t *testing.T) {
 	assert.True(t, res.Unstable)
 	assert.Contains(t, buf.String(), "verify re-run failed")
 }
+
+// TestVerifyTarget_NonDeterministicOutput_SetsUnstable covers the branch where
+// the two recipe runs produce different output bytes — sets res.Unstable and
+// prints a warning.
+func TestVerifyTarget_NonDeterministicOutput_SetsUnstable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh not available on Windows")
+	}
+	root := t.TempDir()
+	// Write an initial output so snapshotOutputs captures something.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "out.txt"), []byte("first"), 0o644))
+
+	// The mock builder writes different content on every call.
+	call := 0
+	mock := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error {
+		call++
+		content := []byte("run" + string(rune('0'+call)))
+		_ = os.WriteFile(filepath.Join(root, "out.txt"), content, 0o644)
+		return nil
+	}}
+
+	bt := buildTarget{
+		file: "doc.md",
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "rand",
+			Root:    root,
+			Outputs: []string{"out.txt"},
+		},
+	}
+	stin := buildexec.StalenessInput{Target: bt.target}
+	res := &targetRunResult{}
+	var buf strings.Builder
+	verifyTarget(mock, bt, stin, buildPassOpts{}, time.Second, res, &buf)
+	assert.True(t, res.Unstable, "non-deterministic output must set Unstable")
+	assert.Contains(t, buf.String(), "non-deterministic")
+}
+
+// --- printVerdict ERROR branch ---
+
+// TestPrintVerdict_ErrorBranch covers the err != nil path in printVerdict when
+// CheckStaleness returns an error. We give it a literal input path that does not
+// exist on disk, which causes resolveInputs to return an error.
+func TestPrintVerdict_ErrorBranch(t *testing.T) {
+	root := t.TempDir()
+	// "absent.txt" does not exist — resolveInputs returns an error for
+	// a literal (non-glob) input that is missing.
+	stin := buildexec.StalenessInput{
+		Target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"absent.txt"},
+			Outputs: []string{"out.txt"},
+		},
+		Command: "cp {inputs} {outputs}",
+	}
+	cache := buildexec.NewCache()
+	var buf strings.Builder
+	printVerdict(stin, cache, &buf)
+	out := buf.String()
+	assert.Contains(t, out, "verdict: ERROR:", "missing input must trigger the ERROR branch")
+}
