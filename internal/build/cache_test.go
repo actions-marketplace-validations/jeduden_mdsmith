@@ -202,13 +202,13 @@ func (w *closeFailWriter) Close() error                { return errors.New("flus
 func TestWriteTempFile_WriteError(t *testing.T) {
 	err := writeTempFile(&writeFailCloser{}, []byte("data"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "writing temp cache file")
+	assert.Contains(t, err.Error(), "writing temp file")
 }
 
 func TestWriteTempFile_CloseError(t *testing.T) {
 	err := writeTempFile(&closeFailWriter{}, []byte("data"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "closing temp cache file")
+	assert.Contains(t, err.Error(), "closing temp file")
 }
 
 func TestCache_Save_SortOrder(t *testing.T) {
@@ -236,4 +236,24 @@ func TestCache_Save_WriteTempFileError(t *testing.T) {
 	c := NewCache()
 	err := c.Save(root)
 	require.Error(t, err)
+}
+
+func TestAtomicWriteFile_CreateTempError(t *testing.T) {
+	// The temp file is created in the destination's parent dir; a parent that
+	// does not exist makes os.CreateTemp fail.
+	final := filepath.Join(t.TempDir(), "nonexistent", "file.txt")
+	err := atomicWriteFile(final, 0o644, []byte("data"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating temp file")
+}
+
+func TestAtomicWriteFile_ChmodError(t *testing.T) {
+	old := chmodFileFn
+	chmodFileFn = func(*os.File, os.FileMode) error { return errors.New("chmod failed") }
+	t.Cleanup(func() { chmodFileFn = old })
+
+	final := filepath.Join(t.TempDir(), "file.txt")
+	err := atomicWriteFile(final, 0o644, []byte("data"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "setting temp file mode")
 }

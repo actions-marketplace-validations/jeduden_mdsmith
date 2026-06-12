@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -76,12 +77,12 @@ func runMetricsList(args []string) int {
 	defs := metricspkg.ForScope(scope)
 	switch format {
 	case "text":
-		if err := writeMetricsListText(defs); err != nil {
+		if err := writeMetricsListText(os.Stdout, defs); err != nil {
 			fmt.Fprintf(os.Stderr, "mdsmith: writing output: %v\n", err)
 			return 2
 		}
 	case "json":
-		if err := writeMetricsListJSON(defs); err != nil {
+		if err := writeMetricsListJSON(os.Stdout, defs); err != nil {
 			fmt.Fprintf(os.Stderr, "mdsmith: writing output: %v\n", err)
 			return 2
 		}
@@ -196,7 +197,7 @@ func executeMetricsRank(opts metricsRankOptions, fileArgs []string) int {
 	metricspkg.SortRows(rows, byDef, order)
 	rows = metricspkg.LimitRows(rows, opts.top)
 
-	if err := writeRankOutput(opts.format, rows, defs); err != nil {
+	if err := writeRankOutput(os.Stdout, opts.format, rows, defs); err != nil {
 		if strings.Contains(err.Error(), "unknown format") {
 			fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
 			return 2
@@ -261,15 +262,16 @@ func resolveRankFiles(cfg *config.Config, opts metricsRankOptions, fileArgs []st
 }
 
 func writeRankOutput(
+	w io.Writer,
 	format string,
 	rows []metricspkg.Row,
 	defs []metricspkg.Definition,
 ) error {
 	switch format {
 	case "text":
-		return writeMetricsRankText(rows, defs)
+		return writeMetricsRankText(w, rows, defs)
 	case "json":
-		return writeMetricsRankJSON(rows, defs)
+		return writeMetricsRankJSON(w, rows, defs)
 	default:
 		return fmt.Errorf("unknown format %q (supported: text, json)", format)
 	}
@@ -284,8 +286,8 @@ func containsMetric(defs []metricspkg.Definition, id string) bool {
 	return false
 }
 
-func writeMetricsListText(defs []metricspkg.Definition) error {
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+func writeMetricsListText(w io.Writer, defs []metricspkg.Definition) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "ID\tNAME\tSCOPE\tORDER\tDEFAULT\tDESCRIPTION"); err != nil {
 		return err
 	}
@@ -306,7 +308,7 @@ func writeMetricsListText(defs []metricspkg.Definition) error {
 	return tw.Flush()
 }
 
-func writeMetricsListJSON(defs []metricspkg.Definition) error {
+func writeMetricsListJSON(w io.Writer, defs []metricspkg.Definition) error {
 	items := make([]map[string]any, 0, len(defs))
 	for _, def := range defs {
 		items = append(items, map[string]any{
@@ -318,13 +320,13 @@ func writeMetricsListJSON(defs []metricspkg.Definition) error {
 			"default_order": def.DefaultOrder,
 		})
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(items)
 }
 
-func writeMetricsRankText(rows []metricspkg.Row, defs []metricspkg.Definition) error {
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+func writeMetricsRankText(w io.Writer, rows []metricspkg.Row, defs []metricspkg.Definition) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
 	headers := make([]string, 0, len(defs)+1)
 	for _, def := range defs {
@@ -349,7 +351,7 @@ func writeMetricsRankText(rows []metricspkg.Row, defs []metricspkg.Definition) e
 	return tw.Flush()
 }
 
-func writeMetricsRankJSON(rows []metricspkg.Row, defs []metricspkg.Definition) error {
+func writeMetricsRankJSON(w io.Writer, rows []metricspkg.Row, defs []metricspkg.Definition) error {
 	items := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		item := map[string]any{
@@ -360,7 +362,7 @@ func writeMetricsRankJSON(rows []metricspkg.Row, defs []metricspkg.Definition) e
 		}
 		items = append(items, item)
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(items)
 }

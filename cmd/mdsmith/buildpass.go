@@ -136,7 +136,27 @@ func runBuildPass(
 		return 0
 	}
 
-	builder := buildexec.NewCustomBuilder(recipes)
+	// Trust gate: a freshly cloned repo may declare recipes that run
+	// arbitrary binaries. The gate is consulted only when a recipe would
+	// actually execute — never on --build-dry-run or --build-check-stale,
+	// which enumerate targets without running anything. When it denies
+	// trust the build pass is skipped with a clear message; the lint-fix
+	// pass has already run.
+	if !opts.dryRun && !opts.checkStale {
+		// Pin the config file the run actually loaded (cfgPath), so the gate
+		// is correct under `mdsmith fix -c other.yml`. A defaults-only run
+		// (cfgPath == "") falls back to the default config name under root.
+		trustPath := cfgPath
+		if trustPath == "" {
+			trustPath = buildexec.ConfigPathForRoot(root)
+		}
+		if trust := buildexec.CheckTrust(trustPath, envIsSet); !trust.Trusted {
+			_, _ = fmt.Fprintf(w, "mdsmith: %s\n", trust.Reason)
+			return 2
+		}
+	}
+
+	builder := buildexec.NewCustomBuilderExec(recipes, buildExecConfig(cfg))
 	timeout := opts.timeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -472,6 +492,35 @@ func buildRecipeSpecs(cfg *config.Config) map[string]buildexec.RecipeSpec {
 		out[name] = buildexec.RecipeSpec{Command: r.Command}
 	}
 	return out
+}
+
+// buildExecConfig maps the loaded config's build.exec section into the
+// build package's ExecConfig. Empty fields fall through to the build
+// executor's compiled defaults.
+func buildExecConfig(cfg *config.Config) buildexec.ExecConfig {
+	return buildexec.ExecConfig{
+		Path:           cfg.Build.Exec.Path,
+		EnvPassThrough: cfg.Build.Exec.EnvPassThrough,
+	}
+}
+
+// envIsSet reports whether the named environment variable is set to a
+// truthy value. It is the production environment lookup passed to the
+// trust gate, so an explicit MDSMITH_TRUST_BUILD=0 (or false/no/off)
+// does NOT grant trust — only an affirmative value does. This avoids the
+// footgun where a user who sets the variable to a disabling value still
+// has the build pass run.
+func envIsSet(name string) bool {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return false
+	}
+	switch strings.ToLower(v) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 // collectBuildTargets parses each file, walks its <?build?> directives,

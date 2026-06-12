@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,15 @@ import (
 // recipeCmd builds a RecipeSpec whose command is the given string.
 func recipeCmd(command string) RecipeSpec {
 	return RecipeSpec{Command: command}
+}
+
+func TestNewCustomBuilderExec(t *testing.T) {
+	recipes := map[string]RecipeSpec{"r": recipeCmd("echo")}
+	ec := ExecConfig{Path: "/custom/bin"}
+	b := NewCustomBuilderExec(recipes, ec)
+	require.NotNil(t, b)
+	assert.Equal(t, ec.Path, b.exec.Path)
+	assert.Len(t, b.recipes, 1)
 }
 
 func TestBuild_SingleOutputCp(t *testing.T) {
@@ -371,7 +381,8 @@ func TestCommitOutputs_MkdirAllError(t *testing.T) {
 	stage := filepath.Join(stageDir, "out0")
 	require.NoError(t, os.WriteFile(stage, []byte("data"), 0o644))
 
-	err := commitOutputs(root, []string{"file.txt/result.txt"}, []string{stage})
+	finals := []string{filepath.Join(root, "file.txt", "result.txt")}
+	err := commitOutputs(finals, []string{"file.txt/result.txt"}, []string{stage})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating output dir")
 }
@@ -389,7 +400,8 @@ func TestCommitOutputs_RenameFallbackToCopyFails(t *testing.T) {
 	stage := filepath.Join(stageDir, "out0")
 	require.NoError(t, os.WriteFile(stage, []byte("data"), 0o644))
 
-	err := commitOutputs(root, []string{"result"}, []string{stage})
+	finals := []string{filepath.Join(root, "result")}
+	err := commitOutputs(finals, []string{"result"}, []string{stage})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "writing output")
 }
@@ -436,12 +448,14 @@ func TestCopyFile_PreservesSourceMode(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
-func TestBuild_StagingDirCreationFails(t *testing.T) {
-	// Allocate the temp dirs before overriding TMPDIR — t.TempDir would
-	// fail under the bogus value.
+func TestBuild_StagingRootCreationFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ENOTDIR semantics differ on Windows")
+	}
 	root := t.TempDir()
-	// Point TMPDIR at a path that does not exist so os.MkdirTemp fails.
-	t.Setenv("TMPDIR", filepath.Join(root, "nope"))
+	// Plant a regular file at .mdsmith so MkdirAll(.mdsmith/build-staging)
+	// fails with ENOTDIR before any recipe runs.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mdsmith"), []byte("x"), 0o644))
 	b := NewCustomBuilder(map[string]RecipeSpec{
 		"echo": recipeCmd("echo hi"),
 	})
@@ -451,23 +465,68 @@ func TestBuild_StagingDirCreationFails(t *testing.T) {
 		Outputs: []string{"out.txt"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "creating staging dir")
+	assert.Contains(t, err.Error(), "staging root")
 }
 
-func TestCommitOutputs_StatNonNotExistError(t *testing.T) {
+func TestVerifyOutputsExist_StatNonNotExistError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("ENOTDIR semantics differ on Windows")
 	}
-	root := t.TempDir()
-	// A stage path that descends through a regular file makes os.Stat
+	// A stage path that descends through a regular file makes os.Lstat
 	// fail with ENOTDIR — a non-ErrNotExist error.
 	blocker := filepath.Join(t.TempDir(), "blocker")
 	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
 	stage := filepath.Join(blocker, "out0")
 
-	err := commitOutputs(root, []string{"out.txt"}, []string{stage})
+	err := verifyOutputsExist([]string{"out.txt"}, []string{stage})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "staging output")
+}
+
+func TestVerifyOutputsExist_MissingOutput(t *testing.T) {
+	stageDir := t.TempDir()
+	stage := filepath.Join(stageDir, "out0") // never created
+	err := verifyOutputsExist([]string{"out.txt"}, []string{stage})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not produce declared output")
+}
+
+func TestBuild_OutputUnderMdsmithRefused(t *testing.T) {
+	root := t.TempDir()
+	b := NewCustomBuilder(map[string]RecipeSpec{"r": recipeCmd("echo hi {outputs}")})
+	err := b.Build(context.Background(), Target{
+		Recipe:  "r",
+		Root:    root,
+		Outputs: []string{".mdsmith/build-cache.json"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), ".mdsmith/")
+	assert.NoFileExists(t, filepath.Join(root, ".mdsmith", "build-cache.json"))
+}
+
+func TestVerifyOutputsExist_StagedSymlinkRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics")
+	}
+	stageDir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "secret")
+	require.NoError(t, os.WriteFile(target, []byte("x"), 0o644))
+	stage := filepath.Join(stageDir, "out0")
+	require.NoError(t, os.Symlink(target, stage))
+
+	err := verifyOutputsExist([]string{"out.txt"}, []string{stage})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+}
+
+func TestVerifyOutputsExist_StagedDirRefused(t *testing.T) {
+	stageDir := t.TempDir()
+	stage := filepath.Join(stageDir, "out0")
+	require.NoError(t, os.MkdirAll(stage, 0o755))
+
+	err := verifyOutputsExist([]string{"out.txt"}, []string{stage})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-regular")
 }
 
 func TestSubstituteParams_PrefixBeforePlaceholder(t *testing.T) {
@@ -499,16 +558,188 @@ func TestBuild_MkdirTempError(t *testing.T) {
 	assert.Contains(t, err.Error(), "staging dir")
 }
 
-func TestCommitOutputs_StatError(t *testing.T) {
+func TestVerifyOutputsExist_StatError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ENOTDIR semantics differ on Windows")
+	}
 	root := t.TempDir()
 	// Create a regular file at the same path as the expected staging dir so
-	// os.Stat on "notadir/out0" fails with ENOTDIR — a non-ENOENT error that
-	// hits the "staging output" error branch rather than the "did not produce"
-	// branch.
+	// os.Lstat on "notadir/out0" fails with ENOTDIR — a non-ENOENT error
+	// that hits the "staging output" error branch rather than the
+	// "did not produce" branch.
 	notadir := filepath.Join(root, "notadir")
 	require.NoError(t, os.WriteFile(notadir, []byte("x"), 0o644))
 
-	err := commitOutputs(root, []string{"out.txt"}, []string{filepath.Join(notadir, "out0")})
+	err := verifyOutputsExist([]string{"out.txt"}, []string{filepath.Join(notadir, "out0")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "staging output")
+}
+
+func TestBuild_SnapshotDirsError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh is not available on Windows")
+	}
+	old := snapshotDirsFn
+	snapshotDirsFn = func([]string, int, map[string]fileState) (map[string]fileState, error) {
+		return nil, errors.New("before-snapshot failed")
+	}
+	t.Cleanup(func() { snapshotDirsFn = old })
+
+	root := t.TempDir()
+	bindir := t.TempDir()
+	script := writeScript(t, bindir, "noop.sh", `printf x > "$1"`)
+	b := NewCustomBuilder(map[string]RecipeSpec{
+		"r": recipeCmd(script + " {outputs}"),
+	})
+	err := b.Build(context.Background(), Target{
+		Recipe:  "r",
+		Root:    root,
+		Outputs: []string{"out.txt"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "before-snapshot failed")
+}
+
+func TestBuild_VerifyNoUndeclaredWritesSnapshotError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh is not available on Windows")
+	}
+	// Fail only the SECOND snapshot call (the after-snapshot inside
+	// verifyNoUndeclaredWrites); the first (before-snapshot) succeeds so the
+	// recipe runs and we reach the after-snapshot error branch.
+	var calls atomic.Int32
+	old := snapshotDirsFn
+	snapshotDirsFn = func(dirs []string, max int, prior map[string]fileState) (map[string]fileState, error) {
+		if calls.Add(1) == 2 {
+			return nil, errors.New("after-snapshot failed")
+		}
+		return snapshotDirs(dirs, max, prior)
+	}
+	t.Cleanup(func() { snapshotDirsFn = old })
+
+	root := t.TempDir()
+	bindir := t.TempDir()
+	script := writeScript(t, bindir, "noop.sh", `printf x > "$1"`)
+	b := NewCustomBuilder(map[string]RecipeSpec{
+		"r": recipeCmd(script + " {outputs}"),
+	})
+	err := b.Build(context.Background(), Target{
+		Recipe:  "r",
+		Root:    root,
+		Outputs: []string{"out.txt"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "after-snapshot failed")
+}
+
+func TestBuild_UndeclaredWriteDetected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh is not available on Windows")
+	}
+	root := t.TempDir()
+	// The output parent is root itself (output is just "dst.txt"). The recipe
+	// copies src to the staged output ($1) and also writes an undeclared
+	// sibling at an absolute path in that same parent ($2), which the
+	// post-condition snapshot must flag.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("hi"), 0o644))
+	sneaky := filepath.Join(root, "sneaky.txt")
+	bindir := t.TempDir()
+	script := writeScript(t, bindir, "sneak.sh", `printf x > "$1"; echo evil > "$2"`)
+	b := NewCustomBuilder(map[string]RecipeSpec{
+		"r": recipeCmd(script + " {outputs} " + sneaky),
+	})
+	err := b.Build(context.Background(), Target{
+		Recipe:  "r",
+		Root:    root,
+		Inputs:  []string{"src.txt"},
+		Outputs: []string{"dst.txt"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wrote outside its declared outputs")
+	// The declared output must not be committed when the post-check fails.
+	assert.NoFileExists(t, filepath.Join(root, "dst.txt"))
+}
+
+func TestCommitOutputs_RefusesSymlinkDest(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	root := t.TempDir()
+	// Plant a symlink at the output destination. commitOutputs must refuse to
+	// replace it rather than follow it through to the target. (A real Build
+	// resolves an output symlink earlier, so commitOutputs is exercised
+	// directly here to reach the symlink-destination guard.)
+	target := filepath.Join(t.TempDir(), "outside")
+	require.NoError(t, os.WriteFile(target, []byte("orig"), 0o644))
+	final := filepath.Join(root, "dst.txt")
+	require.NoError(t, os.Symlink(target, final))
+
+	stageDir := t.TempDir()
+	stage := filepath.Join(stageDir, "out0")
+	require.NoError(t, os.WriteFile(stage, []byte("new"), 0o644))
+
+	err := commitOutputs([]string{final}, []string{"dst.txt"}, []string{stage})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+	// The symlink target outside the tree must be untouched (not followed).
+	got, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "orig", string(got))
+}
+
+func TestBuild_LstatErrorRefusesOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh is not available on Windows")
+	}
+	old := lstatFn
+	lstatFn = func(string) (os.FileInfo, error) { return nil, os.ErrPermission }
+	t.Cleanup(func() { lstatFn = old })
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("hi"), 0o644))
+	b := NewCustomBuilder(map[string]RecipeSpec{
+		"copy": recipeCmd("cp {inputs} {outputs}"),
+	})
+	err := b.Build(context.Background(), Target{
+		Recipe:  "copy",
+		Root:    root,
+		Inputs:  []string{"src.txt"},
+		Outputs: []string{"dst.txt"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inspecting output")
+}
+
+func TestBuild_MultiOutputPartialFailure(t *testing.T) {
+	// Force the rename→copy fallback for every output, and make the copy
+	// fail on the SECOND output so the i>0 partial-failure branch fires.
+	oldRename := renameFn
+	renameFn = func(string, string) error { return errors.New("cross-device") }
+	t.Cleanup(func() { renameFn = oldRename })
+
+	var copyCalls atomic.Int32
+	oldCopy := copyFileImplFn
+	copyFileImplFn = func(src, dst string) error {
+		if copyCalls.Add(1) == 2 {
+			return errors.New("copy failed on second output")
+		}
+		return copyFile(src, dst)
+	}
+	t.Cleanup(func() { copyFileImplFn = oldCopy })
+
+	root := t.TempDir()
+	stageDir := t.TempDir()
+	stage0 := filepath.Join(stageDir, "out0")
+	stage1 := filepath.Join(stageDir, "out1")
+	require.NoError(t, os.WriteFile(stage0, []byte("a"), 0o644))
+	require.NoError(t, os.WriteFile(stage1, []byte("b"), 0o644))
+
+	finals := []string{filepath.Join(root, "a.txt"), filepath.Join(root, "b.txt")}
+	err := commitOutputs(finals, []string{"a.txt", "b.txt"}, []string{stage0, stage1})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already committed")
+	// The first output committed via the copy fallback.
+	got, rerr := os.ReadFile(finals[0])
+	require.NoError(t, rerr)
+	assert.Equal(t, "a", string(got))
 }

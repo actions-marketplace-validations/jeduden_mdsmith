@@ -37,6 +37,34 @@ func buildPassCfg(recipesYAML string) *config.Config {
 	return cfg
 }
 
+func TestEnvIsSet_Truthiness(t *testing.T) {
+	const name = "MDSMITH_TEST_TRUST_FLAG"
+	truthy := []string{"1", "true", "yes", "on", "anything", " 1 ", "TRUE"}
+	falsy := []string{"", "0", "false", "no", "off", "FALSE", " 0 ", "  "}
+	for _, v := range truthy {
+		t.Setenv(name, v)
+		assert.True(t, envIsSet(name), "value %q should grant", v)
+	}
+	for _, v := range falsy {
+		t.Setenv(name, v)
+		assert.False(t, envIsSet(name), "value %q should not grant", v)
+	}
+	// Unset is falsy.
+	require.NoError(t, os.Unsetenv(name))
+	assert.False(t, envIsSet(name))
+}
+
+// trustRoot writes a .mdsmith.yml file and an identical trust marker in
+// root so the build pass trust gate is satisfied. Unit tests that drive
+// runBuildPass to actually execute a recipe call this; the file bytes are
+// arbitrary (the gate only checks that config and marker match).
+func trustRoot(t *testing.T, root string) {
+	t.Helper()
+	body := []byte("rules: {}\nbuild:\n  recipes: {}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mdsmith.yml"), body, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mdsmith.yml.trust"), body, 0o600))
+}
+
 // buildPassDirective returns a minimal Markdown snippet with one
 // <?build?> directive referencing the given recipe and output filename.
 func buildPassDirective(recipe, output string) string {
@@ -158,6 +186,7 @@ func TestRunBuildPass_OK(t *testing.T) {
 		t.Skip("touch not available on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -178,6 +207,7 @@ func TestRunBuildPass_FAIL(t *testing.T) {
 		t.Skip("false not available on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    boom:\n      command: false\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -396,6 +426,7 @@ func TestRunBuildPass_RebuildNoCache_ExitsZero(t *testing.T) {
 		t.Skip("touch not available on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -417,6 +448,7 @@ func TestRunBuildPass_CheckStale_FreshTarget_ExitsZero(t *testing.T) {
 		t.Skip("touch not available on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -460,6 +492,7 @@ func TestRunBuildPass_SaveCacheError(t *testing.T) {
 		t.Skip("touch and chmod not reliable on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -487,6 +520,7 @@ func TestRunBuildPass_ReadErrorWithSuccessfulBuild_ExitsTwo(t *testing.T) {
 		t.Skip("touch not available on Windows")
 	}
 	root := t.TempDir()
+	trustRoot(t, root)
 	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
 	cfgPath := filepath.Join(root, ".mdsmith.yml")
 
@@ -523,6 +557,48 @@ func TestRunBuildPass_OverlappingOutputsReturnsTwo(t *testing.T) {
 	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{timeout: time.Second}, &buf)
 	assert.Equal(t, 2, code)
 	assert.Contains(t, buf.String(), "overlap")
+}
+
+// TestRunBuildPass_TrustDenied covers the !trust.Trusted branch: the build pass
+// exits 2 with a trust-related message when no trust marker exists.
+func TestRunBuildPass_TrustDenied(t *testing.T) {
+	root := t.TempDir()
+	// Write a config with no trust marker so CheckTrust returns not-trusted.
+	cfgBody := []byte("build:\n  recipes:\n    mk:\n      command: touch {outputs}\n")
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgBody, 0o644))
+
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	var buf strings.Builder
+	// Not dryRun, not checkStale → trust gate runs; no marker → denied.
+	code := runBuildPass(cfg, cfgPath, []string{p}, buildPassOpts{timeout: time.Second}, &buf)
+	assert.Equal(t, 2, code)
+	assert.Contains(t, buf.String(), "mdsmith:")
+}
+
+// TestRunBuildPass_TrustGate_EmptyCfgPath covers the cfgPath=="" branch inside
+// the trust gate, which falls back to ConfigPathForRoot(root).
+func TestRunBuildPass_TrustGate_EmptyCfgPath(t *testing.T) {
+	root := t.TempDir()
+	// Write a root .mdsmith.yml with no trust marker so CheckTrust denies.
+	cfgBody := []byte("build:\n  recipes: {}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mdsmith.yml"), cfgBody, 0o644))
+
+	cfg := buildPassCfg("    mk:\n      command: touch {outputs}\n")
+
+	md := buildPassDirective("mk", "out.txt")
+	p := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(p, []byte(md), 0o644))
+
+	var buf strings.Builder
+	// cfgPath="" triggers the fallback branch; no trust marker → denied.
+	code := runBuildPass(cfg, "", []string{p}, buildPassOpts{timeout: time.Second}, &buf)
+	assert.Equal(t, 2, code)
 }
 
 // TestDispatchOne_RefreshCacheEntryError covers the refreshCacheEntry error
