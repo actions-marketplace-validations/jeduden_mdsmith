@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -93,4 +95,217 @@ func TestDispatchOne_TimeoutPrintsDiagnosticBlock(t *testing.T) {
 	assert.Contains(t, out, "last 20 lines of stdout")
 	assert.Contains(t, out, "last 20 lines of stderr")
 	assert.Contains(t, out, "SIGTERM")
+}
+
+// --- lastLines ---
+
+func TestLastLines_FewerThanN_ReturnsAll(t *testing.T) {
+	lines := []string{"a", "b", "c"}
+	got := lastLines(lines, 10)
+	assert.Equal(t, lines, got)
+}
+
+func TestLastLines_MoreThanN_ReturnsTail(t *testing.T) {
+	lines := []string{"a", "b", "c", "d", "e"}
+	got := lastLines(lines, 3)
+	assert.Equal(t, []string{"c", "d", "e"}, got)
+}
+
+func TestLastLines_ExactlyN_ReturnsAll(t *testing.T) {
+	lines := []string{"x", "y", "z"}
+	got := lastLines(lines, 3)
+	assert.Equal(t, lines, got)
+}
+
+// --- relLogPath ---
+
+func TestRelLogPath_Empty_ReturnsNoLog(t *testing.T) {
+	assert.Equal(t, "(no log)", relLogPath("/any/root", ""))
+}
+
+func TestRelLogPath_UnderRoot_ReturnsRelative(t *testing.T) {
+	root := t.TempDir()
+	logPath := filepath.Join(root, ".mdsmith", "build-logs", "abc.log")
+	rel := relLogPath(root, logPath)
+	assert.False(t, strings.HasPrefix(rel, ".."), "expected relative path, got %q", rel)
+	assert.Contains(t, rel, "abc.log")
+}
+
+func TestRelLogPath_OutsideRoot_ReturnsAbsolute(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "other.log")
+	got := relLogPath(root, outside)
+	assert.Equal(t, outside, got)
+}
+
+// --- sortedKeys ---
+
+func TestSortedKeys_Empty(t *testing.T) {
+	assert.Empty(t, sortedKeys(map[string]string{}))
+}
+
+func TestSortedKeys_Sorted(t *testing.T) {
+	m := map[string]string{"z": "1", "a": "2", "m": "3"}
+	got := sortedKeys(m)
+	assert.Equal(t, []string{"a", "m", "z"}, got)
+}
+
+// --- snapshotOutputs ---
+
+func TestSnapshotOutputs_ExistingFile(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "out.txt"), []byte("hello"), 0o644))
+	bt := buildTarget{
+		target: buildexec.Target{Root: root, Outputs: []string{"out.txt"}},
+	}
+	snap := snapshotOutputs(bt)
+	require.Len(t, snap, 1)
+	assert.Equal(t, []byte("hello"), snap["out.txt"])
+}
+
+func TestSnapshotOutputs_MissingFile_ReturnsNil(t *testing.T) {
+	root := t.TempDir()
+	bt := buildTarget{
+		target: buildexec.Target{Root: root, Outputs: []string{"absent.txt"}},
+	}
+	snap := snapshotOutputs(bt)
+	require.Len(t, snap, 1)
+	assert.Nil(t, snap["absent.txt"])
+}
+
+// --- outputsEqual ---
+
+func TestOutputsEqual_IdenticalMaps_ReturnsTrue(t *testing.T) {
+	a := map[string][]byte{"a.txt": []byte("x"), "b.txt": []byte("y")}
+	b := map[string][]byte{"a.txt": []byte("x"), "b.txt": []byte("y")}
+	assert.True(t, outputsEqual(a, b))
+}
+
+func TestOutputsEqual_DifferentContent_ReturnsFalse(t *testing.T) {
+	a := map[string][]byte{"a.txt": []byte("x")}
+	b := map[string][]byte{"a.txt": []byte("y")}
+	assert.False(t, outputsEqual(a, b))
+}
+
+func TestOutputsEqual_DifferentKeys_ReturnsFalse(t *testing.T) {
+	a := map[string][]byte{"a.txt": []byte("x")}
+	b := map[string][]byte{"b.txt": []byte("x")}
+	assert.False(t, outputsEqual(a, b))
+}
+
+func TestOutputsEqual_DifferentLength_ReturnsFalse(t *testing.T) {
+	a := map[string][]byte{"a.txt": []byte("x"), "b.txt": []byte("y")}
+	b := map[string][]byte{"a.txt": []byte("x")}
+	assert.False(t, outputsEqual(a, b))
+}
+
+func TestOutputsEqual_BothNilValue_ReturnsTrue(t *testing.T) {
+	a := map[string][]byte{"a.txt": nil}
+	b := map[string][]byte{"a.txt": nil}
+	assert.True(t, outputsEqual(a, b))
+}
+
+// --- printVerdict ---
+
+func TestPrintVerdict_StaleVerdictWritten(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("content"), 0o644))
+	stin := buildexec.StalenessInput{
+		Target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"src.txt"},
+			Outputs: []string{"out.txt"},
+		},
+		Command: "cp {inputs} {outputs}",
+	}
+	cache := buildexec.NewCache()
+	var buf strings.Builder
+	printVerdict(stin, cache, &buf)
+	assert.Contains(t, buf.String(), "STALE")
+}
+
+func TestPrintVerdict_UnstableFlagWritten(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("content"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "out.txt"), []byte("result"), 0o644))
+	stin := buildexec.StalenessInput{
+		Target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"src.txt"},
+			Outputs: []string{"out.txt"},
+		},
+		Command: "cp {inputs} {outputs}",
+	}
+	cache := buildexec.NewCache()
+	// Record a build entry and mark it unstable, then re-run so verdict is FRESH.
+	entry, err := buildexec.RecordBuild(stin)
+	require.NoError(t, err)
+	entry.Unstable = true
+	cache.Put(entry)
+	var buf strings.Builder
+	printVerdict(stin, cache, &buf)
+	assert.Contains(t, buf.String(), "FRESH")
+	assert.Contains(t, buf.String(), "unstable: true")
+}
+
+// --- verifyTarget ---
+
+func TestVerifyTarget_DeterministicRecipe_NoUnstable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh not available on Windows")
+	}
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("hello"), 0o644))
+
+	cmd := "cp {inputs} {outputs}"
+	builder := buildexec.NewCustomBuilder(map[string]buildexec.RecipeSpec{
+		"cp": {Command: cmd},
+	})
+
+	bt := buildTarget{
+		file: "doc.md",
+		line: 1,
+		target: buildexec.Target{
+			Recipe:  "cp",
+			Root:    root,
+			Inputs:  []string{"src.txt"},
+			Outputs: []string{"out.txt"},
+		},
+	}
+	// Run the first build so snapshotOutputs sees a committed output.
+	require.NoError(t, builder.Build(context.Background(), bt.target))
+	stin := buildexec.StalenessInput{
+		Target:  bt.target,
+		Command: cmd,
+	}
+	res := &targetRunResult{}
+	var buf strings.Builder
+	verifyTarget(builder, bt, stin, buildPassOpts{}, time.Second, res, &buf)
+	assert.False(t, res.Unstable)
+}
+
+func TestVerifyTarget_FailingReRunSetsUnstable(t *testing.T) {
+	// A mock builder that always fails the second call simulates a re-run error.
+	callCount := 0
+	mock := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error {
+		callCount++
+		return errors.New("verify re-run failed")
+	}}
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "out.txt"), []byte("first"), 0o644))
+	bt := buildTarget{
+		target: buildexec.Target{
+			Recipe:  "boom",
+			Root:    root,
+			Outputs: []string{"out.txt"},
+		},
+	}
+	stin := buildexec.StalenessInput{Target: bt.target}
+	res := &targetRunResult{}
+	var buf strings.Builder
+	verifyTarget(mock, bt, stin, buildPassOpts{}, time.Second, res, &buf)
+	assert.True(t, res.Unstable)
+	assert.Contains(t, buf.String(), "verify re-run failed")
 }
