@@ -116,11 +116,11 @@ expressed by the caller, not the stub.
       whose tinygo stub returns `false`)
 - [x] `go build ./...` succeeds with the
       standard toolchain
-- [ ] `tinygo build -target wasm -o /dev/null
+- [x] `tinygo build -target wasm -o /dev/null
       ./cmd/mdsmith-wasm/` compiles without
       errors
 - [x] No `chmodFn` / `chmodFile` naming split;
       all packages use `chmodFile`
 - [x] All tests pass: `go test ./...`
-- [ ] `go tool golangci-lint run` reports no
+- [x] `go tool golangci-lint run` reports no
       issues
