@@ -214,16 +214,51 @@ right place to state it.
 
 ## 7. Decide on the benchmark
 
-The harness in `docs/research/benchmarks/run.sh`
-expects a static binary that hyperfine can invoke
-N times against a corpus directory. If `newtool`
-ships that way, add it to the `tools` list in
-`run.sh` and re-run the harness; commit the
-refreshed `data/*.json`.
+The harness expects a static binary. hyperfine
+invokes it N times against a corpus directory.
+The tool list does not live in
+`docs/research/benchmarks/run.sh` — that script is
+a thin wrapper over `mdsmith-release bench`. It
+lives in `internal/release/bench.go`. If `newtool`
+ships a static binary, wire it in:
 
-If it does not — e.g. an editor plugin without a
-CLI — skip the harness. Write a short "Why newtool
-is not benchmarked" subsection in
+- Pin it in the `benchTools` manifest: the GitHub
+  release `.tar.gz` URL (the version tag must appear
+  in the URL path) and the SHA-256 of the tarball.
+  Record the digest by downloading the tarball once
+  and cross-check it against the publisher's
+  checksums file when one exists.
+  `validateBenchManifest` rejects a half-specified
+  entry. The entry's `Name` must equal both the
+  executable's basename inside the tarball and the
+  hyperfine `--command-name`.
+- Add the command line to `runHyperfine` next to the
+  other comparison tools, on the tool's defaults.
+  Disable its on-disk cache if it has one
+  (`rumdl --no-cache` is the precedent).
+- Extend `TestBenchManifestInvariants` so the pin
+  cannot be dropped silently.
+
+`gen_fragments.py` needs no edit: it renders one
+table row per command found in the hyperfine JSON
+(only `mado`, the ratio base, is required by name).
+
+Merging the wiring does not change the committed
+numbers. `data/*.json` only moves when a maintainer
+re-runs the harness via `run.sh` and reviews the
+diff in a PR, because cross-tool ratios are only
+valid within a single run on one machine. From the
+merge onward the per-merge `benchmark.yml` run and
+the per-release `benchmark-publish` job measure the
+new tool; the in-repo tables gain its row at the
+next deliberate refresh. Add a short subsection to
+`docs/research/benchmarks/README.md` saying exactly
+that, so the missing row reads as pending, not
+overlooked.
+
+If the tool cannot run that way — e.g. an editor
+plugin without a CLI — skip the harness. Write a
+short "Why newtool is not benchmarked" subsection in
 `docs/research/benchmarks/README.md` instead. Name
 the structural reason: a plugin runtime that is
 not AOT-compiled, defaults that produce a no-op

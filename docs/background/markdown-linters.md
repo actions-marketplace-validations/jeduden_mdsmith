@@ -169,8 +169,9 @@ of scope. A repo that wants both layers runs gomarklint's
 `external-link` job next to `mdsmith check` in CI.
 
 gomarklint claims 100,000+ lines in ~170 ms for its
-structural checks. It is not yet in the first-party
-[benchmark](#benchmarks) harness.
+structural checks. It is pinned into the first-party
+[benchmark](#benchmarks) harness; its row joins the
+published tables at the next snapshot refresh.
 
 ### [Prettier][]
 
