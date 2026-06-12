@@ -750,7 +750,8 @@ func TestDispatchWithHooks_SkipHooksWhenFreshEmptyTargets(t *testing.T) {
 	builder := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error { return nil }}
 	var buf strings.Builder
 	// With no targets, allFresh returns true → hooks are skipped.
-	code := dispatchWithHooks(builder, nil, cfg, root, buildPassOpts{skipHooksWhenFresh: true}, buildexec.NewCache(), time.Second, nil, &buf)
+	code := dispatchWithHooks(builder, nil, cfg, root,
+		buildPassOpts{skipHooksWhenFresh: true}, buildexec.NewCache(), time.Second, nil, &buf)
 	assert.Equal(t, 0, code)
 	assert.NoFileExists(t, beforeSentinel, "hooks must be skipped when all targets are fresh")
 }
