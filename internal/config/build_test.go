@@ -742,6 +742,212 @@ func TestSerializeRecipes_WithDefaultInputs(t *testing.T) {
 	assert.Equal(t, []any{"{tape}"}, di)
 }
 
+// --- Hook config ---
+
+func TestLoad_HooksBeforeAndAfter(t *testing.T) {
+	yml := []byte(`build:
+  hooks:
+    before:
+      - command: "make dev-server-start"
+      - command: "scripts/wait-for-port {port}"
+        params:
+          port: "3000"
+    after:
+      - command: "make dev-server-stop"
+`)
+	cfg, err := loadFromBytes(yml, "", false)
+	require.NoError(t, err)
+	require.Len(t, cfg.Build.Hooks.Before, 2)
+	assert.Equal(t, "make dev-server-start", cfg.Build.Hooks.Before[0].Command)
+	assert.Equal(t, "scripts/wait-for-port {port}", cfg.Build.Hooks.Before[1].Command)
+	assert.Equal(t, map[string]string{"port": "3000"}, cfg.Build.Hooks.Before[1].Params)
+	require.Len(t, cfg.Build.Hooks.After, 1)
+	assert.Equal(t, "make dev-server-stop", cfg.Build.Hooks.After[0].Command)
+}
+
+func TestLoad_HookName(t *testing.T) {
+	yml := []byte(`build:
+  hooks:
+    before:
+      - command: "make start"
+        name: "start dev server"
+`)
+	cfg, err := loadFromBytes(yml, "", false)
+	require.NoError(t, err)
+	require.Len(t, cfg.Build.Hooks.Before, 1)
+	assert.Equal(t, "start dev server", cfg.Build.Hooks.Before[0].Name)
+}
+
+func TestLoad_NoHooks_ParsesCleanly(t *testing.T) {
+	yml := []byte("build:\n  recipes:\n    r:\n      command: tool\n")
+	cfg, err := loadFromBytes(yml, "", false)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Build.Hooks.Before)
+	assert.Empty(t, cfg.Build.Hooks.After)
+}
+
+func TestValidateBuildConfig_Hook_EmptyCommand_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{{Command: ""}},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command must not be empty")
+}
+
+func TestValidateBuildConfig_Hook_ValidCommand(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{{Command: "make dev-server-start"}},
+				After:  []HookCfg{{Command: "make dev-server-stop"}},
+			},
+		},
+	}
+	assert.NoError(t, ValidateBuildConfig(cfg))
+}
+
+func TestValidateBuildConfig_Hook_WithParams(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{
+					{
+						Command: "scripts/wait-for-port {port}",
+						Params:  map[string]string{"port": "3000"},
+					},
+				},
+			},
+		},
+	}
+	assert.NoError(t, ValidateBuildConfig(cfg))
+}
+
+func TestValidateBuildConfig_Hook_UndeclaredParam_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{
+					{Command: "tool {unknown}"},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "undeclared")
+}
+
+func TestValidateBuildConfig_Hook_ReservedInputs_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{
+					{Command: "tool {inputs}"},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inputs")
+}
+
+func TestValidateBuildConfig_Hook_ReservedOutputs_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{
+					{Command: "tool {outputs}"},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outputs")
+}
+
+func TestValidateBuildConfig_Hook_ParamValue_NUL_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{
+					{Command: "tool {p}", Params: map[string]string{"p": "val\x00ue"}},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NUL")
+}
+
+func TestValidateBuildConfig_Hook_ParamValue_Newline_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{
+					{Command: "tool {p}", Params: map[string]string{"p": "val\nue"}},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "newline")
+}
+
+func TestValidateBuildConfig_Hook_ParamValue_LeadingWhitespace_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{
+					{Command: "tool {p}", Params: map[string]string{"p": " value"}},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "whitespace")
+}
+
+func TestValidateBuildConfig_Hook_ParamValue_TooLong_Rejected(t *testing.T) {
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{
+					{Command: "tool {p}", Params: map[string]string{"p": string(make([]byte, 4097))}},
+				},
+			},
+		},
+	}
+	err := ValidateBuildConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "4 KB")
+}
+
+func TestValidateBuildConfig_Hook_UnusedParam_Warning(t *testing.T) {
+	// Unused params are a warning at MDS040 level, not a config-level error.
+	// ValidateBuildConfig should not error on unused hook params.
+	cfg := &Config{
+		Build: BuildConfig{
+			Hooks: HooksCfg{
+				Before: []HookCfg{
+					{Command: "make start", Params: map[string]string{"unused": "value"}},
+				},
+			},
+		},
+	}
+	// Config-level validate should pass; MDS040 is where warnings are emitted.
+	assert.NoError(t, ValidateBuildConfig(cfg))
+}
+
 // --- Build survives Merge ---
 
 func TestMerge_PreservesBuild(t *testing.T) {

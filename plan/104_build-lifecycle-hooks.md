@@ -1,7 +1,7 @@
 ---
 id: 104
 title: Build lifecycle hooks (before/after)
-status: "🔲"
+status: "🔳"
 summary: >-
   Add `build.hooks.before` and `build.hooks.after`
   config blocks: argv-tokenized commands run once
