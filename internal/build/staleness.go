@@ -217,10 +217,11 @@ func computeActionIDFromResolved(in StalenessInput, inputs, outputs []string) (s
 }
 
 // ValidateInputs resolves the target's declared inputs and outputs without
-// hashing them. It returns an error if any literal input path is missing or
-// any input glob expands to zero files. Use this before a forced rebuild
-// (--build-force, --build-no-cache) to catch configuration errors cheaply,
-// without the I/O cost of a full staleness check.
+// hashing them. It returns an error if any literal input path is missing, any
+// input glob expands to zero files, or any declared input or output path
+// escapes the project root. Use this before a forced rebuild (--build-force,
+// --build-no-cache) to catch configuration errors cheaply, without the I/O
+// cost of a full staleness check.
 func ValidateInputs(in StalenessInput) error {
 	if _, err := resolveInputs(in); err != nil {
 		return err

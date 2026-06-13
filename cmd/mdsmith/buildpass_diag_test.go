@@ -60,7 +60,7 @@ func TestDispatchOne_FailingRecipePrintsSixFieldBlock(t *testing.T) {
 	assert.Contains(t, out, "4")
 	assert.Contains(t, out, "duration:")
 	assert.Contains(t, out, "log:")
-	assert.Contains(t, out, "last 20 lines of stderr")
+	assert.Contains(t, out, "last 2 lines of stderr")
 	assert.Contains(t, out, "boom error 2")
 }
 
@@ -92,8 +92,8 @@ func TestDispatchOne_TimeoutPrintsDiagnosticBlock(t *testing.T) {
 	require.Equal(t, outcomeFailed, outcome)
 	out := buf.String()
 	assert.Contains(t, out, "TIMEOUT book.html")
-	assert.Contains(t, out, "last 20 lines of stdout")
-	assert.Contains(t, out, "last 20 lines of stderr")
+	assert.Contains(t, out, "last 1 lines of stdout")
+	assert.Contains(t, out, "last 1 lines of stderr")
 	assert.Contains(t, out, "SIGTERM")
 }
 

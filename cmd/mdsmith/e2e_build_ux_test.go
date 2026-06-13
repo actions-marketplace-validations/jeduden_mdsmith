@@ -30,7 +30,7 @@ func TestE2E_Build_FailurePrintsSixFieldBlock(t *testing.T) {
 	assert.Contains(t, stderr, "exit:")
 	assert.Contains(t, stderr, "5")
 	assert.Contains(t, stderr, "log:")
-	assert.Contains(t, stderr, "last 20 lines of stderr")
+	assert.Contains(t, stderr, "last 3 lines of stderr")
 	assert.Contains(t, stderr, "err line 3")
 	_ = dir
 }

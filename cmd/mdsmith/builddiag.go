@@ -99,10 +99,13 @@ func sortedKeys(m map[string]string) []string {
 // failure and timeout diagnostics.
 const diagTailLines = 20
 
-// printStreamTail writes the last diagTailLines header and body for one stream.
+// printStreamTail writes the last (up to diagTailLines) lines of one stream
+// under a header that states how many lines actually follow, so a 3-line
+// stream is not labelled "last 20 lines".
 func printStreamTail(label string, lines []string, w io.Writer) {
-	_, _ = fmt.Fprintf(w, "  --- last %d lines of %s ---\n", diagTailLines, label)
-	for _, line := range lastLines(lines, diagTailLines) {
+	shown := lastLines(lines, diagTailLines)
+	_, _ = fmt.Fprintf(w, "  --- last %d lines of %s ---\n", len(shown), label)
+	for _, line := range shown {
 		_, _ = fmt.Fprintf(w, "  %s\n", line)
 	}
 }
