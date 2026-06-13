@@ -117,7 +117,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	// The link-image-style axis needs direct AST walking for nodes
 	// not covered by the linkgraph extractors:
 	//   - autolinks (ast.AutoLink): not emitted by ExtractLinks
-	//   - reference sub-forms (full/collapsed/shortcut): ExtractRefLinkTargets
+	//   - reference sub-forms (full/collapsed/shortcut): RefLinkTargets
 	//     resolves the destination but drops the Reference sub-form
 	//   - inline images (ast.Image): not included in link checks above
 	if style.LinkImageStyle.Active {
