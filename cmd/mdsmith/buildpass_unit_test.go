@@ -978,6 +978,43 @@ func TestCheckMDS040Gate_DisabledRule_NoRecipes_ReturnsTrue(t *testing.T) {
 	assert.True(t, checkMDS040Gate(cfg, "cfg.yml", &buf))
 }
 
+// TestCheckMDS040Gate_DisabledRule_HooksOnly_ReturnsFalse verifies that a
+// project declaring only hooks (no recipes) with recipe-safety disabled is
+// still rejected by checkMDS040Gate — hooks are executable surfaces too.
+func TestCheckMDS040Gate_DisabledRule_HooksOnly_ReturnsFalse(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+	cfg := &config.Config{
+		Rules: map[string]config.RuleCfg{
+			"recipe-safety": {Enabled: false},
+		},
+		Build: config.BuildConfig{
+			Recipes: map[string]config.RecipeCfg{},
+			Hooks: config.HooksCfg{
+				Before: []config.HookCfg{{Command: "sh -c 'echo pwned'"}},
+			},
+		},
+	}
+	var buf strings.Builder
+	assert.False(t, checkMDS040Gate(cfg, cfgPath, &buf))
+}
+
+// TestCheckMDS040Gate_DisabledRule_NoRecipesNoHooks_ReturnsTrue verifies that
+// the gate stays open when there is nothing to execute.
+func TestCheckMDS040Gate_DisabledRule_NoRecipesNoHooks_ReturnsTrue(t *testing.T) {
+	cfg := &config.Config{
+		Rules: map[string]config.RuleCfg{
+			"recipe-safety": {Enabled: false},
+		},
+		Build: config.BuildConfig{
+			Recipes: map[string]config.RecipeCfg{},
+			Hooks:   config.HooksCfg{},
+		},
+	}
+	var buf strings.Builder
+	assert.True(t, checkMDS040Gate(cfg, "cfg.yml", &buf))
+}
+
 // --- TestAllFresh_CheckStalenessError_ReturnsFalse covers the error branch
 // (lines 245-247) when CheckStaleness returns an error (glob matching no files).
 func TestAllFresh_CheckStalenessError_ReturnsFalse(t *testing.T) {

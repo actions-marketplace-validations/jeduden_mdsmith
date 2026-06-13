@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/rename"
@@ -337,6 +338,29 @@ func TestWriteFilePreservingMode_SymlinkDoesNotWriteThrough(t *testing.T) {
 	gotLinked, err := os.ReadFile(symlink)
 	require.NoError(t, err)
 	assert.Equal(t, "# Rewritten\n", string(gotLinked))
+}
+
+// TestWriteFilePreservingMode_DanglingSymlink verifies that writing through a
+// dangling symlink (target does not exist) falls back to 0o644 permissions and
+// replaces the symlink with a new regular file.
+func TestWriteFilePreservingMode_DanglingSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks behave differently on Windows")
+	}
+	workspace := t.TempDir()
+	symlink := filepath.Join(workspace, "dangling.md")
+	// Point symlink at a path that does not exist — os.Stat will fail.
+	require.NoError(t, os.Symlink(filepath.Join(workspace, "nonexistent.md"), symlink))
+
+	require.NoError(t, writeFilePreservingMode(symlink, []byte("# New\n")))
+
+	// Symlink should have been replaced with a regular file containing the data.
+	info, err := os.Lstat(symlink)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0), info.Mode()&os.ModeSymlink, "symlink should be replaced by regular file")
+	got, err := os.ReadFile(symlink)
+	require.NoError(t, err)
+	assert.Equal(t, "# New\n", string(got))
 }
 
 func TestCliRenameWorkspace_Resolve(t *testing.T) {

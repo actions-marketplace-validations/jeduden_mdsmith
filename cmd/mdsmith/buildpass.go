@@ -54,9 +54,11 @@ type buildTarget struct {
 func checkMDS040Gate(cfg *config.Config, cfgPath string, w io.Writer) bool {
 	rc, ok := cfg.Rules["recipe-safety"]
 
-	// When the rule is absent or disabled AND there are no recipes, the gate
-	// is open: nothing will execute so there is nothing to check.
-	if (!ok || !rc.Enabled) && len(cfg.Build.Recipes) == 0 {
+	// When the rule is absent or disabled AND there is nothing to execute
+	// (no recipes and no hooks), the gate is open.
+	noRecipes := len(cfg.Build.Recipes) == 0
+	noHooks := len(cfg.Build.Hooks.Before) == 0 && len(cfg.Build.Hooks.After) == 0
+	if (!ok || !rc.Enabled) && noRecipes && noHooks {
 		return true
 	}
 
@@ -73,22 +75,24 @@ func checkMDS040Gate(cfg *config.Config, cfgPath string, w io.Writer) bool {
 		return true
 	}
 
-	// Determine the settings to apply. When the rule is enabled and has
-	// settings, use them directly (InjectBuildConfig already populated the
-	// recipes/hooks fields). When the rule is disabled or absent, build
-	// minimal settings from cfg.Build.Recipes so the gate still validates
-	// shell-safety even though diagnostic reporting is suppressed.
+	// Determine the settings to apply. When the rule is enabled, use its
+	// settings directly (InjectBuildConfig already populated recipes/hooks).
+	// When the rule is disabled or absent, build settings from the live config
+	// so the gate still validates shell-safety for both recipes and hooks even
+	// though diagnostic reporting is suppressed.
 	var settings map[string]any
-	if ok && rc.Enabled && rc.Settings != nil {
+	if ok && rc.Enabled {
 		settings = rc.Settings
 	} else {
-		// Build a minimal recipes map for safety checking.
+		// Build a minimal settings map covering all executable surfaces.
 		recipes := make(map[string]any, len(cfg.Build.Recipes))
 		for name, r := range cfg.Build.Recipes {
 			recipes[name] = map[string]any{"command": r.Command}
 		}
 		settings = map[string]any{
-			"recipes": recipes,
+			"recipes":      recipes,
+			"hooks-before": config.SerializeHooks(cfg.Build.Hooks.Before),
+			"hooks-after":  config.SerializeHooks(cfg.Build.Hooks.After),
 		}
 		if cfgPath != "" {
 			settings["config-path"] = cfgPath
