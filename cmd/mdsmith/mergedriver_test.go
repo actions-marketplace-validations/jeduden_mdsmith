@@ -436,6 +436,47 @@ func TestResolveInstalledBinary_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "mdsmith not found")
 }
 
+// TestResolveInstalledBinary_GopathBin_NotTrusted asserts that a fake binary
+// placed in $GOPATH/bin is NOT returned by resolveInstalledBinary even when
+// os.Executable() returns a transient path and mdsmith is absent from PATH.
+// A poisoned $GOPATH in hostile CI must not steer the merge driver to an
+// attacker binary. (S003)
+func TestResolveInstalledBinary_GopathBin_NotTrusted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink-based PATH isolation is POSIX-only")
+	}
+	// Keep `go` on PATH so goEnvPath() succeeds (meaning the GOPATH fallback
+	// code actually runs), but remove `mdsmith` from PATH so LookPath fails.
+	goBin, err := exec.LookPath("go")
+	require.NoError(t, err)
+
+	gopathDir := t.TempDir()
+	gopathBinDir := filepath.Join(gopathDir, "bin")
+	require.NoError(t, os.MkdirAll(gopathBinDir, 0o755))
+	fakeBin := filepath.Join(gopathBinDir, "mdsmith")
+	require.NoError(t, os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755))
+
+	orig := executableFunc
+	t.Cleanup(func() { executableFunc = orig })
+	executableFunc = func() (string, error) {
+		return filepath.Join(os.TempDir(), "go-run-fake", "mdsmith"), nil
+	}
+
+	// PATH only has `go` — exec.LookPath("mdsmith") fails.
+	// GOPATH points at our fake directory — resolveInstalledBinary must
+	// NOT use it as a search path.
+	t.Setenv("PATH", filepath.Dir(goBin))
+	t.Setenv("GOPATH", gopathDir)
+
+	got, err := resolveInstalledBinary()
+	// The call must fail — it must NOT silently return the GOPATH binary.
+	require.Error(t, err,
+		"resolveInstalledBinary must not use $GOPATH/bin as a fallback; "+
+			"got %q instead of an error", got)
+	assert.NotEqual(t, fakeBin, got,
+		"GOPATH binary must not be returned as a trusted path")
+}
+
 // --- goEnvPath ---
 
 func TestGoEnvPath_GoNotInPATH(t *testing.T) {
