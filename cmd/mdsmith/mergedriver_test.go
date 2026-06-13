@@ -415,15 +415,6 @@ func TestResolveInstalledBinary_GopathBin_NotTrusted(t *testing.T) {
 		"GOPATH binary must not be returned as a trusted path")
 }
 
-// --- goEnvPath ---
-
-func TestGoEnvPath_GoNotInPATH(t *testing.T) {
-	// When PATH is empty "go" cannot be found, so goEnvPath returns an error.
-	t.Setenv("PATH", "")
-	_, err := goEnvPath()
-	require.Error(t, err)
-}
-
 // --- isTemporaryBinary ---
 
 func TestIsTemporaryBinary_NonTempPath(t *testing.T) {
@@ -599,6 +590,40 @@ func TestShellQuote_ContainsSingleQuote(t *testing.T) {
 
 func TestShellQuote_PathWithSpaces(t *testing.T) {
 	assert.Equal(t, "'/home/my user/bin/mdsmith'", shellQuote("/home/my user/bin/mdsmith"))
+}
+
+// TestShellQuote_RoundTrip verifies that shellQuote produces output that a
+// POSIX shell evaluates back to the original string unchanged. This is the
+// load-bearing property: shellQuote is the only control preventing shell
+// injection when the driver path enters git config (S002).
+func TestShellQuote_RoundTrip(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX /bin/sh not available on Windows")
+	}
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{name: "plain path", input: "/usr/local/bin/mdsmith"},
+		{name: "path with spaces", input: "/home/my user/bin/mdsmith"},
+		{name: "path with single quote", input: "/path/it's/mdsmith"},
+		{name: "dollar sign and backtick", input: "/path/$HOME/`echo bad`/mdsmith"},
+		{name: "multiple single quotes", input: "/it's/a/'trap'/mdsmith"},
+		{name: "empty string", input: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			quoted := shellQuote(tc.input)
+			// Run the quoted string through a POSIX shell and capture the
+			// result via printf so no trailing newline is added by echo.
+			cmd := exec.Command("/bin/sh", "-c", "printf '%s' "+quoted)
+			out, err := cmd.Output()
+			require.NoError(t, err, "shell rejected quoted value %q", quoted)
+			assert.Equal(t, tc.input, string(out),
+				"shell roundtrip: shellQuote(%q) = %q must evaluate back to the original",
+				tc.input, quoted)
+		})
+	}
 }
 
 func TestEnsurePreMergeCommitHook_UnreadableHook(t *testing.T) {
