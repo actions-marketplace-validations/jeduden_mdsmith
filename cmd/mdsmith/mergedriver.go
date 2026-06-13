@@ -721,6 +721,12 @@ func ensurePreMergeCommitHook(repoRoot string) error {
 	hooksDir := resolveHooksDir(repoRoot)
 	hookPath := filepath.Join(hooksDir, "pre-merge-commit")
 
+	// Reject symlinks and non-regular files before any I/O to reduce the
+	// risk of following a link to a path outside the repository.
+	if err := guardFn(hookPath); err != nil {
+		return fmt.Errorf("reading existing hook %s: %w", hookPath, err)
+	}
+
 	// Refuse to clobber a hook the user wrote themselves; replace
 	// only hooks that carry our marker. A non-ENOENT read error is
 	// treated as a safety failure to avoid silently overwriting an
@@ -745,14 +751,11 @@ func ensurePreMergeCommitHook(repoRoot string) error {
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", hooksDir, err)
 	}
-	if err := os.WriteFile(hookPath, []byte(content), 0o755); err != nil {
-		return fmt.Errorf("writing %s: %w", hookPath, err)
-	}
-	// Explicitly set execute permissions after writing. WriteFile's perm
-	// argument is masked by umask on creation and ignored when the file
-	// already exists, so a separate Chmod ensures the hook is executable.
-	if err := chmodFunc(hookPath, 0o755); err != nil {
-		return fmt.Errorf("setting permissions on %s: %w", hookPath, err)
+	// Use atomic temp-then-rename so that even if a symlink is swapped in
+	// between the lstat check and the write, os.Rename replaces the
+	// directory entry rather than following the link.
+	if err := writeHookFile(hookPath, []byte(content)); err != nil {
+		return err
 	}
 	return nil
 }
@@ -787,6 +790,61 @@ var executableFunc = os.Executable
 // chmodFunc is the function used to set file permissions.
 // Overridden in tests to exercise the Chmod error path.
 var chmodFunc = os.Chmod
+
+// hookCreateTempFn is a variable so tests can substitute a failing
+// implementation to exercise the CreateTemp error path in writeHookFile.
+var hookCreateTempFn = os.CreateTemp
+
+// osRenameFn is a variable so tests can substitute a failing implementation
+// to exercise the Rename error path in writeHookFile.
+var osRenameFn = os.Rename
+
+// syncFileFn is a variable so tests can substitute a failing implementation
+// to exercise the Sync error path in writeHookFile.
+var syncFileFn = (*os.File).Sync
+
+// closeFileFn is a variable so tests can substitute a failing implementation
+// to exercise the Close error path in writeHookFile.
+var closeFileFn = (*os.File).Close
+
+// writeHookFile writes content to hookPath using a temp-then-rename strategy
+// so that os.Rename replaces the directory entry rather than following a
+// symlink that may have been introduced between the lstat check in
+// ensurePreMergeCommitHook and this call.
+func writeHookFile(hookPath string, data []byte) error {
+	// Re-check that path is still a regular file (or absent) before writing.
+	// guardFn returns nil for ENOENT (file absent is fine — we will create it).
+	if err := guardFn(hookPath); err != nil {
+		return fmt.Errorf("writing %s: %w", hookPath, err)
+	}
+	dir := filepath.Dir(hookPath)
+	tmp, err := hookCreateTempFn(dir, ".mdsmith-hook-*")
+	if err != nil {
+		return fmt.Errorf("writing %s: %w", hookPath, err)
+	}
+	tmpName := tmp.Name()
+	// Remove the temp file on any early-exit path. After a successful Rename,
+	// tmpName no longer exists so this Remove is a safe no-op.
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = closeFileFn(tmp)
+		return fmt.Errorf("writing %s: %w", hookPath, err)
+	}
+	if err := syncFileFn(tmp); err != nil {
+		_ = closeFileFn(tmp)
+		return fmt.Errorf("writing %s: %w", hookPath, err)
+	}
+	if err := closeFileFn(tmp); err != nil {
+		return fmt.Errorf("writing %s: %w", hookPath, err)
+	}
+	if err := chmodFunc(tmpName, 0o755); err != nil {
+		return fmt.Errorf("setting permissions on %s: %w", hookPath, err)
+	}
+	if err := osRenameFn(tmpName, hookPath); err != nil {
+		return fmt.Errorf("writing %s: %w", hookPath, err)
+	}
+	return nil
+}
 
 // resolveInstalledBinary returns the absolute path to the mdsmith
 // binary to use as the git merge driver. It prefers the current

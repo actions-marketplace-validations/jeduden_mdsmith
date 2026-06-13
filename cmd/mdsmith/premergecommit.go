@@ -133,12 +133,23 @@ func runPreMergeCommitUninstall(args []string) int {
 	hooksDir := resolveHooksDir(repoRoot)
 	hookPath := filepath.Join(hooksDir, "pre-merge-commit")
 
-	// Check if hook exists.
-	existing, readErr := os.ReadFile(hookPath)
-	if os.IsNotExist(readErr) {
+	// Reject symlinks and non-regular files before any I/O so the uninstall
+	// cannot be redirected to remove a file outside the repository.
+	if info, err := lstatFn(hookPath); err == nil {
+		if !info.Mode().IsRegular() {
+			fmt.Fprintf(os.Stderr, "mdsmith: %s: not a regular file\n", hookPath)
+			return 2
+		}
+	} else if os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "mdsmith: no pre-merge-commit hook found at %s\n", hookPath)
 		return 0
+	} else {
+		fmt.Fprintf(os.Stderr, "mdsmith: reading hook: %v\n", err)
+		return 2
 	}
+
+	// Read the hook to check whether it was installed by mdsmith.
+	existing, readErr := os.ReadFile(hookPath)
 	if readErr != nil {
 		fmt.Fprintf(os.Stderr, "mdsmith: reading hook: %v\n", readErr)
 		return 2
@@ -150,6 +161,12 @@ func runPreMergeCommitUninstall(args []string) int {
 			"mdsmith: %s exists but was not installed by mdsmith\n"+
 				"Remove it manually if you want to delete it.\n",
 			hookPath)
+		return 2
+	}
+
+	// Re-check that path is still regular before removing it (TOCTOU guard).
+	if err := guardFn(hookPath); err != nil {
+		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
 		return 2
 	}
 
@@ -182,14 +199,25 @@ func runPreMergeCommitStatus(args []string) int {
 	hooksDir := resolveHooksDir(repoRoot)
 	hookPath := filepath.Join(hooksDir, "pre-merge-commit")
 
-	// Check if hook exists.
-	existing, readErr := os.ReadFile(hookPath)
-	if os.IsNotExist(readErr) {
+	// Reject symlinks and non-regular files before reading so the status
+	// command cannot be redirected to read a file outside the repository.
+	if info, err := lstatFn(hookPath); err == nil {
+		if !info.Mode().IsRegular() {
+			fmt.Fprintf(os.Stderr, "mdsmith: %s: not a regular file\n", hookPath)
+			return 2
+		}
+	} else if os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "pre-merge-commit hook: not installed\n")
 		fmt.Fprintf(os.Stderr, "  expected path: %s\n", hookPath)
 		fmt.Fprintf(os.Stderr, "\nRun 'mdsmith pre-merge-commit install' to install it.\n")
 		return 1
+	} else {
+		fmt.Fprintf(os.Stderr, "mdsmith: reading hook: %v\n", err)
+		return 2
 	}
+
+	// Check if hook exists.
+	existing, readErr := os.ReadFile(hookPath)
 	if readErr != nil {
 		fmt.Fprintf(os.Stderr, "mdsmith: reading hook: %v\n", readErr)
 		return 2

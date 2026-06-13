@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,10 +100,10 @@ func TestRunPreMergeCommitStatus_NotInRepo(t *testing.T) {
 	assert.Contains(t, got, "not in a git repository")
 }
 
-// TestRunPreMergeCommitUninstall_ReadError makes hookPath a directory
-// so os.ReadFile returns a non-IsNotExist error, exercising the
-// read-error branch.
-func TestRunPreMergeCommitUninstall_ReadError(t *testing.T) {
+// TestRunPreMergeCommitUninstall_NonRegularFile places a directory at the hook
+// path. The lstat guard now catches non-regular files before os.ReadFile, so
+// the command returns exit 2 with "not a regular file".
+func TestRunPreMergeCommitUninstall_NonRegularFile(t *testing.T) {
 	dir := t.TempDir()
 	initTestRepo(t, dir)
 	hooksDir := resolveHooksDir(dir)
@@ -115,12 +116,12 @@ func TestRunPreMergeCommitUninstall_ReadError(t *testing.T) {
 	got := captureStderr(func() {
 		assert.Equal(t, 2, runPreMergeCommitUninstall(nil))
 	})
-	assert.Contains(t, got, "reading hook")
+	assert.Contains(t, got, "not a regular file")
 }
 
-// TestRunPreMergeCommitStatus_ReadError exercises the same branch in
+// TestRunPreMergeCommitStatus_NonRegularFile exercises the same lstat guard in
 // the status command.
-func TestRunPreMergeCommitStatus_ReadError(t *testing.T) {
+func TestRunPreMergeCommitStatus_NonRegularFile(t *testing.T) {
 	dir := t.TempDir()
 	initTestRepo(t, dir)
 	hooksDir := resolveHooksDir(dir)
@@ -133,7 +134,7 @@ func TestRunPreMergeCommitStatus_ReadError(t *testing.T) {
 	got := captureStderr(func() {
 		assert.Equal(t, 2, runPreMergeCommitStatus(nil))
 	})
-	assert.Contains(t, got, "reading hook")
+	assert.Contains(t, got, "not a regular file")
 }
 
 // TestRunPreMergeCommitUninstall_RemoveError creates an
@@ -529,4 +530,81 @@ func TestPreMergeCommitInstall_RejectsExplicitFiles(t *testing.T) {
 		assert.Equal(t, 2, runPreMergeCommitInstall([]string{"PLAN.md"}))
 	})
 	assert.Contains(t, got, "no longer accepts explicit files")
+}
+
+// TestRunPreMergeCommitUninstall_LstatError injects lstatFn to return a
+// non-ENOENT error so the else branch in runPreMergeCommitUninstall is covered.
+func TestRunPreMergeCommitUninstall_LstatError(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+	hooksDir := resolveHooksDir(dir)
+	require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+	hookPath := filepath.Join(hooksDir, "pre-merge-commit")
+	require.NoError(t, os.WriteFile(hookPath, []byte("#!/bin/sh\n"), 0o644))
+
+	origLstat := lstatFn
+	t.Cleanup(func() { lstatFn = origLstat })
+	lstatFn = func(string) (os.FileInfo, error) {
+		return nil, fmt.Errorf("injected lstat error")
+	}
+
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, runPreMergeCommitUninstall(nil))
+	})
+	assert.Contains(t, got, "reading hook")
+}
+
+// TestRunPreMergeCommitUninstall_GuardFails injects guardFn to return an error
+// so the TOCTOU re-check branch before os.Remove is covered.
+func TestRunPreMergeCommitUninstall_GuardFails(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+	hooksDir := resolveHooksDir(dir)
+	require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+	hookPath := filepath.Join(hooksDir, "pre-merge-commit")
+	require.NoError(t, os.WriteFile(hookPath,
+		[]byte("#!/bin/sh\n"+preMergeCommitHookMarker+"\n"), 0o644))
+
+	origGuard := guardFn
+	t.Cleanup(func() { guardFn = origGuard })
+	guardFn = func(string) error { return fmt.Errorf("injected guard error") }
+
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, runPreMergeCommitUninstall(nil))
+	})
+	assert.Contains(t, got, "injected guard error")
+}
+
+// TestRunPreMergeCommitStatus_LstatError injects lstatFn to return a
+// non-ENOENT error so the else branch in runPreMergeCommitStatus is covered.
+func TestRunPreMergeCommitStatus_LstatError(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+	hooksDir := resolveHooksDir(dir)
+	require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+	hookPath := filepath.Join(hooksDir, "pre-merge-commit")
+	require.NoError(t, os.WriteFile(hookPath, []byte("#!/bin/sh\n"), 0o644))
+
+	origLstat := lstatFn
+	t.Cleanup(func() { lstatFn = origLstat })
+	lstatFn = func(string) (os.FileInfo, error) {
+		return nil, fmt.Errorf("injected lstat error")
+	}
+
+	origWd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+
+	got := captureStderr(func() {
+		assert.Equal(t, 2, runPreMergeCommitStatus(nil))
+	})
+	assert.Contains(t, got, "reading hook")
 }
