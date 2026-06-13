@@ -68,6 +68,22 @@ func TestRelTo_AgreesWithFilepathRel(t *testing.T) {
 	}
 }
 
+// TestRelTo_RelativeInputsFallBackToRel pins the filepath.Rel fallback
+// for inputs outside the absolute fast paths: relative bases and paths
+// (defensive — IsIgnored's contract is absolute paths) still resolve
+// exactly as filepath.Rel does, and unrelated relative trees report
+// ok=false.
+func TestRelTo_RelativeInputsFallBackToRel(t *testing.T) {
+	// "./repo" vs "repo/..." defeats the prefix strip but Rel still
+	// resolves it inside the base.
+	got, ok := relTo("./repo", "repo/sub/file.md")
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join("sub", "file.md"), got)
+
+	_, ok = relTo("repo/a", "other/b")
+	assert.False(t, ok, "unrelated relative trees yield a ..-prefixed Rel result")
+}
+
 // --- NewMatcher tests ---
 
 func TestNewMatcher_NoGitignore(t *testing.T) {

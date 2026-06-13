@@ -221,6 +221,26 @@ func TestCountWords_EquivalentToStringsFields(t *testing.T) {
 
 // --- CountSentences tests ---
 
+func TestCountWordsBytes_EquivalentToCountWords(t *testing.T) {
+	cases := []string{
+		"",
+		"one",
+		"two words",
+		"  leading and trailing  ",
+		"tabs\tand\nnewlines",
+		"non breaking space", // U+00A0 is a Unicode space
+		"ünïcode wörds here", // U+2003 em space separates words
+		"　ideographic　space", // U+3000 space delimits
+		"mixed ascii  and line-sep",
+	}
+	for _, tc := range cases {
+		assert.Equal(t, mdtext.CountWords(tc), mdtext.CountWordsBytes([]byte(tc)),
+			"CountWordsBytes must agree with CountWords for %q", tc)
+	}
+	assert.Equal(t, 2, mdtext.CountWordsBytes([]byte("hello world")))
+	assert.Equal(t, 0, mdtext.CountWordsBytes(nil))
+}
+
 func TestCountSentences_OneSentence(t *testing.T) {
 	assert.Equal(t, 1, mdtext.CountSentences("Hello world."))
 }
