@@ -17,6 +17,8 @@ var reCache sync.Map // map[string]*regexp.Regexp
 
 // cachedRegexp returns a compiled *regexp.Regexp for pattern, compiling it on
 // the first call and returning the cached result on subsequent calls.
+// Failed compilations are not cached — each invalid pattern recompiles and
+// returns the error fresh so callers always see the original compile error.
 func cachedRegexp(pattern string) (*regexp.Regexp, error) {
 	if v, ok := reCache.Load(pattern); ok {
 		return v.(*regexp.Regexp), nil

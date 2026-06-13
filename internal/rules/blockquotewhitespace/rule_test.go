@@ -611,11 +611,8 @@ func TestFix_BytesBufferAllocBudget(t *testing.T) {
 	require.NoError(t, err)
 	r := &Rule{}
 	_ = r.Fix(f) // warm up
-	const (
-		runs   = 100
-		// Current: 12 allocs. After bytes.Buffer refactor: ~5; budget = 7 is tight.
-		budget = 7
-	)
+	const runs = 100
+	const budget = 7 // bytes.Buffer refactor: was 12 allocs; now ~5
 	allocs := testing.AllocsPerRun(runs, func() {
 		_ = r.Fix(f)
 	})

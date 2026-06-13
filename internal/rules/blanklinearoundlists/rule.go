@@ -196,7 +196,7 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		}
 	}
 
-	return bytes.Join(resultLines, []byte("\n"))
+	return bytes.Join(resultLines, newline)
 }
 
 // collectBlankLineInsertions walks the AST and returns sets of 1-based line numbers
@@ -252,6 +252,8 @@ func needsBlankAdjacent(f *lint.File, targetLine, direction int) bool {
 
 // FixTitle implements rule.QuickFixTitler.
 func (r *Rule) FixTitle() string { return "Add blank lines around list" }
+
+var newline = []byte("\n")
 
 // enteringKinds is the static node-kind interest CheckNode declares
 // via rule.KindScopedChecker; package-level so EnteringKinds returns

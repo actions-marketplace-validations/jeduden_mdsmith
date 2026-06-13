@@ -404,12 +404,8 @@ func TestFix_BytesJoinAllocBudget(t *testing.T) {
 	require.NoError(t, err)
 	r := &Rule{}
 	_ = r.Fix(f) // warm up
-	const (
-		runs   = 100
-		// Current: 9 allocs (string conversions + join + []byte conversion).
-		// After [][]byte refactor: ~5 allocs; budget = 6 is tight enough.
-		budget = 6
-	)
+	const runs = 100
+	const budget = 6 // [][]byte refactor: was 9 allocs; now ~5
 	allocs := testing.AllocsPerRun(runs, func() {
 		_ = r.Fix(f)
 	})

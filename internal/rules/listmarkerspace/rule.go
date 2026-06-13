@@ -192,7 +192,7 @@ func (r *Rule) Fix(f *lint.File) []byte {
 			resultLines[i] = line
 		}
 	}
-	return bytes.Join(resultLines, []byte("\n"))
+	return bytes.Join(resultLines, newline)
 }
 
 // adjustSpaces replaces the spaces between the list marker and item text.
@@ -259,6 +259,8 @@ func pluralSpace(n int) string {
 	}
 	return "spaces"
 }
+
+var newline = []byte("\n")
 
 var (
 	_ rule.Configurable = (*Rule)(nil)

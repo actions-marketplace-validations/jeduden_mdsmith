@@ -160,14 +160,14 @@ func (r *Rule) checkBlankBetween(f *lint.File) []lint.Diagnostic {
 	return diags
 }
 
+// bqFixedSpace is the canonical single-space replacement for collapsed
+// multi-space runs in blockquote prefixes; defined at package scope to avoid
+// allocating []byte("> ") on every ReplaceAllLiteral call.
+var bqFixedSpace = []byte("> ")
+
 // Fix implements rule.FixableRule. Collapses multiple spaces after > to one
 // space on every non-code-block blockquote line. MD028 violations are not
 // auto-fixed because the intent (one quote vs two) is ambiguous.
-// bqFixedSpace is the canonical single-space replacement for collapsed
-// multi-space runs in blockquote prefixes; defined at package scope to avoid
-// allocating []byte("> ") on every ReplaceAll call.
-var bqFixedSpace = []byte("> ")
-
 func (r *Rule) Fix(f *lint.File) []byte {
 	codeLines := lint.CollectCodeBlockLines(f)
 	var buf bytes.Buffer
@@ -186,7 +186,7 @@ func (r *Rule) Fix(f *lint.File) []byte {
 			buf.Write(line)
 			continue
 		}
-		fixedPrefix := reMultiSpace.ReplaceAll(prefix, bqFixedSpace)
+		fixedPrefix := reMultiSpace.ReplaceAllLiteral(prefix, bqFixedSpace)
 		content := line[len(prefix):]
 		if len(content) == 0 {
 			// No content after the marker chain: trim trailing space so we don't
