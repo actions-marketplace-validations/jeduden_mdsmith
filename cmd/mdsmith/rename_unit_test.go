@@ -334,8 +334,13 @@ func TestWriteFilePreservingMode_SymlinkDoesNotWriteThrough(t *testing.T) {
 	assert.Equal(t, originalContent, string(got),
 		"writeFilePreservingMode must not write through symlinks to external files")
 
-	// The symlink path itself should now read the new content (symlink was
-	// replaced with a regular file by os.Rename).
+	// The symlink itself must have been replaced with a regular file by
+	// os.Rename (not merely redirected to a different symlink target).
+	linfo, err := os.Lstat(symlink)
+	require.NoError(t, err)
+	assert.Zero(t, linfo.Mode()&os.ModeSymlink, "symlink must be replaced by a regular file")
+
+	// The symlink path itself should now read the new content.
 	gotLinked, err := os.ReadFile(symlink)
 	require.NoError(t, err)
 	assert.Equal(t, "# Rewritten\n", string(gotLinked))

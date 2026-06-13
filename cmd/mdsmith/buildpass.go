@@ -85,6 +85,11 @@ func checkMDS040Gate(cfg *config.Config, cfgPath string, w io.Writer) bool {
 		settings = rc.Settings
 	} else {
 		// Build a minimal settings map covering all executable surfaces.
+		// Only "command" is included per recipe; the gate's mandate is
+		// shell-safety (interpreter/operator detection), not code-quality
+		// checks such as reserved-param name validation (inputs/outputs).
+		// ValidateBuildConfig enforces other param constraints at config
+		// load time.
 		recipes := make(map[string]any, len(cfg.Build.Recipes))
 		for name, r := range cfg.Build.Recipes {
 			recipes[name] = map[string]any{"command": r.Command}
