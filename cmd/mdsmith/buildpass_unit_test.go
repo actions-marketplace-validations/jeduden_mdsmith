@@ -1015,6 +1015,27 @@ func TestCheckMDS040Gate_DisabledRule_NoRecipesNoHooks_ReturnsTrue(t *testing.T)
 	assert.True(t, checkMDS040Gate(cfg, "cfg.yml", &buf))
 }
 
+// TestCheckMDS040Gate_DisabledRule_AfterHookOnly_ReturnsFalse covers the
+// noHooks right-hand side (Hooks.After non-empty, Hooks.Before empty), so
+// the short-circuit of len(Before)==0 && len(After)==0 is fully exercised.
+func TestCheckMDS040Gate_DisabledRule_AfterHookOnly_ReturnsFalse(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, ".mdsmith.yml")
+	cfg := &config.Config{
+		Rules: map[string]config.RuleCfg{
+			"recipe-safety": {Enabled: false},
+		},
+		Build: config.BuildConfig{
+			Recipes: map[string]config.RecipeCfg{},
+			Hooks: config.HooksCfg{
+				After: []config.HookCfg{{Command: "sh -c 'echo pwned'"}},
+			},
+		},
+	}
+	var buf strings.Builder
+	assert.False(t, checkMDS040Gate(cfg, cfgPath, &buf))
+}
+
 // TestCheckMDS040Gate_DisabledRule_EmptyCfgPath_ReturnsFalse covers the
 // cfgPath=="" branch inside the else block (disabled rule, non-empty recipes).
 func TestCheckMDS040Gate_DisabledRule_EmptyCfgPath_ReturnsFalse(t *testing.T) {

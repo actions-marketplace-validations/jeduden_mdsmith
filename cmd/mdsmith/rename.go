@@ -389,6 +389,23 @@ func joinLF(segs [][]byte) []byte {
 	return out
 }
 
+// resolveWriteMode returns the permission bits to apply when creating a
+// replacement file at path. For a symlink it follows to the live target; for a
+// dangling symlink or any stat error it falls back to 0o644.
+func resolveWriteMode(path string) os.FileMode {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return 0o644
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if tinfo, err := os.Stat(path); err == nil {
+			return tinfo.Mode().Perm()
+		}
+		return 0o644
+	}
+	return info.Mode().Perm()
+}
+
 // writeFilePreservingMode overwrites path with data, keeping the file's
 // existing permission bits.
 //
@@ -399,21 +416,7 @@ func joinLF(segs [][]byte) []byte {
 // with a regular file instead of overwriting the external target. This mirrors
 // the atomicWriteFile pattern used by the fix command.
 func writeFilePreservingMode(path string, data []byte) error {
-	mode := os.FileMode(0o644)
-	if info, err := os.Lstat(path); err == nil {
-		mode = info.Mode().Perm()
-		// Lstat returns the symlink's own mode on POSIX, but we want to
-		// preserve the mode of the file we're writing. Use the symlink target's
-		// mode when the path is a symlink so the replacement regular file gets
-		// sensible permissions; fall back to 0o644 if the target is unreadable.
-		if info.Mode()&os.ModeSymlink != 0 {
-			if tinfo, err := os.Stat(path); err == nil {
-				mode = tinfo.Mode().Perm()
-			} else {
-				mode = 0o644
-			}
-		}
-	}
+	mode := resolveWriteMode(path)
 	dir := filepath.Dir(path)
 	writeFileTempFnMu.Lock()
 	createTemp := writeFileTempFn
