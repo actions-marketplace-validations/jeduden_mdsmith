@@ -20,6 +20,9 @@ import (
 // globCapFn is the CheckGlobMatchCap implementation; tests may replace it.
 var globCapFn = buildrule.CheckGlobMatchCap
 
+// hashFileFn is the hashFile implementation; tests may replace it.
+var hashFileFn = hashFile
+
 // Verdict is the staleness result for one target.
 type Verdict int
 
@@ -173,21 +176,18 @@ func canonicalPaths(paths []string) string {
 	return b.String()
 }
 
-// computeActionIDFromResolved hashes the ActionID from pre-resolved inputs and
-// outputs, so both ComputeActionID and RecordBuild can resolve paths once.
-func computeActionIDFromResolved(in StalenessInput, inputs, outputs []string) (string, error) {
+// computeActionIDFromSums hashes the ActionID from pre-resolved inputs,
+// outputs, and already-computed per-input content sums. Separating the
+// hashing from the I/O lets callers that already have the sums (e.g.
+// Explain) avoid a second read pass over the input files.
+func computeActionIDFromSums(in StalenessInput, inputs, outputs, sums []string) string {
 	h := sha256.New()
 	frame(h, []byte(in.Command))
 	frame(h, []byte(canonicalParams(in.Target.Params)))
 	frame(h, []byte(canonicalPaths(inputs)))
 
 	var contents strings.Builder
-	for _, rel := range inputs {
-		abs := filepath.Join(in.Target.Root, filepath.FromSlash(rel))
-		sum, err := hashFile(abs)
-		if err != nil {
-			return "", err
-		}
+	for _, sum := range sums {
 		contents.WriteString(sum)
 	}
 	frame(h, []byte(contents.String()))
@@ -198,7 +198,36 @@ func computeActionIDFromResolved(in StalenessInput, inputs, outputs []string) (s
 	binary.BigEndian.PutUint64(verBuf[:], uint64(CacheVersion))
 	frame(h, verBuf[:])
 
-	return "sha256-" + hex.EncodeToString(h.Sum(nil)), nil
+	return "sha256-" + hex.EncodeToString(h.Sum(nil))
+}
+
+// computeActionIDFromResolved hashes the ActionID from pre-resolved inputs and
+// outputs, so both ComputeActionID and RecordBuild can resolve paths once.
+func computeActionIDFromResolved(in StalenessInput, inputs, outputs []string) (string, error) {
+	sums := make([]string, len(inputs))
+	for i, rel := range inputs {
+		abs := filepath.Join(in.Target.Root, filepath.FromSlash(rel))
+		sum, err := hashFileFn(abs)
+		if err != nil {
+			return "", err
+		}
+		sums[i] = sum
+	}
+	return computeActionIDFromSums(in, inputs, outputs, sums), nil
+}
+
+// ValidateInputs resolves the target's declared inputs and outputs without
+// hashing them. It returns an error if any literal input path is missing, any
+// input glob expands to zero files, or any declared input or output path
+// escapes the project root. Use this before a forced rebuild (--build-force,
+// --build-no-cache) to catch configuration errors cheaply, without the I/O
+// cost of a full staleness check.
+func ValidateInputs(in StalenessInput) error {
+	if _, err := resolveInputs(in); err != nil {
+		return err
+	}
+	_, err := resolveOutputs(in)
+	return err
 }
 
 // ComputeActionID computes the sha256 ActionID over the recipe command,
@@ -216,6 +245,57 @@ func ComputeActionID(in StalenessInput) (string, error) {
 		return "", err
 	}
 	return computeActionIDFromResolved(in, inputs, outputs)
+}
+
+// ExplainInput is one resolved input path with its content sha, for the
+// --build-explain breakdown.
+type ExplainInput struct {
+	Path string
+	Hash string
+}
+
+// ActionExplanation is the full ActionID-input breakdown for one target: the
+// recipe command, the canonical params, the resolved inputs with content
+// shas, the resolved outputs, the cache version, and the resulting
+// ActionID. It answers "why is this fresh?" without diving into JSON.
+type ActionExplanation struct {
+	Command      string
+	Params       map[string]string
+	Inputs       []ExplainInput
+	Outputs      []string
+	CacheVersion int
+	ActionID     string
+}
+
+// Explain resolves a target's ActionID inputs and returns the breakdown.
+func Explain(in StalenessInput) (ActionExplanation, error) {
+	inputs, err := resolveInputs(in)
+	if err != nil {
+		return ActionExplanation{}, err
+	}
+	outputs, err := resolveOutputs(in)
+	if err != nil {
+		return ActionExplanation{}, err
+	}
+	sums := make([]string, len(inputs))
+	exInputs := make([]ExplainInput, 0, len(inputs))
+	for i, rel := range inputs {
+		abs := filepath.Join(in.Target.Root, filepath.FromSlash(rel))
+		sum, err := hashFileFn(abs)
+		if err != nil {
+			return ActionExplanation{}, err
+		}
+		sums[i] = sum
+		exInputs = append(exInputs, ExplainInput{Path: rel, Hash: "sha256-" + sum})
+	}
+	return ActionExplanation{
+		Command:      in.Command,
+		Params:       in.Target.Params,
+		Inputs:       exInputs,
+		Outputs:      outputs,
+		CacheVersion: CacheVersion,
+		ActionID:     computeActionIDFromSums(in, inputs, outputs, sums),
+	}, nil
 }
 
 // hashFile returns the lowercase-hex sha256 of a file's content. It

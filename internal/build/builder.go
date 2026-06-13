@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 
@@ -69,9 +70,37 @@ type Target struct {
 	Outputs []string          // project-root-relative, slash-normalized
 }
 
+// Options controls stream capture and live forwarding for one
+// BuildWithResult call. A zero value disables log capture (LogRoot empty)
+// and live forwarding (LiveSink nil).
+type Options struct {
+	ActionID   string    // ActionID; names the log file <action-id>.log
+	LogRoot    string    // project root holding .mdsmith/build-logs/
+	LiveSink   io.Writer // when non-nil, each line is forwarded here, prefixed
+	TargetName string    // prefix used on LiveSink lines (the target name)
+	AllFinals  []string  // all declared finals across concurrent targets; for concurrent-safe post-condition check
+}
+
+// Result is the rich outcome of one recipe run: the argv it ran, the
+// cwd, the process exit code, wall-clock duration, the log file path, and
+// the captured stdout/stderr tails. Err is non-nil on any failure
+// (non-zero exit, timeout, or a staging/commit error).
+type Result struct {
+	Argv       []string
+	Cwd        string
+	ExitCode   int
+	Duration   time.Duration
+	LogPath    string
+	StdoutTail []string
+	StderrTail []string
+	TimedOut   bool
+	Err        error
+}
+
 // Builder dispatches a single build Target.
 type Builder interface {
 	Build(ctx context.Context, target Target) error
+	BuildWithResult(ctx context.Context, target Target, opts Options) Result
 }
 
 // CustomBuilder is the sole Builder implementation. It dispatches a
@@ -108,45 +137,122 @@ var _ Builder = (*CustomBuilder)(nil)
 // renames. On any failure before the commit phase the staging dir is
 // removed and no declared output is touched.
 func (b *CustomBuilder) Build(ctx context.Context, target Target) error {
-	spec, ok := b.recipes[target.Recipe]
-	if !ok {
-		return fmt.Errorf("unknown recipe %q", target.Recipe)
-	}
-	tokens := strings.Fields(spec.Command)
-	if len(tokens) == 0 {
-		return fmt.Errorf("recipe %q has an empty command", target.Recipe)
+	return b.BuildWithResult(ctx, target, Options{}).Err
+}
+
+// BuildWithResult runs the target's recipe like Build but captures the
+// recipe's stdout/stderr (to a log file under opts.LogRoot when set, and
+// to in-memory tails) and returns a rich Result for diagnostics. The
+// staging and atomic-commit contract is identical to Build.
+func (b *CustomBuilder) BuildWithResult(
+	ctx context.Context, target Target, opts Options,
+) Result {
+	res := Result{}
+	tokens, err := b.buildArgv(target)
+	if err != nil {
+		res.Err = err
+		return res
 	}
 
 	plan, cleanup, err := b.stage(target)
 	if err != nil {
-		return err
+		res.Err = err
+		return res
 	}
 	defer cleanup()
 
 	argv := expandArgv(tokens, target.Params, plan.absInputs, plan.stagePaths)
+	res.Argv = argv
+	res.Cwd = plan.stageDir
+
+	// Open the log file before the before-snapshot so that creating
+	// .mdsmith/build-logs/ does not appear as an undeclared write.
+	sc, logPath, err := openCapture(opts)
+	if err != nil {
+		res.Err = err
+		return res
+	}
+	if sc != nil {
+		res.LogPath = logPath
+		defer sc.Close() //nolint:errcheck // log-file close is best-effort
+	}
 
 	before, err := snapshotDirsFn(plan.parents, snapshotCap, nil)
 	if err != nil {
-		return err
+		res.Err = err
+		return res
 	}
 
-	if err := runRecipe(ctx, runOpts{
+	if runErr := b.execWithCapture(ctx, plan, argv, sc, &res); runErr != nil {
+		res.Err = fmt.Errorf("recipe %q failed: %w", target.Recipe, runErr)
+		return res
+	}
+	if err := verifyOutputsExist(plan.outputs, plan.stagePaths); err != nil {
+		res.Err = err
+		return res
+	}
+	if err := verifyNoUndeclaredWrites(before, plan.parents, plan.finals, opts.AllFinals); err != nil {
+		res.Err = err
+		return res
+	}
+	if err := commitOutputs(plan.finals, plan.outputs, plan.stagePaths); err != nil {
+		res.Err = err
+		return res
+	}
+	return res
+}
+
+// buildArgv looks up the recipe command for target and tokenizes it into argv.
+func (b *CustomBuilder) buildArgv(target Target) ([]string, error) {
+	spec, ok := b.recipes[target.Recipe]
+	if !ok {
+		return nil, fmt.Errorf("unknown recipe %q", target.Recipe)
+	}
+	tokens := strings.Fields(spec.Command)
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("recipe %q has an empty command", target.Recipe)
+	}
+	return tokens, nil
+}
+
+// openCapture creates a streamCapture for the given options. Returns nil,"",nil
+// when opts has no log root or action ID (capture disabled).
+func openCapture(opts Options) (*streamCapture, string, error) {
+	if opts.LogRoot == "" || opts.ActionID == "" {
+		return nil, "", nil
+	}
+	p := logPathFor(opts.LogRoot, opts.ActionID)
+	sc, err := newStreamCapture(p, opts.TargetName, opts.LiveSink)
+	return sc, p, err
+}
+
+// execWithCapture runs the recipe argv and populates timing and stream-tail
+// fields on res. It returns the raw execution error without wrapping.
+func (b *CustomBuilder) execWithCapture(
+	ctx context.Context, plan buildPlan, argv []string, sc *streamCapture, res *Result,
+) error {
+	var stdout, stderr io.Writer
+	if sc != nil {
+		stdout = sc.stdout()
+		stderr = sc.stderr()
+	}
+	start := time.Now()
+	exitCode, timedOut, err := runRecipe(ctx, runOpts{
 		argv:    argv,
 		dir:     plan.stageDir,
 		exec:    b.exec,
 		defExec: defaultExecConfig(),
-	}); err != nil {
-		return fmt.Errorf("recipe %q failed: %w", target.Recipe, err)
+		stdout:  stdout,
+		stderr:  stderr,
+	})
+	res.Duration = time.Since(start)
+	res.ExitCode = exitCode
+	res.TimedOut = timedOut
+	if sc != nil {
+		res.StdoutTail = sc.stdoutTail()
+		res.StderrTail = sc.stderrTail()
 	}
-
-	if err := verifyOutputsExist(plan.outputs, plan.stagePaths); err != nil {
-		return err
-	}
-	if err := verifyNoUndeclaredWrites(before, plan.parents, plan.finals); err != nil {
-		return err
-	}
-
-	return commitOutputs(plan.finals, plan.outputs, plan.stagePaths)
+	return err
 }
 
 // buildPlan holds the resolved paths for one Build call: the recipe's
@@ -249,14 +355,18 @@ func verifyOutputsExist(outputs, stagePaths []string) error {
 
 // verifyNoUndeclaredWrites re-snapshots the output parent dirs and fails
 // the build if any file outside the declared finals was added, removed,
-// or modified by the recipe.
-func verifyNoUndeclaredWrites(before map[string]fileState, parents, finals []string) error {
+// or modified by the recipe. extraDeclared lists additional paths (e.g.
+// from concurrent targets) that are exempt from the undeclared-write check.
+func verifyNoUndeclaredWrites(before map[string]fileState, parents, finals, extraDeclared []string) error {
 	after, err := snapshotDirsFn(parents, snapshotCap, before)
 	if err != nil {
 		return err
 	}
-	declared := make(map[string]struct{}, len(finals))
+	declared := make(map[string]struct{}, len(finals)+len(extraDeclared))
 	for _, f := range finals {
+		declared[f] = struct{}{}
+	}
+	for _, f := range extraDeclared {
 		declared[f] = struct{}{}
 	}
 	violations := diffSnapshots(before, after, declared)

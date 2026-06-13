@@ -307,6 +307,27 @@ func TestRecordBuild_HashFileErrorForOutput(t *testing.T) {
 
 // --- ComputeActionID error paths ---
 
+// --- ValidateInputs ---
+
+func TestValidateInputs_MissingLiteralInput_ReturnsError(t *testing.T) {
+	root := t.TempDir()
+	in := newPlan(t, root, "r", "tool", []string{"absent.txt"}, []string{"out.txt"}, nil)
+	require.Error(t, ValidateInputs(in))
+}
+
+func TestValidateInputs_AllInputsPresent_ReturnsNil(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "content")
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"out.txt"}, nil)
+	require.NoError(t, ValidateInputs(in))
+}
+
+func TestValidateInputs_BadInputPath_ReturnsError(t *testing.T) {
+	root := t.TempDir()
+	in := newPlan(t, root, "r", "tool", []string{"../escape.txt"}, []string{"out.txt"}, nil)
+	require.Error(t, ValidateInputs(in))
+}
+
 func TestComputeActionID_BadInputPath(t *testing.T) {
 	root := t.TempDir()
 	in := newPlan(t, root, "r", "tool", []string{"../escape.txt"}, []string{"out.txt"}, nil)
@@ -426,4 +447,84 @@ func TestRecordBuild_HashFileErrorForInput(t *testing.T) {
 	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"dst.txt"}, nil)
 	_, err := RecordBuild(in)
 	require.Error(t, err)
+}
+
+// --- Explain ---
+
+func TestExplain_ReturnsFullBreakdown(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "hello")
+	in := newPlan(t, root, "copy", "cp {inputs} {outputs}", []string{"src.txt"}, []string{"dst.txt"}, nil)
+
+	ex, err := Explain(in)
+	require.NoError(t, err)
+
+	assert.Equal(t, "cp {inputs} {outputs}", ex.Command)
+	assert.Equal(t, CacheVersion, ex.CacheVersion)
+	assert.NotEmpty(t, ex.ActionID)
+	assert.True(t, len(ex.Inputs) == 1)
+	assert.Equal(t, "src.txt", ex.Inputs[0].Path)
+	assert.True(t, len(ex.Inputs[0].Hash) > 0, "hash must be non-empty")
+	assert.Contains(t, ex.Inputs[0].Hash, "sha256-")
+	assert.Equal(t, []string{"dst.txt"}, ex.Outputs)
+}
+
+func TestExplain_WithParams_ReturnsParams(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "data")
+	in := StalenessInput{
+		Target: Target{
+			Recipe:  "copy",
+			Root:    root,
+			Inputs:  []string{"src.txt"},
+			Outputs: []string{"dst.txt"},
+			Params:  map[string]string{"mode": "fast", "level": "3"},
+		},
+		Command: "tool --mode {mode} --level {level} {inputs} {outputs}",
+	}
+
+	ex, err := Explain(in)
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]string{"mode": "fast", "level": "3"}, ex.Params)
+	assert.Contains(t, ex.ActionID, "sha256-")
+}
+
+func TestExplain_BadInputPath_ReturnsError(t *testing.T) {
+	root := t.TempDir()
+	in := newPlan(t, root, "r", "tool", []string{"../escape.txt"}, []string{"out.txt"}, nil)
+	_, err := Explain(in)
+	require.Error(t, err)
+}
+
+func TestExplain_BadOutputPath_ReturnsError(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src.txt", "hello")
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"../escape.txt"}, nil)
+	_, err := Explain(in)
+	require.Error(t, err)
+}
+
+func TestExplain_InputIsDirectory_ReturnsHashError(t *testing.T) {
+	root := t.TempDir()
+	// src.txt is a directory: resolveInputs sees it as in-root, but hashFile
+	// fails when it tries to read a directory as a file.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "src.txt"), 0o755))
+	in := newPlan(t, root, "r", "tool", []string{"src.txt"}, []string{"out.txt"}, nil)
+	_, err := Explain(in)
+	require.Error(t, err)
+}
+
+func TestExplain_NoInputsNoOutputs_EmptyFields(t *testing.T) {
+	root := t.TempDir()
+	// No inputs, no outputs: Explain must still return a valid ActionID.
+	in := StalenessInput{
+		Target:  Target{Recipe: "r", Root: root, Inputs: nil, Outputs: nil},
+		Command: "echo hello",
+	}
+	ex, err := Explain(in)
+	require.NoError(t, err)
+	assert.Empty(t, ex.Inputs)
+	assert.Empty(t, ex.Outputs)
+	assert.Contains(t, ex.ActionID, "sha256-")
 }

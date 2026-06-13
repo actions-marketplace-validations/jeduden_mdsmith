@@ -34,6 +34,7 @@ type CacheEntry struct {
 	ActionID string       `json:"action-id"`
 	Recipe   string       `json:"recipe"`
 	BuiltAt  string       `json:"built-at"`
+	Unstable bool         `json:"unstable,omitempty"`
 }
 
 // Cache is the in-memory form of .mdsmith/build-cache.json.

@@ -17,6 +17,9 @@ import (
 	"github.com/jeduden/mdsmith/internal/rule"
 )
 
+// pruneOrphanLogsFn is the buildexec.PruneOrphanLogs implementation; tests may replace it.
+var pruneOrphanLogsFn = buildexec.PruneOrphanLogs
+
 // buildPassOpts bundles the build-pass knobs parsed from the fix CLI
 // flags. The build pass is CLI-only — it lives here in cmd/mdsmith and
 // never runs from pkg/mdsmith, the WASM bindings, the LSP fix path, or
@@ -33,6 +36,10 @@ type buildPassOpts struct {
 	maxBytes           int64         // file-size cap inherited from the fix run
 	noHooks            bool          // --build-no-hooks: skip both before/after hook lists
 	skipHooksWhenFresh bool          // --build-skip-hooks-when-fresh: skip hooks when no target is stale
+	stream             bool          // --build-stream: live-forward recipe streams to the terminal
+	verify             bool          // --build-verify: run each recipe twice and diff outputs
+	jobs               int           // --build-jobs N: concurrent recipe dispatch (default 1)
+	explain            string        // --build-explain TARGET: print ActionID inputs; run nothing
 }
 
 // buildTarget pairs a resolved build.Target with the file and line it
@@ -166,6 +173,11 @@ func runBuildPass(
 		return 2
 	}
 
+	if opts.explain != "" {
+		cache := loadBuildCache(root, opts, w)
+		return explainTarget(targets, opts.explain, cfg, cache, w)
+	}
+
 	if len(targets) == 0 {
 		if len(errs) > 0 {
 			return 2
@@ -173,24 +185,8 @@ func runBuildPass(
 		return 0
 	}
 
-	// Trust gate: a freshly cloned repo may declare recipes that run
-	// arbitrary binaries. The gate is consulted only when a recipe would
-	// actually execute — never on --build-dry-run or --build-check-stale,
-	// which enumerate targets without running anything. When it denies
-	// trust the build pass is skipped with a clear message; the lint-fix
-	// pass has already run.
-	if !opts.dryRun && !opts.checkStale {
-		// Pin the config file the run actually loaded (cfgPath), so the gate
-		// is correct under `mdsmith fix -c other.yml`. A defaults-only run
-		// (cfgPath == "") falls back to the default config name under root.
-		trustPath := cfgPath
-		if trustPath == "" {
-			trustPath = buildexec.ConfigPathForRoot(root)
-		}
-		if trust := buildexec.CheckTrust(trustPath, envIsSet); !trust.Trusted {
-			_, _ = fmt.Fprintf(w, "mdsmith: %s\n", trust.Reason)
-			return 2
-		}
+	if !ensureTrusted(opts, cfgPath, root, w) {
+		return 2
 	}
 
 	builder := buildexec.NewCustomBuilderExec(recipes, buildExecConfig(cfg))
@@ -200,7 +196,33 @@ func runBuildPass(
 	}
 
 	cache := loadBuildCache(root, opts, w)
+	if !opts.noCache {
+		if err := pruneOrphanLogsFn(root, cache); err != nil {
+			_, _ = fmt.Fprintf(w, "mdsmith: %v\n", err)
+		}
+	}
 	return dispatchWithHooks(builder, targets, cfg, root, opts, cache, timeout, errs, w)
+}
+
+// ensureTrusted checks the build trust gate and returns false (printing a
+// denial message on w) when recipes must not execute. It is a no-op and
+// returns true when opts suppresses recipe execution (dryRun or checkStale).
+func ensureTrusted(opts buildPassOpts, cfgPath, root string, w io.Writer) bool {
+	if opts.dryRun || opts.checkStale {
+		return true
+	}
+	// Pin the config file the run actually loaded (cfgPath), so the gate
+	// is correct under `mdsmith fix -c other.yml`. A defaults-only run
+	// (cfgPath == "") falls back to the default config name under root.
+	trustPath := cfgPath
+	if trustPath == "" {
+		trustPath = buildexec.ConfigPathForRoot(root)
+	}
+	if trust := buildexec.CheckTrust(trustPath, envIsSet); !trust.Trusted {
+		_, _ = fmt.Fprintf(w, "mdsmith: %s\n", trust.Reason)
+		return false
+	}
+	return true
 }
 
 // dispatchWithHooks coordinates the hook lifecycle around target dispatch:
@@ -396,17 +418,17 @@ const (
 )
 
 // dispatchTargets runs the staleness check, dispatch, and cache refresh
-// loop. It returns the build pass exit code.
+// loop. It returns the build pass exit code. With opts.jobs > 1 recipes
+// run concurrently; cache entries apply serially in declared order after
+// all recipes finish.
 func dispatchTargets(
 	builder buildexec.Builder, targets []buildTarget, cfg *config.Config,
 	root string, opts buildPassOpts, cache *buildexec.Cache,
 	timeout time.Duration, w io.Writer,
 ) int {
-	failed := false
-	anyStale := false
-	rebuilt := false
-	for _, bt := range targets {
-		switch dispatchOne(builder, bt, cfg, opts, cache, timeout, w) {
+	var failed, anyStale, rebuilt bool
+	var fold = func(o targetOutcome) {
+		switch o {
 		case outcomeFailed:
 			failed = true
 		case outcomeStale:
@@ -414,6 +436,20 @@ func dispatchTargets(
 		case outcomeRebuilt:
 			rebuilt = true
 		case outcomeNeutral:
+		}
+	}
+
+	if opts.jobs > 1 && opts.dryRun {
+		_, _ = fmt.Fprintf(w, "mdsmith: --build-jobs ignored with --build-dry-run\n")
+	}
+	if opts.jobs > 1 && opts.checkStale {
+		_, _ = fmt.Fprintf(w, "mdsmith: --build-jobs ignored with --build-check-stale\n")
+	}
+	if opts.jobs > 1 && !opts.checkStale && !opts.dryRun {
+		runConcurrent(builder, targets, cfg, opts, cache, timeout, w, fold)
+	} else {
+		for _, bt := range targets {
+			fold(dispatchOne(builder, bt, cfg, opts, cache, timeout, w))
 		}
 	}
 
@@ -435,47 +471,89 @@ func dispatchTargets(
 	return 0
 }
 
-// dispatchOne handles a single target: staleness verdict, then report or
-// rebuild per the active flags. It returns the outcome the caller folds
-// into the run-level state.
+// dispatchOne handles a single target end to end against a shared cache,
+// used by the serial path. It computes the verdict, reports or rebuilds,
+// and applies the cache entry directly.
 func dispatchOne(
 	builder buildexec.Builder, bt buildTarget, cfg *config.Config,
 	opts buildPassOpts, cache *buildexec.Cache, timeout time.Duration, w io.Writer,
 ) targetOutcome {
-	label := fmt.Sprintf("%s:%d (%s)", bt.file, bt.line, bt.target.Recipe)
 	stin := stalenessFor(bt, cfg)
-
 	verdict, serr := targetVerdict(stin, cache, opts)
-	if serr != nil {
-		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, serr)
-		return outcomeFailed
+	outcome, entry := decideAndRun(builder, bt, opts, stin, verdict, serr, timeout, nil, w)
+	if entry != nil {
+		cache.Put(*entry)
 	}
+	return outcome
+}
 
+// decideAndRun decides the per-target action from a precomputed verdict
+// and, when a rebuild is warranted, runs the recipe. It returns the
+// outcome and an optional cache entry to apply (nil when nothing changed
+// or --build-no-cache is set). It touches no shared cache, so concurrent
+// callers can run it in parallel and apply the returned entries serially.
+// allFinals lists all declared final paths across concurrent targets for
+// the concurrent-safe post-condition check; nil on the serial path.
+func decideAndRun(
+	builder buildexec.Builder, bt buildTarget,
+	opts buildPassOpts, stin buildexec.StalenessInput, verdict buildexec.Verdict, verdictErr error,
+	timeout time.Duration, allFinals []string, w io.Writer,
+) (targetOutcome, *buildexec.CacheEntry) {
+	label := fmt.Sprintf("%s:%d (%s)", bt.file, bt.line, bt.target.Recipe)
+
+	if verdictErr != nil {
+		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, verdictErr)
+		return outcomeFailed, nil
+	}
 	if opts.checkStale {
 		if verdict == buildexec.Stale {
 			_, _ = fmt.Fprintf(w, "build %s: STALE\n", label)
-			return outcomeStale
+			return outcomeStale, nil
 		}
-		return outcomeNeutral
+		return outcomeNeutral, nil
 	}
 	if opts.dryRun {
 		_, _ = fmt.Fprintf(w, "build %s: %s\n", label, verdict)
-		return outcomeNeutral
+		return outcomeNeutral, nil
 	}
 	if verdict == buildexec.Fresh {
-		_, _ = fmt.Fprintf(w, "build %s: SKIP\n", label)
-		return outcomeNeutral
+		_, _ = fmt.Fprintf(w, "SKIP %s\n", targetName(bt))
+		return outcomeNeutral, nil
 	}
-	if err := runOneTarget(builder, bt, timeout); err != nil {
+
+	var id string
+	if !opts.noCache {
+		var idErr error
+		id, idErr = buildexec.ComputeActionID(stin)
+		if idErr != nil {
+			reportBuildFailure(bt, targetRunResult{Result: buildexec.Result{Err: idErr}}, w)
+			return outcomeFailed, nil
+		}
+	}
+	res := runOneTarget(builder, bt, id, opts, timeout, allFinals, w)
+	if res.Err != nil {
+		reportBuildFailure(bt, res, w)
+		return outcomeFailed, nil
+	}
+	if opts.verify {
+		verifyTarget(builder, bt, id, opts, timeout, &res, w)
+	}
+	entry, err := buildCacheEntry(stin, opts, res.Unstable)
+	if err != nil {
 		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, err)
-		return outcomeFailed
+		return outcomeFailed, nil
 	}
-	if err := refreshCacheEntry(stin, cache, opts); err != nil {
-		_, _ = fmt.Fprintf(w, "build %s: FAIL: %v\n", label, err)
-		return outcomeFailed
+	_, _ = fmt.Fprintf(w, "OK %s\n", targetName(bt))
+	return outcomeRebuilt, entry
+}
+
+// targetName returns the target's display name: its first declared output
+// path, or the source label when no output is declared.
+func targetName(bt buildTarget) string {
+	if len(bt.target.Outputs) > 0 {
+		return bt.target.Outputs[0]
 	}
-	_, _ = fmt.Fprintf(w, "build %s: OK\n", label)
-	return outcomeRebuilt
+	return fmt.Sprintf("%s:%d", bt.file, bt.line)
 }
 
 // targetVerdict returns the staleness verdict for one target, honouring
@@ -484,8 +562,9 @@ func targetVerdict(
 	stin buildexec.StalenessInput, cache *buildexec.Cache, opts buildPassOpts,
 ) (buildexec.Verdict, error) {
 	if opts.force || opts.noCache {
-		// Still resolve inputs so a missing input or empty glob is an error.
-		if _, err := buildexec.CheckStaleness(stin, buildexec.NewCache()); err != nil {
+		// Validate inputs without hashing — cheaper than a full staleness check
+		// when the verdict is already known to be Stale.
+		if err := buildexec.ValidateInputs(stin); err != nil {
 			return buildexec.Stale, err
 		}
 		return buildexec.Stale, nil
@@ -497,28 +576,50 @@ func targetVerdict(
 	return res.Verdict, nil
 }
 
-// refreshCacheEntry records a rebuilt target's cache entry, stamping
-// built-at. With --build-no-cache it is a no-op.
-func refreshCacheEntry(
-	stin buildexec.StalenessInput, cache *buildexec.Cache, opts buildPassOpts,
-) error {
+// buildCacheEntry records a rebuilt target's cache entry, stamping
+// built-at and the unstable flag. With --build-no-cache it returns nil.
+func buildCacheEntry(
+	stin buildexec.StalenessInput, opts buildPassOpts, unstable bool,
+) (*buildexec.CacheEntry, error) {
 	if opts.noCache {
-		return nil
+		return nil, nil
 	}
 	entry, err := buildexec.RecordBuild(stin)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	entry.BuiltAt = time.Now().UTC().Format(time.RFC3339)
-	cache.Put(entry)
-	return nil
+	entry.Unstable = unstable
+	return &entry, nil
 }
 
-// runOneTarget dispatches a single target with a per-recipe timeout.
-func runOneTarget(b buildexec.Builder, bt buildTarget, timeout time.Duration) error {
+// targetRunResult is one recipe run's outcome plus the unstable flag set
+// by --build-verify.
+type targetRunResult struct {
+	buildexec.Result
+	Unstable bool
+}
+
+// runOneTarget dispatches a single target with a per-recipe timeout. When id
+// is non-empty, streams are captured to the action-id log file under root.
+// opts.stream forwards recipe lines live to w. allFinals lists all declared
+// final paths across concurrent targets for the post-condition check; nil on
+// the serial path.
+func runOneTarget(
+	b buildexec.Builder, bt buildTarget, id string,
+	opts buildPassOpts, timeout time.Duration, allFinals []string, w io.Writer,
+) targetRunResult {
+	bopts := buildexec.Options{TargetName: targetName(bt), AllFinals: allFinals}
+	if id != "" {
+		bopts.LogRoot = bt.target.Root
+		bopts.ActionID = id
+	}
+	if opts.stream {
+		bopts.LiveSink = w
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return b.Build(ctx, bt.target)
+	return targetRunResult{Result: b.BuildWithResult(ctx, bt.target, bopts)}
 }
 
 // buildRecipeSpecs converts the loaded config's build.recipes into the

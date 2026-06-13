@@ -156,7 +156,8 @@ func TestE2E_Build_TimeoutKillsRecipe(t *testing.T) {
 	_, stderr, code := runBinaryInDir(t, dir, "", "fix", "--no-color",
 		"--build-only", "--build-timeout", "200ms", "doc.md")
 	assert.Equal(t, 2, code)
-	assert.Contains(t, stderr, "FAIL")
+	assert.Contains(t, stderr, "TIMEOUT")
+	assert.Contains(t, stderr, "SIGTERM")
 }
 
 // --- Plan 103: staleness and dependency tracking ---
