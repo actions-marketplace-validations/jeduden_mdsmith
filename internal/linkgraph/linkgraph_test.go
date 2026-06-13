@@ -255,9 +255,21 @@ func TestLinks_NilFile(t *testing.T) {
 	assert.Nil(t, Links(nil))
 }
 
+// TestLinks_NilAST checks that Links returns nil for a non-nil File with
+// a nil AST (e.g. a struct-literal File constructed without parsing).
+func TestLinks_NilAST(t *testing.T) {
+	assert.Nil(t, Links(&lint.File{}))
+}
+
 // TestImages_NilFile checks that Images handles a nil file gracefully.
 func TestImages_NilFile(t *testing.T) {
 	assert.Nil(t, Images(nil))
+}
+
+// TestImages_NilAST checks that Images returns nil for a non-nil File
+// with a nil AST.
+func TestImages_NilAST(t *testing.T) {
+	assert.Nil(t, Images(&lint.File{}))
 }
 
 // TestRefLinkTargets_ReferenceIdentity pins that two calls to RefLinkTargets
@@ -285,6 +297,12 @@ func TestRefLinkTargets_ContentEquality(t *testing.T) {
 // TestRefLinkTargets_NilFile checks that RefLinkTargets handles a nil file gracefully.
 func TestRefLinkTargets_NilFile(t *testing.T) {
 	assert.Nil(t, RefLinkTargets(nil))
+}
+
+// TestRefLinkTargets_NilAST checks that RefLinkTargets returns nil for a
+// non-nil File with a nil AST.
+func TestRefLinkTargets_NilAST(t *testing.T) {
+	assert.Nil(t, RefLinkTargets(&lint.File{}))
 }
 
 // =====================================================================
