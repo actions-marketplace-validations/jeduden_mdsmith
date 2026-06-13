@@ -11,6 +11,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/engine"
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
+	"github.com/stretchr/testify/require"
 
 	_ "github.com/jeduden/mdsmith/internal/rules/all"
 )
@@ -33,18 +34,14 @@ func TestRunner_PooledSourceReuseDoesNotCorrupt(t *testing.T) {
 	dir := t.TempDir()
 	// A long file then a short file, repeated, so a serial worker reuses
 	// one grown buffer for a short file right after a long one.
-	longDoc := buildBadDoc(60)
-	shortDoc := buildBadDoc(3)
+	longBytes := []byte(buildBadDoc(60))
+	shortBytes := []byte(buildBadDoc(3))
 	paths := make([]string, 0, 20)
 	for i := 0; i < 10; i++ {
 		lp := filepath.Join(dir, fmt.Sprintf("long%02d.md", i))
 		sp := filepath.Join(dir, fmt.Sprintf("short%02d.md", i))
-		if err := os.WriteFile(lp, []byte(longDoc), 0o644); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
-		if err := os.WriteFile(sp, []byte(shortDoc), 0o644); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
+		require.NoError(t, os.WriteFile(lp, longBytes, 0o644))
+		require.NoError(t, os.WriteFile(sp, shortBytes, 0o644))
 		paths = append(paths, lp, sp)
 	}
 
@@ -65,19 +62,13 @@ func TestRunner_PooledSourceReuseDoesNotCorrupt(t *testing.T) {
 	// pattern. Both must agree if the reslice is correct.
 	parallel := run(8)
 
-	require := func(cond bool, format string, args ...any) {
-		t.Helper()
-		if !cond {
-			t.Fatalf(format, args...)
-		}
-	}
-	require(len(serial) > 0, "expected diagnostics from the bad corpus, got none")
-	require(len(serial) == len(parallel),
+	require.NotEmpty(t, serial, "expected diagnostics from the bad corpus, got none")
+	require.Len(t, parallel, len(serial),
 		"serial run produced %d diagnostics, parallel %d — pooled buffer reslice bug?",
 		len(serial), len(parallel))
 	for i := range serial {
 		sk, pk := diagKey(serial[i]), diagKey(parallel[i])
-		require(sk == pk,
+		require.Equal(t, sk, pk,
 			"diagnostic %d differs between serial and parallel runs: %q vs %q "+
 				"— stale bytes leaking through the pooled source buffer?",
 			i, sk, pk)
