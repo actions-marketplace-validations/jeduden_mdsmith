@@ -127,6 +127,14 @@ func TestCountWordsInNode(t *testing.T) {
 			src: "Hello  \nworld.\n", want: 2},
 		{name: "Heading is walked like any other parent",
 			src: "# Hello world\n", want: 2},
+		// Non-ASCII text exercises writeBytes' multibyte decode path:
+		// accented letters are non-space runes...
+		{name: "multibyte non-ASCII words",
+			src: "café ünïcode wörds\n", want: 3},
+		// ...and a non-ASCII space (U+00A0 no-break space) is a word
+		// boundary on that same decode path.
+		{name: "non-ASCII space separates words",
+			src: "alpha beta\n", want: 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
