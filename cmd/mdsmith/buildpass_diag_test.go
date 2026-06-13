@@ -276,13 +276,9 @@ func TestVerifyTarget_DeterministicRecipe_NoUnstable(t *testing.T) {
 	}
 	// Run the first build so snapshotOutputs sees a committed output.
 	require.NoError(t, builder.Build(context.Background(), bt.target))
-	stin := buildexec.StalenessInput{
-		Target:  bt.target,
-		Command: cmd,
-	}
 	res := &targetRunResult{}
 	var buf strings.Builder
-	verifyTarget(context.Background(), builder, bt, stin, buildPassOpts{}, time.Second, res, &buf)
+	verifyTarget(context.Background(), builder, bt, "", buildPassOpts{}, time.Second, res, &buf)
 	assert.False(t, res.Unstable)
 }
 
@@ -302,10 +298,9 @@ func TestVerifyTarget_FailingReRunSetsUnstable(t *testing.T) {
 			Outputs: []string{"out.txt"},
 		},
 	}
-	stin := buildexec.StalenessInput{Target: bt.target}
 	res := &targetRunResult{}
 	var buf strings.Builder
-	verifyTarget(context.Background(), mock, bt, stin, buildPassOpts{}, time.Second, res, &buf)
+	verifyTarget(context.Background(), mock, bt, "", buildPassOpts{}, time.Second, res, &buf)
 	assert.True(t, res.Unstable)
 	assert.Contains(t, buf.String(), "verify re-run failed")
 }
@@ -339,10 +334,9 @@ func TestVerifyTarget_NonDeterministicOutput_SetsUnstable(t *testing.T) {
 			Outputs: []string{"out.txt"},
 		},
 	}
-	stin := buildexec.StalenessInput{Target: bt.target}
 	res := &targetRunResult{}
 	var buf strings.Builder
-	verifyTarget(context.Background(), mock, bt, stin, buildPassOpts{}, time.Second, res, &buf)
+	verifyTarget(context.Background(), mock, bt, "", buildPassOpts{}, time.Second, res, &buf)
 	assert.True(t, res.Unstable, "non-deterministic output must set Unstable")
 	assert.Contains(t, buf.String(), "non-deterministic")
 }
@@ -372,12 +366,10 @@ func TestPrintVerdict_ErrorBranch(t *testing.T) {
 	assert.Contains(t, out, "verdict: ERROR:", "missing input must trigger the ERROR branch")
 }
 
-// --- runOneTarget ComputeActionID error ---
-
-// TestRunOneTarget_ComputeActionIDError covers Fix 1: when the input file is
-// removed between verdict and run, ComputeActionID fails and runOneTarget
-// returns a Result with Err set rather than silently ignoring the failure.
-func TestRunOneTarget_ComputeActionIDError(t *testing.T) {
+// TestDecideAndRun_ComputeActionIDError_ReportsFail covers the path where
+// ComputeActionID fails between verdict and run: decideAndRun returns
+// outcomeFailed and prints a FAIL line, and the builder is never called.
+func TestDecideAndRun_ComputeActionIDError_ReportsFail(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "src.txt"), []byte("data"), 0o644))
 	bt := buildTarget{
@@ -399,13 +391,15 @@ func TestRunOneTarget_ComputeActionIDError(t *testing.T) {
 		called = true
 		return nil
 	}}
-	// Delete input so ComputeActionID's resolveInputs call fails.
+	// Delete input so ComputeActionID fails during decideAndRun.
 	require.NoError(t, os.Remove(filepath.Join(root, "src.txt")))
 
 	var buf strings.Builder
-	res := runOneTarget(builder, bt, stin, buildPassOpts{}, time.Second, &buf)
-	assert.Error(t, res.Err, "must return an error when ComputeActionID fails")
+	outcome, entry := decideAndRun(builder, bt, buildPassOpts{}, stin, buildexec.Stale, nil, time.Second, &buf)
+	assert.Equal(t, outcomeFailed, outcome)
+	assert.Nil(t, entry)
 	assert.False(t, called, "builder must not be invoked when ActionID computation fails")
+	assert.Contains(t, buf.String(), "FAIL")
 }
 
 // TestReportBuildFailure_ErrorPrintedWithStderr verifies that the error: field
@@ -487,46 +481,9 @@ func TestRunBuildPass_NoCacheSkipsPruneOrphanLogs(t *testing.T) {
 	assert.False(t, called, "pruneOrphanLogsFn must not be called with --build-no-cache")
 }
 
-// TestVerifyTarget_ComputeActionIDError_DoesNotSetUnstable covers the error
-// branch in verifyTarget: when ComputeActionID fails (e.g. missing input),
-// verifyTarget prints a WARN and returns without setting Unstable or running
-// the recipe a second time.
-func TestVerifyTarget_ComputeActionIDError_DoesNotSetUnstable(t *testing.T) {
-	root := t.TempDir()
-	// Output exists so snapshotOutputs can capture it; input is absent so
-	// ComputeActionID's resolveInputs call fails.
-	require.NoError(t, os.WriteFile(filepath.Join(root, "out.txt"), []byte("result"), 0o644))
-	called := false
-	mock := &mockBuilder{fn: func(_ context.Context, _ buildexec.Target) error {
-		called = true
-		return nil
-	}}
-	bt := buildTarget{
-		file: "doc.md",
-		line: 1,
-		target: buildexec.Target{
-			Recipe:  "cp",
-			Root:    root,
-			Inputs:  []string{"absent.txt"},
-			Outputs: []string{"out.txt"},
-		},
-	}
-	stin := buildexec.StalenessInput{
-		Target:  bt.target,
-		Command: "cp {inputs} {outputs}",
-	}
-	res := &targetRunResult{}
-	var buf strings.Builder
-	verifyTarget(context.Background(), mock, bt, stin, buildPassOpts{}, time.Second, res, &buf)
-	assert.False(t, res.Unstable, "transient ActionID error must not mark output unstable")
-	assert.Contains(t, buf.String(), "WARN")
-	assert.Contains(t, buf.String(), "ActionID")
-	assert.False(t, called, "builder must not be invoked when ActionID computation fails")
-}
-
-// TestVerifyTarget_NoCacheSkipsLogCapture verifies that when noCache is set,
-// verifyTarget skips the ComputeActionID call and log-root assignment so no
-// log directory is created even if the recipe succeeds.
+// TestVerifyTarget_NoCacheSkipsLogCapture verifies that when id is empty (the
+// no-cache path), verifyTarget skips log-root assignment so no log directory
+// is created even if the recipe succeeds.
 func TestVerifyTarget_NoCacheSkipsLogCapture(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh not available on Windows")
@@ -550,15 +507,14 @@ func TestVerifyTarget_NoCacheSkipsLogCapture(t *testing.T) {
 		},
 	}
 	require.NoError(t, builder.Build(context.Background(), bt.target))
-	stin := buildexec.StalenessInput{Target: bt.target, Command: cmd}
 
 	res := &targetRunResult{}
 	var buf strings.Builder
-	verifyTarget(context.Background(), builder, bt, stin,
-		buildPassOpts{noCache: true}, time.Second, res, &buf)
+	// Pass id="" (no-cache path): verifyTarget must not create a log directory.
+	verifyTarget(context.Background(), builder, bt, "", buildPassOpts{}, time.Second, res, &buf)
 	assert.False(t, res.Unstable)
 	_, err := os.Stat(filepath.Join(root, ".mdsmith", "build-logs"))
-	assert.True(t, os.IsNotExist(err), "no log directory must be created when noCache is set")
+	assert.True(t, os.IsNotExist(err), "no log directory must be created when id is empty")
 }
 
 // TestReportBuildFailure_ActionIDError_NoBuildFields covers the len(Argv)==0
@@ -613,8 +569,8 @@ func TestDispatchTargets_JobsWithCheckStale_PrintsWarning(t *testing.T) {
 }
 
 // TestRunOneTarget_NoCacheDoesNotWriteLogs covers the noCache guard in
-// runOneTarget: when --build-no-cache is set, no log directory is created
-// (LogRoot/ActionID are not passed to BuildWithResult).
+// runOneTarget: when id is empty (the no-cache path), no log directory is
+// created (LogRoot/ActionID are not passed to BuildWithResult).
 func TestRunOneTarget_NoCacheDoesNotWriteLogs(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh not available on Windows")
@@ -636,12 +592,12 @@ func TestRunOneTarget_NoCacheDoesNotWriteLogs(t *testing.T) {
 			Outputs: []string{"out.txt"},
 		},
 	}
-	stin := buildexec.StalenessInput{Target: bt.target, Command: cmd}
 	var buf strings.Builder
-	res := runOneTarget(builder, bt, stin, buildPassOpts{noCache: true}, time.Second, &buf)
+	// Pass id="" (no-cache path): runOneTarget must not create a log directory.
+	res := runOneTarget(builder, bt, "", buildPassOpts{}, time.Second, &buf)
 	require.NoError(t, res.Err)
 	_, err := os.Stat(filepath.Join(root, ".mdsmith", "build-logs"))
-	assert.True(t, os.IsNotExist(err), "no log directory must be created when --build-no-cache is set")
+	assert.True(t, os.IsNotExist(err), "no log directory must be created when id is empty")
 }
 
 // TestVerifyTarget_StreamEnabled_ForwardsLiveOutput covers Fix 6: when
@@ -672,11 +628,12 @@ func TestVerifyTarget_StreamEnabled_ForwardsLiveOutput(t *testing.T) {
 	// Run the first build so snapshotOutputs captures a committed output.
 	require.NoError(t, builder.Build(context.Background(), bt.target))
 	stin := buildexec.StalenessInput{Target: bt.target, Command: cmd}
+	id, err := buildexec.ComputeActionID(stin)
+	require.NoError(t, err)
 
 	res := &targetRunResult{}
 	var buf strings.Builder
-	verifyTarget(context.Background(), builder, bt, stin,
-		buildPassOpts{stream: true}, time.Second, res, &buf)
+	verifyTarget(context.Background(), builder, bt, id, buildPassOpts{stream: true}, time.Second, res, &buf)
 	assert.False(t, res.Unstable)
 	assert.Contains(t, buf.String(), "verify-live")
 }

@@ -99,6 +99,14 @@ func sortedKeys(m map[string]string) []string {
 // failure and timeout diagnostics.
 const diagTailLines = 20
 
+// printStreamTail writes the last-n-lines header and body for one stream.
+func printStreamTail(label string, lines []string, n int, w io.Writer) {
+	_, _ = fmt.Fprintf(w, "  --- last %d lines of %s ---\n", n, label)
+	for _, line := range lastLines(lines, n) {
+		_, _ = fmt.Fprintf(w, "  %s\n", line)
+	}
+}
+
 // reportBuildFailure prints the rich diagnostic for a failed recipe. A
 // timeout prints the hung-recipe block (last lines of both streams before
 // SIGTERM); any other failure prints the six-field block plus the last 20
@@ -129,24 +137,15 @@ func reportBuildFailure(bt buildTarget, res targetRunResult, w io.Writer) {
 	if len(res.StderrTail) == 0 {
 		return
 	}
-	_, _ = fmt.Fprintf(w, "  --- last %d lines of stderr ---\n", diagTailLines)
-	for _, line := range lastLines(res.StderrTail, diagTailLines) {
-		_, _ = fmt.Fprintf(w, "  %s\n", line)
-	}
+	printStreamTail("stderr", res.StderrTail, diagTailLines, w)
 }
 
 // reportTimeout prints the hung-recipe diagnostic before the SIGTERM that
 // the context cancellation already sent.
 func reportTimeout(name string, res targetRunResult, w io.Writer) {
 	_, _ = fmt.Fprintf(w, "TIMEOUT %s after %s\n", name, res.Duration.Round(time.Millisecond))
-	_, _ = fmt.Fprintf(w, "  --- last %d lines of stdout ---\n", diagTailLines)
-	for _, line := range lastLines(res.StdoutTail, diagTailLines) {
-		_, _ = fmt.Fprintf(w, "  %s\n", line)
-	}
-	_, _ = fmt.Fprintf(w, "  --- last %d lines of stderr ---\n", diagTailLines)
-	for _, line := range lastLines(res.StderrTail, diagTailLines) {
-		_, _ = fmt.Fprintf(w, "  %s\n", line)
-	}
+	printStreamTail("stdout", res.StdoutTail, diagTailLines, w)
+	printStreamTail("stderr", res.StderrTail, diagTailLines, w)
 	_, _ = fmt.Fprintf(w, "  sent SIGTERM to process group\n")
 }
 
@@ -176,7 +175,7 @@ func relLogPath(root, logPath string) string {
 // not a failure: some recipes embed timestamps or random seeds.
 func verifyTarget(
 	ctx context.Context,
-	b buildexec.Builder, bt buildTarget, stin buildexec.StalenessInput,
+	b buildexec.Builder, bt buildTarget, id string,
 	opts buildPassOpts, timeout time.Duration, res *targetRunResult, w io.Writer,
 ) {
 	first := snapshotOutputs(bt)
@@ -184,12 +183,7 @@ func verifyTarget(
 	vctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	verifyOpts := buildexec.Options{TargetName: targetName(bt)}
-	if !opts.noCache {
-		id, idErr := buildexec.ComputeActionID(stin)
-		if idErr != nil {
-			_, _ = fmt.Fprintf(w, "WARN %s: verify ActionID failed: %v\n", targetName(bt), idErr)
-			return
-		}
+	if id != "" {
 		verifyOpts.LogRoot = bt.target.Root
 		verifyOpts.ActionID = "verify-" + id
 	}

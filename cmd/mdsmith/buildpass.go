@@ -514,13 +514,22 @@ func decideAndRun(
 		return outcomeNeutral, nil
 	}
 
-	res := runOneTarget(builder, bt, stin, opts, timeout, w)
+	var id string
+	if !opts.noCache {
+		var idErr error
+		id, idErr = buildexec.ComputeActionID(stin)
+		if idErr != nil {
+			reportBuildFailure(bt, targetRunResult{Result: buildexec.Result{Err: idErr}}, w)
+			return outcomeFailed, nil
+		}
+	}
+	res := runOneTarget(builder, bt, id, opts, timeout, w)
 	if res.Err != nil {
 		reportBuildFailure(bt, res, w)
 		return outcomeFailed, nil
 	}
 	if opts.verify {
-		verifyTarget(context.Background(), builder, bt, stin, opts, timeout, &res, w)
+		verifyTarget(context.Background(), builder, bt, id, opts, timeout, &res, w)
 	}
 	entry, err := buildCacheEntry(stin, opts, res.Unstable)
 	if err != nil {
@@ -583,22 +592,15 @@ type targetRunResult struct {
 	Unstable bool
 }
 
-// runOneTarget dispatches a single target with a per-recipe timeout,
-// capturing streams to the action-id log file. opts.stream forwards the
-// recipe's lines live to w. A failed ActionID computation is returned as
-// the run error so reportBuildFailure can display it. Log capture is
-// suppressed when --build-no-cache is set to prevent orphaned log files
-// (no cache entry is written to reference them for later pruning).
+// runOneTarget dispatches a single target with a per-recipe timeout. When id
+// is non-empty, streams are captured to the action-id log file under root.
+// opts.stream forwards recipe lines live to w.
 func runOneTarget(
-	b buildexec.Builder, bt buildTarget, stin buildexec.StalenessInput,
+	b buildexec.Builder, bt buildTarget, id string,
 	opts buildPassOpts, timeout time.Duration, w io.Writer,
 ) targetRunResult {
-	id, err := buildexec.ComputeActionID(stin)
-	if err != nil {
-		return targetRunResult{Result: buildexec.Result{Err: err}}
-	}
 	bopts := buildexec.Options{TargetName: targetName(bt)}
-	if !opts.noCache {
+	if id != "" {
 		bopts.LogRoot = bt.target.Root
 		bopts.ActionID = id
 	}
