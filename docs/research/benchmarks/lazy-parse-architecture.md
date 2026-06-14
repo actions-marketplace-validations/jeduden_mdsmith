@@ -120,6 +120,76 @@ those functions to compute from Layer 0/1 when possible — and to
 trigger Layer 2 only when they cannot — migrates most rules with **no
 rule change at all.**
 
+## Rule-by-rule seam audit
+
+The projection functions are the seam for rules that call them. The
+other seam — the harder one — is the shared `ast.Walk` that drives the
+NodeChecker rules. Auditing it returned the most useful result in this
+study: **every one of the 25 NodeChecker rules is a
+`KindScopedChecker`** — it declares, up front, the exact node kinds it
+reacts to. The engine already dispatches by kind. So the metadata that
+says which layer a rule needs *already exists in the rule*:
+
+| Scoped kind(s)            | NodeChecker rules                                                                                                 | Layer |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------- | ----- |
+| Heading                   | blank-line-around-headings, heading-style, no-trailing-punctuation                                                | 0     |
+| FencedCodeBlock           | blank-line-around-fenced-code, fenced-code-style, fenced-code-language, unclosed-code-block, commands-show-output | 0     |
+| List / ListItem           | blank-line-around-lists, list-marker-space, list-marker-style, ordered-list-numbering, list-indent                | 0     |
+| Paragraph                 | no-emphasis-as-heading, forbidden-paragraph-starts, forbidden-text, toc-directive                                 | 0     |
+| ThematicBreak / HTMLBlock | horizontal-rule-style, no-inline-html                                                                             | 0     |
+| Link / Image / CodeSpan   | descriptive-link-text, no-space-in-link-text, no-empty-alt-text, no-space-in-code-spans                           | 1     |
+| Text (URL scan)           | no-bare-urls                                                                                                      | 1     |
+| Emphasis                  | emphasis-style                                                                                                    | 2     |
+
+Sixteen of the twenty-five scope to **block** kinds; they need a node's
+kind and line span, nothing inside it. Nine scope to **inline** kinds.
+Only `emphasis-style` needs the full delimiter algorithm (Layer 2).
+
+A second finding sharpens the boundary: some block rules reference
+*every* inline type — `blank-line-around-lists` and `list-indent` both
+carry `case *ast.Text, *ast.CodeSpan, *ast.Emphasis, *ast.Link,
+*ast.Image, *ast.AutoLink, *ast.RawHTML:`. That is not inline
+*semantics* — it is "treat all inline as opaque, I only care about the
+block." Those references disappear the moment the rule reads a block
+skeleton with no inline children to enumerate. They are Layer 0, not
+Layer 1.
+
+### The one coupling to break
+
+Block NodeCheckers receive `ast.Node` and immediately narrow it:
+`heading, ok := n.(*ast.Heading)`, then read `astutil.HeadingLine` and
+`f.Lines`. The type assertion is the only thing tying them to the heap
+tree. Two ways to serve them without a full parse:
+
+- **Lazy inline (smaller change).** Build *block* nodes as real
+  `ast.Node` (arena-backed, cheap) but defer inline parsing per block.
+  Block NodeCheckers keep working unchanged; inline-kind checkers
+  trigger inline materialization. Removes the inline phase (~11%) but
+  keeps the block-tree cost (~23%) — helps default configs, **not
+  enough for parity.**
+- **Block skeleton (the parity change).** Present each block as a flat
+  `BlockSpan` (kind + line range + nesting), and adapt the 16
+  block-kind `CheckNode`s to read kind + line from it instead of
+  `n.(*ast.Heading)`. Mechanical, because they already read only kind +
+  position. Removes block + inline cost — the version that can beat
+  gomarklint.
+
+`KindScopedChecker` is what makes the second option tractable: the
+engine knows each enabled rule's kinds, so it can decide per run
+whether any rule forces Layer 1/2, and otherwise run Layer 0 only.
+
+### Where every rule lands
+
+- **Layer 0 (no parse): ~35 rules.** The pure-line rules, the 16
+  CollectCodeBlockLines consumers, the astutil section/heading rules,
+  and the 16 block-kind NodeCheckers.
+- **Layer 1 (light inline index): ~10 rules.** The link / image / URL /
+  code-span / reference rules.
+- **Layer 2 (full AST): the rest.** Emphasis semantics, prose
+  (readability, structure, token budget, proper names), and the
+  cross-file / directive rules (catalog, include, cross-file
+  integrity, required-structure).
+
 ## Feasibility verdict, by scenario
 
 The honest answer to "fast for simple, expensive only when needed"
