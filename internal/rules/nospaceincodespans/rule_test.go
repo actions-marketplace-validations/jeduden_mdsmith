@@ -376,3 +376,24 @@ func TestFix_TrimmedEqualsRaw_NoChange(t *testing.T) {
 	got := (&Rule{}).Fix(f)
 	assert.Equal(t, src, got, "trimmed==raw must skip the rewrite")
 }
+
+// TestFix_BacktickPaddingAllocBudget verifies that adding balanced spaces
+// around code-span content that starts or ends with a backtick uses a single
+// allocation rather than the two-step double-append pattern.
+func TestFix_BacktickPaddingAllocBudget(t *testing.T) {
+	// Code span whose raw content is " `abc" — leading space before a backtick.
+	// Fix trims to "`abc", detects leading backtick, and adds a trailing space
+	// to produce " `abc " which differs from raw, creating a cut.
+	src := "Use `` `abc`` here.\n"
+	f := newFile(t, src)
+	r := &Rule{}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = r.Fix(f)
+	})
+	// After fix: make(padded) + cuts-slice + out-Buffer = 4 allocs (1 alloc saved vs double-append).
+	// Before: []byte{' '} alloc + inner-append growth = 5 allocs.
+	if allocs > 4 {
+		t.Fatalf("Fix allocs per call: want ≤ 4, got %v (double-append allocates intermediate slice)", allocs)
+	}
+}

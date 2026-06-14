@@ -2275,32 +2275,34 @@ func checkBodySync(
 		endLine = allHeadings[headingIdx+1].Line - 1
 	}
 
+	// Convert expected once so per-line comparisons need no string() cast.
+	expectedBytes := []byte(expected)
+
 	// Check each individual line first (fast path).
 	for i := startLine - 1; i < endLine && i < len(f.Lines); i++ {
-		line := strings.TrimSpace(string(f.Lines[i]))
-		if line == expected {
+		if bytes.Equal(bytes.TrimSpace(f.Lines[i]), expectedBytes) {
 			return nil
 		}
 	}
 
 	// Join consecutive non-blank lines into paragraphs and check each.
-	var para []string
+	// Pre-size to the maximum lines in this section to avoid repeated growth allocs.
+	para := make([][]byte, 0, endLine-startLine+1)
 	for i := startLine - 1; i <= endLine && i <= len(f.Lines); i++ {
-		var line string
+		var lineB []byte
 		if i < endLine && i < len(f.Lines) {
-			line = strings.TrimSpace(string(f.Lines[i]))
+			lineB = bytes.TrimSpace(f.Lines[i])
 		}
-		if line == "" || i == endLine || i == len(f.Lines) {
+		if len(lineB) == 0 || i == endLine || i == len(f.Lines) {
 			if len(para) > 0 {
-				joined := strings.Join(para, " ")
-				if joined == expected {
+				if bytes.Equal(bytes.Join(para, []byte{' '}), expectedBytes) {
 					return nil
 				}
 				para = para[:0]
 			}
 			continue
 		}
-		para = append(para, line)
+		para = append(para, lineB)
 	}
 
 	return []lint.Diagnostic{makeDiag(f.Path, dh.Line,

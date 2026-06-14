@@ -145,3 +145,23 @@ func TestCategory_HeadingStyle(t *testing.T) {
 		t.Errorf("expected heading, got %s", r.Category())
 	}
 }
+
+// TestFix_InnerAppendAllocBudget verifies Fix does not allocate a temporary
+// intermediate slice per replaced heading. One ATX→setext conversion should
+// cost one buffer allocation, not two.
+func TestFix_InnerAppendAllocBudget(t *testing.T) {
+	// File with an H1 in ATX style that gets converted to setext.
+	src := "# Heading One\n\nSome body text here.\n"
+	f, err := lint.NewFile("test.md", []byte(src))
+	require.NoError(t, err)
+	r := &Rule{Style: "setext"}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = r.Fix(f)
+	})
+	// After fix: initial copy + pre-sized tmp per replacement = 6 allocs.
+	// Before: initial copy + string-to-[]byte + inner-append growth = 7 allocs.
+	if allocs > 6 {
+		t.Fatalf("Fix allocs per call: want ≤ 6, got %v (inner append allocates intermediate slice)", allocs)
+	}
+}

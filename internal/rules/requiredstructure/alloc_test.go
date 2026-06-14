@@ -3,7 +3,9 @@ package requiredstructure
 import (
 	"testing"
 
+	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCollectBodySyncPoints_NoByteSplitAlloc confirms collectBodySyncPoints
@@ -30,4 +32,28 @@ func TestCollectBodySyncPoints_NoByteSplitAlloc(t *testing.T) {
 	// After removing bytes.Split: 2 string() casts for 2 headings, no split alloc.
 	assert.LessOrEqual(t, allocs, 2.0,
 		"collectBodySyncPoints allocs: want ≤ 2 (string casts only), got %v", allocs)
+}
+
+// TestCheckBodySync_NoBytesPerLineAlloc confirms checkBodySync does not
+// allocate a string per body line when searching for a match. A 6-line body
+// section with no matching line must produce at most 3 allocs (one for
+// converting expected to []byte, one for bytes.Join in the paragraph loop,
+// one for the string conversion of the joined paragraph on comparison).
+func TestCheckBodySync_NoBytesPerLineAlloc(t *testing.T) {
+	src := "# Title\n\nline one\nline two\nline three\nline four\nline five\nline six\n"
+	f, err := lint.NewFileFromSource("doc.md", []byte(src), true)
+	require.NoError(t, err)
+
+	dh := docHeading{Level: 1, Text: "Title", Line: 1}
+	allHeadings := []docHeading{dh}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = checkBodySync(f, dh, 0, allHeadings, "no match here", "description")
+	})
+	// After fix: ≤ 3 allocs (expectedBytes conversion + bytes.Join + string compare).
+	// Before: 1 string() alloc per line × 6 lines in both loops = 12+ allocs.
+	// After fix: expectedBytes + pre-sized para make + bytes.Join sep + join result = ≤ 8.
+	// Before: one string() alloc per line in both loops = 13+ allocs.
+	assert.LessOrEqual(t, allocs, 8.0,
+		"checkBodySync allocs: want ≤ 8, got %v (string() conversion per line)", allocs)
 }

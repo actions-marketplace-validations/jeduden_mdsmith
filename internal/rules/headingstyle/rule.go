@@ -112,11 +112,17 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		return ast.WalkContinue, nil
 	})
 
+	// Pre-size each replacement buffer to avoid the temporary inner slice
+	// that append(before, append([]byte(newText), after...)...) would create.
 	for i := len(replacements) - 1; i >= 0; i-- {
 		rep := replacements[i]
 		before := result[:rep.start]
 		after := result[rep.end:]
-		result = append(before, append([]byte(rep.newText), after...)...)
+		tmp := make([]byte, 0, rep.start+len(rep.newText)+len(after))
+		tmp = append(tmp, before...)
+		tmp = append(tmp, rep.newText...)
+		tmp = append(tmp, after...)
+		result = tmp
 	}
 
 	return result

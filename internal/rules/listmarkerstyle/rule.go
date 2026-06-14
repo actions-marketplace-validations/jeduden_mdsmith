@@ -234,15 +234,16 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		return out
 	}
 
-	// Apply edits line by line
+	// Apply edits line by line. replaceMarker copies the line internally,
+	// so unedited lines can reference f.Lines directly (joinLines only reads them).
 	resultLines := make([][]byte, len(f.Lines))
 	for i, line := range f.Lines {
 		lineNum := i + 1
-		newLine := append([]byte(nil), line...)
 		if newMarker, ok := markerEdits[lineNum]; ok {
-			newLine = replaceMarker(newLine, newMarker)
+			resultLines[i] = replaceMarker(line, newMarker)
+		} else {
+			resultLines[i] = line
 		}
-		resultLines[i] = newLine
 	}
 
 	return joinLines(resultLines)

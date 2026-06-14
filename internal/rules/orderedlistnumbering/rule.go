@@ -159,15 +159,18 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		return out
 	}
 
+	// applyIndentShift returns a new slice (shift≠0) or the original (shift=0).
+	// replaceLeadingDigits always allocates its own output. Neither mutates
+	// f.Lines, so the pre-copy is unnecessary — bytes.Join only reads the slice.
 	resultLines := make([][]byte, len(f.Lines))
 	for i, line := range f.Lines {
 		lineNum := i + 1
-		newLine := append([]byte(nil), line...)
-		newLine = applyIndentShift(newLine, indentDeltas[lineNum])
+		shifted := applyIndentShift(line, indentDeltas[lineNum])
 		if e, ok := markerEdits[lineNum]; ok {
-			newLine = replaceLeadingDigits(newLine, e.newDigits)
+			resultLines[i] = replaceLeadingDigits(shifted, e.newDigits)
+		} else {
+			resultLines[i] = shifted
 		}
-		resultLines[i] = newLine
 	}
 
 	return bytes.Join(resultLines, []byte("\n"))

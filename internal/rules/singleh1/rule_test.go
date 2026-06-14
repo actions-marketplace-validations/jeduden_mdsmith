@@ -434,3 +434,22 @@ func TestCheck_EmptyH1_UnknownOffset_ConservativelyKept(t *testing.T) {
 	require.Len(t, diags, 1)
 	assert.Equal(t, "extra H1 heading; only one H1 is allowed per file", diags[0].Message)
 }
+
+// TestFix_InnerAppendAllocBudget verifies Fix does not allocate a temporary
+// intermediate slice per replaced heading. One heading demotion should cost
+// one buffer allocation, not two.
+func TestFix_InnerAppendAllocBudget(t *testing.T) {
+	// File with a duplicate H1 that gets demoted to H2.
+	src := "# Title\n\n# Duplicate\n\nSome text.\n"
+	f := newFile(t, src)
+	r := &Rule{}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = r.Fix(f)
+	})
+	// After fix: result copy + pre-sized h1s + reps + tmp make = 4 allocs.
+	// Before: result copy + nil h1s grows 2× + reps + inner-append = 5 allocs.
+	if allocs > 4 {
+		t.Fatalf("Fix allocs per call: want ≤ 4, got %v (nil h1s grows 2× without pre-sizing)", allocs)
+	}
+}

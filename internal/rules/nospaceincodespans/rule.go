@@ -144,7 +144,11 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		// spaces on both sides so CommonMark's single-space trim removes them
 		// symmetrically, leaving the correct content.
 		if trimmed[0] == '`' || trimmed[len(trimmed)-1] == '`' {
-			trimmed = append(append([]byte{' '}, trimmed...), ' ')
+			padded := make([]byte, len(trimmed)+2)
+			padded[0] = ' '
+			copy(padded[1:], trimmed)
+			padded[len(padded)-1] = ' '
+			trimmed = padded
 		}
 		if bytes.Equal(trimmed, raw) {
 			return ast.WalkContinue, nil

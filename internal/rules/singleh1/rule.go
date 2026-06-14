@@ -93,11 +93,17 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	}
 
 	// Apply in reverse order to preserve byte offsets.
+	// Pre-size each replacement buffer to avoid the temporary inner slice
+	// that append(before, append([]byte(newText), after...)...) would create.
 	for i := len(reps) - 1; i >= 0; i-- {
 		rep := reps[i]
 		before := result[:rep.start]
 		after := result[rep.end:]
-		result = append(before, append([]byte(rep.newText), after...)...)
+		tmp := make([]byte, 0, rep.start+len(rep.newText)+len(after))
+		tmp = append(tmp, before...)
+		tmp = append(tmp, rep.newText...)
+		tmp = append(tmp, after...)
+		result = tmp
 	}
 
 	return result
@@ -139,7 +145,8 @@ var (
 // with no text children (offset -1) are conservatively kept rather than
 // misclassified via a stale fallback of line 1.
 func collectH1s(f *lint.File) []*ast.Heading {
-	var h1s []*ast.Heading
+	// Pre-size to avoid the nil→1→2 growth allocs in the common case of ≤ 4 H1s.
+	h1s := make([]*ast.Heading, 0, 4)
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
