@@ -12,16 +12,14 @@ summary: >-
 ---
 # Release Pipeline
 
-`.github/workflows/release.yml` publishes mdsmith to
-every channel below. Release-time secrets travel as
-short-lived OIDC tokens. The remaining long-lived
-PATs are gated by the `release` GitHub environment.
-Each channel has its own file under
-`release-channels/`; the catalog re-renders on
-`mdsmith fix`.
+`.github/workflows/release.yml` publishes mdsmith to every channel
+below. Release-time secrets travel as short-lived OIDC tokens. The
+remaining long-lived PATs are gated by the `release` GitHub
+environment. Each channel has its own file under `release-channels/`;
+the catalog re-renders on `mdsmith fix`.
 
 <?catalog
-glob: ["release-channels/*.md", "!release-channels/proto.md"]
+glob: ["release-channels/*.md", "!release-channels/{proto,github-actions}.md"]
 where: 'mechanism: "push"'
 sort: title
 header: |
@@ -379,6 +377,8 @@ place.
    set. With `gate` in every credential job's `needs:`,
    it is the only release gate, and the workflow (not a
    maintainer) creates the tag.
+8. [ ] Accept the GitHub Marketplace agreement on the
+   first action release (see `release-channels/github-actions.md`).
 
 ## Verifying a Released Artifact
 
