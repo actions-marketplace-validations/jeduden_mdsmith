@@ -5,9 +5,33 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sync"
 
 	"github.com/jeduden/mdsmith/cue/cuelite/syntax"
 )
+
+// reCache caches compiled *regexp.Regexp values keyed by pattern string.
+// compareConcrete may be called once per file during a query that uses =~
+// on two concrete strings; caching avoids rebuilding the NFA on every call.
+var reCache sync.Map // map[string]*regexp.Regexp
+
+// cachedRegexp returns a compiled *regexp.Regexp for pattern, compiling it on
+// the first call and returning the cached result on subsequent calls.
+// Failed compilations are not cached — each invalid pattern recompiles and
+// returns the error fresh so callers always see the original compile error.
+// The returned pointer is shared across goroutines; callers MUST NOT invoke
+// mutating methods (e.g., Longest) — only read-only methods like MatchString.
+func cachedRegexp(pattern string) (*regexp.Regexp, error) {
+	if v, ok := reCache.Load(pattern); ok {
+		return v.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	v, _ := reCache.LoadOrStore(pattern, re)
+	return v.(*regexp.Regexp), nil
+}
 
 // errUnresolved signals that an expression could not be evaluated because it
 // references a sibling field whose value is not yet known (a forward or
@@ -465,7 +489,7 @@ func compareConcrete(l *engineValue, op syntax.Token, r *engineValue) (bool, err
 		if l.kind != kString || r.kind != kString {
 			return false, fmt.Errorf("cuelite: %s requires strings", op)
 		}
-		re, err := regexp.Compile(r.str)
+		re, err := cachedRegexp(r.str)
 		if err != nil {
 			return false, err
 		}

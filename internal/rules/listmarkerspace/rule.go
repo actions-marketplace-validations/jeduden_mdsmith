@@ -4,8 +4,8 @@
 package listmarkerspace
 
 import (
+	"bytes"
 	"fmt"
-	"strings"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -183,16 +183,16 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		return ast.WalkContinue, nil
 	})
 
-	resultLines := make([]string, len(f.Lines))
+	resultLines := make([][]byte, len(f.Lines))
 	for i, line := range f.Lines {
 		lineNum := i + 1
 		if want, ok := editMap[lineNum]; ok {
-			resultLines[i] = string(adjustSpaces(line, want))
+			resultLines[i] = adjustSpaces(line, want)
 		} else {
-			resultLines[i] = string(line)
+			resultLines[i] = line
 		}
 	}
-	return []byte(strings.Join(resultLines, "\n"))
+	return bytes.Join(resultLines, newlineSep)
 }
 
 // adjustSpaces replaces the spaces between the list marker and item text.
@@ -259,6 +259,10 @@ func pluralSpace(n int) string {
 	}
 	return "spaces"
 }
+
+// newlineSep is the bytes.Join separator; a package-level var avoids
+// a heap allocation for []byte("\n") on every Fix call.
+var newlineSep = []byte("\n")
 
 var (
 	_ rule.Configurable = (*Rule)(nil)

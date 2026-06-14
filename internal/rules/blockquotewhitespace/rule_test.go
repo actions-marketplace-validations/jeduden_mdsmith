@@ -597,3 +597,26 @@ func TestMultiSpaceAfterMarker_MatchesRegexSemantics(t *testing.T) {
 		assert.Equal(t, wantLoc[0], col, "line %q", s)
 	}
 }
+
+// TestFix_BytesBufferAllocBudget verifies that Fix uses bytes.Buffer to write
+// output directly — eliminating the []string + strings.Join + []byte round-trip
+// and the per-fixed-line string(a)+string(b) concatenation allocs.
+// Budget is below the current 12-alloc baseline.
+func TestFix_BytesBufferAllocBudget(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	src := "> foo\n>  bar\n>   baz\n"
+	f, err := lint.NewFile("test.md", []byte(src))
+	require.NoError(t, err)
+	r := &Rule{}
+	_ = r.Fix(f) // warm up
+	const runs = 100
+	const budget = 7 // bytes.Buffer refactor: was 12 allocs; now ~5
+	allocs := testing.AllocsPerRun(runs, func() {
+		_ = r.Fix(f)
+	})
+	require.LessOrEqualf(t, allocs, float64(budget),
+		"Fix allocs/op = %.0f (budget=%d); use bytes.Buffer to eliminate string-conversion allocs",
+		allocs, budget)
+}
