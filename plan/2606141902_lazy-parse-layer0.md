@@ -37,6 +37,13 @@ The seam already exists in code. Re-back the projection
 functions on Layer 0 with a Layer 2 fallback. Most rules
 need no change at all.
 
+[Plan 2606022126][audit] already sorted each rule by its
+AST need. It used a nil-AST probe and a code-block
+perturbation. Its manifest
+(`internal/integration/testdata/rule_walk_audit.json`) says
+which rules can reach Layer 0. Reuse it. Do not redo that
+sort by hand. Its `ProseRanges` projection also exists.
+
 ## Tasks
 
 1. Write the Layer 0 scanner: per-line class, code-block
@@ -64,6 +71,7 @@ need no change at all.
 - [ ] All tests pass: `go test ./...`
 
 [research]: ../docs/research/benchmarks/lazy-parse-architecture.md
+[audit]: 2606022126_lines-only-rule-audit.md
 [cbl]: ../internal/lint/codeblocks.go
 [astutil]: ../internal/rules/astutil/astutil.go
 [newfile]: ../internal/lint/filepool.go

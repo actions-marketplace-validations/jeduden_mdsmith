@@ -4,10 +4,9 @@ summary: >-
   goldmark fork: build the CommonMark AST only when a rule actually
   navigates it, and serve the common rules from a cheap single-pass
   scanner. Grounded in what real rules read — projections like the
-  code-block line set (16 rules), link references (4), and prose
-  ranges (2) — not the raw node tree. Answers whether simple configs
-  can run at line-scanner speed while heavy configs still get the
-  full tree.
+  code-block line set (15 rules) and link references (4) — not the
+  raw node tree. Answers whether simple configs can run at
+  line-scanner speed while heavy configs still get the full tree.
 ---
 # Lazy parse architecture: build the AST only when a rule needs it
 
@@ -35,13 +34,17 @@ projections, by how many rules depend on each:
 
 | Projection              | Backed by     | Rules  | What it is                             |
 | ----------------------- | ------------- | ------ | -------------------------------------- |
-| `CollectCodeBlockLines` | AST walk      | **16** | set of line numbers inside code blocks |
-| PI-block line set       | AST walk      | 6      | set of `<?…?>` directive lines         |
+| `CollectCodeBlockLines` | AST walk      | **15** | set of line numbers inside code blocks |
+| PI-block line set       | AST walk      | 5      | set of `<?…?>` directive lines         |
 | `LinkReferences`        | parse context | 4      | link reference definitions             |
-| `ProseRanges`           | AST walk      | 2      | source spans of prose text             |
+| `ProseRanges`           | AST walk      | 0†     | prose spans; built, no consumer yet    |
 | raw `f.Lines`           | `bytes.Split` | many   | the lines themselves                   |
 
-Sixteen rules want one fact — *which lines are code* — and reach the
+† `ProseRanges` is the prose projection [plan
+2606022126][audit] built for a future Lines-only conversion. No rule
+consumes it yet (see [Prior art](#prior-art-the-lines-only-audit)).
+
+Fifteen rules want one fact — *which lines are code* — and reach the
 full CommonMark parse to get it. That fact is exactly what a
 fence-tracking line scanner produces in one pass (it is most of what
 gomarklint computes). The AST is doing enormously more than these
@@ -75,6 +78,29 @@ reference-labels` needs the normalized reference map (Unicode case
 folding included). These are the rules that *should* pay for a richer
 representation — and only these.
 
+## Prior art: the Lines-only audit
+
+[Plan 2606022126][audit] already worked this ground, with a narrower
+question. Can a standalone-`Check` rule that walks the AST be rewritten
+to scan `f.Lines` instead? Its probe ran each rule twice. Once with
+`f.AST` nil, once with code-block content perturbed. That reveals each
+rule's true AST dependence. The result is a checked-in manifest at
+`internal/integration/testdata/rule_walk_audit.json`, plus a gate that
+fails any rule that regresses to `f.AST`.
+
+Two findings carry over. The cleanly Lines-only set is empty: plans
+175, 195, and 196 already moved the substring rules off the AST. And
+`ProseRanges` (`internal/lint/proserange.go`) landed as a prose
+projection, but no rule consumes it yet.
+
+This study aims at a different seam. That plan rewrote rules one at a
+time. It left the NodeChecker rules alone, judging their shared walk
+already amortized. It never made the parse itself skippable. The lazy
+parse does exactly those two things. It skips the parse when no enabled
+rule needs the tree. It runs the block NodeCheckers over a skeleton. So
+the manifest is the empirical oracle to validate the layer table here —
+not a verdict against it.
+
 ## The lazy boundary is the projection layer
 
 Today the data flow is eager and one-directional:
@@ -101,7 +127,7 @@ source --> cheap scan ──> line classes / code+PI line sets / fm bounds
   state machine: per-line class (heading / fence / list / blockquote
   / blank / HTML / paragraph), the code-block and PI line sets, and
   front-matter bounds. Allocation-lean, no node tree. This is the
-  gomarklint-equivalent layer and it backs the 16 + the pure-line
+  gomarklint-equivalent layer and it backs those 15 + the pure-line
   rules.
 - **Layer 1 — light inline index (lazy, on first link/ref/image
   read).** A targeted byte scan for links, autolinks, images, and
@@ -114,11 +140,10 @@ source --> cheap scan ──> line classes / code+PI line sets / fm bounds
   emphasis-as-heading, cross-file). Built once and cached on the
   `*lint.File`, exactly as today — just deferred.
 
-The seam already exists in the code: rules call `CollectCodeBlockLines`,
-`LinkReferences`, `ProseRanges`, not `f.AST` directly. Re-backing
-those functions to compute from Layer 0/1 when possible — and to
-trigger Layer 2 only when they cannot — migrates most rules with **no
-rule change at all.**
+The seam already exists in the code: rules call `CollectCodeBlockLines`
+and `LinkReferences`, not `f.AST` directly. Re-backing those functions
+to compute from Layer 0/1 when possible — and to trigger Layer 2 only
+when they cannot — migrates most rules with **no rule change at all.**
 
 ## Rule-by-rule seam audit
 
@@ -142,10 +167,11 @@ says which layer a rule needs *already exists in the rule*:
 | Text (URL scan)                  | no-bare-urls                                                                                                      | 1     |
 | Emphasis                         | emphasis-style                                                                                                    | 2     |
 
-Sixteen of the twenty-five scope to **block** kinds; they need a node's
-kind and line span, nothing inside it. Nine scope to **inline** kinds.
-Emphasis semantics — `emphasis-style` and the all-emphasis check inside
-`no-emphasis-as-heading` — need the full delimiter algorithm (Layer 2).
+Eighteen of the twenty-five react only to **block** kinds; the kind
+plus line span is all those rules need. Seven react to an **inline**
+kind. Emphasis semantics — `emphasis-style` and the all-emphasis check
+inside `no-emphasis-as-heading` — need the full delimiter algorithm
+(Layer 2).
 
 **Caveat: the scoped kind is the dispatch trigger, not the full data
 need.** A rule scoped to `KindParagraph` still sets its own layer by
@@ -254,9 +280,11 @@ the number.
 
 ## Migration path and risk
 
-- **Seam-first.** Re-back `CollectCodeBlockLines` / PI lines /
-  `LinkReferences` / `ProseRanges` to compute from Layer 0/1 with a
-  Layer 2 fallback. Rules that only call these need no change.
+- **Seam-first.** Re-back `CollectCodeBlockLines`, the PI line set,
+  and `LinkReferences` to compute from Layer 0/1 with a Layer 2
+  fallback. Rules that only call these need no change. (`ProseRanges`
+  has no consumer to re-back yet; it is ready for the first prose-rule
+  conversion.)
 - **NodeChecker adapter.** The shared `ast.Walk` dispatch is the
   migration's hardest seam: block NodeCheckers need a skeleton-node
   view, inline NodeCheckers need Layer 1. This is where most of the
@@ -277,7 +305,7 @@ the number.
 
 A lazy parse is feasible and well-shaped for mdsmith because the
 rules already read projections, not the raw tree. Layer 0 (a cheap
-block scan) backs the 16 code-block-line consumers and the pure-line
+block scan) backs the 15 code-block-line consumers and the pure-line
 rules with no parse; Layer 1 (a light inline index) backs the
 reference and URL rules; Layer 2 (the full goldmark AST) is built
 only when a rule navigates the tree. Simple and parity configs can
@@ -285,3 +313,5 @@ shed the parse entirely; heavy configs keep it, unchanged. The open
 question is purely quantitative — is Layer 0 + rules + overhead under
 gomarklint? — and the spike above answers it before any parser
 surgery begins.
+
+[audit]: ../../../plan/2606022126_lines-only-rule-audit.md
