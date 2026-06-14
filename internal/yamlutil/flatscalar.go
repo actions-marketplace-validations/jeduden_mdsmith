@@ -57,8 +57,7 @@ func FlatScalarFrontMatter(body []byte) (map[string]any, bool) {
 			rawVal = bytes.TrimLeft(line[colonPos+1:], " \t")
 		}
 
-		// Bail on block scalars, flow collections, anchors, aliases, tags,
-		// and explicit keys before even attempting value parsing.
+		// Bail on block scalars, flow collections, anchors, aliases, tags, explicit keys.
 		if len(rawVal) > 0 {
 			switch rawVal[0] {
 			case '|', '>', '[', '{', '&', '*', '?', '!':
