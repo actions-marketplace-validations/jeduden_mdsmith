@@ -170,8 +170,8 @@ of scope. A repo that wants both layers runs gomarklint's
 
 #### gomarklint equivalence and the line-scanner trade-off
 
-gomarklint parses no Markdown AST. It strips front matter,
-splits the file into lines, and scans each line with
+gomarklint 3.2.3 parses no Markdown AST. It strips front
+matter, splits the file into lines, and scans each line with
 hand-written byte and string matching. Its only dependencies
 are a glob library and a CLI parser — no goldmark, no
 CommonMark parser. mdsmith parses every file to a goldmark
@@ -188,25 +188,38 @@ AST linter on the common cases. Three rules diverge:
   tables or reference-link definitions. mdsmith's
   [MDS001][mds001] counts characters and excludes code
   blocks, tables, and URLs, and runs by default; gomarklint
-  leaves its own rule off.
+  leaves its own rule off. At a shared limit of 30,
+  gomarklint flags a 20-character CJK line with
+  `line exceeds 30 bytes (60)`, which mdsmith passes.
 - `duplicate-heading` does not track code fences, so a `#`
   line inside a fenced block counts as a heading. It also
   reads any `#`-led line as a heading, with or without a
   following space. mdsmith resolves headings from the
-  goldmark AST, so neither case misfires.
+  goldmark AST. For a `# Build` inside a fence, gomarklint
+  prints `duplicate heading: "build"`; mdsmith reports
+  nothing.
 - `link-fragments` resolves `#anchor` links within one file
   only; it has no cross-file `other.md#section` resolution.
   mdsmith's [MDS027][mds027] walks the whole-repo link and
   anchor graph, so the shared mapping is a subset of what
-  mdsmith checks, not an equal. gomarklint does carry a
-  richer per-file slug vocabulary (GitHub, GitLab, Hugo,
-  MkDocs), configurable per project.
+  mdsmith checks, not an equal. On a broken `other.md#nope`,
+  gomarklint stays silent while MDS027 reports
+  `broken link target "other.md#nope" not found`. gomarklint
+  does carry a richer per-file slug vocabulary (GitHub,
+  GitLab, Hugo, MkDocs), configurable per project.
 
 The trade runs both ways. gomarklint deliberately skips a
 lone URL fenced by blank lines (a GitHub or Zenn
-link-preview card) that markdownlint and mdsmith both flag.
-Its `external-link` rule then validates live URLs over the
-network, the one check mdsmith omits by design.
+link-preview card) that markdownlint and mdsmith both flag;
+mdsmith's MDS012 reports the standalone URL gomarklint passes
+over. Its `external-link` rule then validates live URLs over
+the network, the one check mdsmith omits by design.
+
+Every line of output quoted here comes from gomarklint 3.2.3
+and mdsmith on minimal fixtures. The
+[gomarklint equivalence evidence][gml-evidence] note carries
+each fixture, the exact commands, and both tools' full
+output.
 
 gomarklint claims 100,000+ lines in ~170 ms for its
 structural checks. It is pinned into the first-party
@@ -1077,3 +1090,4 @@ if you need a stable rule set across upgrades.
 [conventions]: ../reference/conventions.md
 [bench]: ../research/benchmarks/README.md
 [mdcov]: ../research/markdownlint-coverage/README.md
+[gml-evidence]: ../research/gomarklint-equivalence/README.md
