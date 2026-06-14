@@ -168,10 +168,54 @@ an external URL still answers HTTP 200 is deliberately out
 of scope. A repo that wants both layers runs gomarklint's
 `external-link` job next to `mdsmith check` in CI.
 
+#### gomarklint equivalence and the line-scanner trade-off
+
+gomarklint parses no Markdown AST. It strips front matter,
+splits the file into lines, and scans each line with
+hand-written byte and string matching. Its only dependencies
+are a glob library and a CLI parser — no goldmark, no
+CommonMark parser. mdsmith parses every file to a goldmark
+AST. That one architectural difference sets where the 22
+shared rules are genuine equivalents and where they are not.
+
+Most gomarklint rules track fenced-code state and strip
+inline-code spans themselves as they scan. So they match an
+AST linter on the common cases. Three rules diverge:
+
+- `max-line-length` measures bytes, not characters, so a
+  line of CJK or emoji over-counts the limit. It exempts
+  only code fences, ATX headings, and whole-line URLs, not
+  tables or reference-link definitions. mdsmith's
+  [MDS001][mds001] counts characters and excludes code
+  blocks, tables, and URLs, and runs by default; gomarklint
+  leaves its own rule off.
+- `duplicate-heading` does not track code fences, so a `#`
+  line inside a fenced block counts as a heading. It also
+  reads any `#`-led line as a heading, with or without a
+  following space. mdsmith resolves headings from the
+  goldmark AST, so neither case misfires.
+- `link-fragments` resolves `#anchor` links within one file
+  only; it has no cross-file `other.md#section` resolution.
+  mdsmith's [MDS027][mds027] walks the whole-repo link and
+  anchor graph, so the shared mapping is a subset of what
+  mdsmith checks, not an equal. gomarklint does carry a
+  richer per-file slug vocabulary (GitHub, GitLab, Hugo,
+  MkDocs), configurable per project.
+
+The trade runs both ways. gomarklint deliberately skips a
+lone URL fenced by blank lines (a GitHub or Zenn
+link-preview card) that markdownlint and mdsmith both flag.
+Its `external-link` rule then validates live URLs over the
+network, the one check mdsmith omits by design.
+
 gomarklint claims 100,000+ lines in ~170 ms for its
 structural checks. It is pinned into the first-party
-[benchmark](#benchmarks) harness; its row joins the
-published tables at the next snapshot refresh.
+[benchmark](#benchmarks) harness and measured on every
+merge. The per-merge `assets` copy already carries its row;
+the committed in-repo tables add it at the next deliberate
+refresh. See the gomarklint fairness note in the
+[benchmark doc][bench] for how its time reads against the
+others.
 
 ### [Prettier][]
 
