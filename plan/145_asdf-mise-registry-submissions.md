@@ -62,30 +62,23 @@ on `asdf plugin add mdsmith`.
 3. After one successful release cycle, file a PR to
    [`asdf-vm/asdf-plugins`](https://github.com/asdf-vm/asdf-plugins).
    The entry lets `asdf plugin add mdsmith` resolve
-   without an explicit URL.
+   without an explicit URL. See the Status section
+   before filing — adoption is the current gate.
 4. File a PR to mise's curated registry at
    [`jdx/mise`](https://github.com/jdx/mise).
    Each tool gets one TOML file under `registry/`.
    Add `registry/mdsmith.toml` with a
    `[tools.mdsmith]` section on the
    `github:jeduden/mdsmith` backend and a `test`
-   field (`ubi:` is rejected for new entries).
-   The PR body must make a popularity case.
-   On merge, `mise use mdsmith@latest`
-   resolves without a backend prefix.
+   field (`ubi:` is rejected; `aqua:` only works if
+   mdsmith is already in the Aqua registry; use
+   `github:`). The PR body must make a popularity
+   and maintenance case. On merge,
+   `mise use mdsmith@latest` resolves without a
+   backend prefix.
 
-   **Filed and rejected.**
-   [jdx/mise#10320](https://github.com/jdx/mise/pull/10320)
-   added `registry/mdsmith.toml` on the
-   `github:jeduden/mdsmith` backend with the required
-   `test` field and a popularity case. The maintainer
-   closed it unmerged on 2026-06-11: at 7 stars the
-   project is below the adoption bar the curated
-   registry applies to new tools. Re-submit only after
-   the repo gathers materially more traction; until
-   then the bare `mise use mdsmith@VER` form stays
-   unavailable and the backend-prefixed forms remain
-   the documented path.
+   **Filed and rejected.** See the Status section
+   for details and re-submission criteria.
 5. Update
    [docs/guides/install.md](../docs/guides/install.md)
    to drop the "pending follow-up" badge from the
@@ -95,7 +88,9 @@ on `asdf plugin add mdsmith`.
    in [release.yml](../.github/workflows/release.yml)
    to exercise `asdf install mdsmith X.Y.Z` and
    `mise use mdsmith@X.Y.Z` alongside `ubi:`.
-   The `asdf` channel must pass. The `mise-registry`
+   The `asdf` channel must pass (users install day
+   one via the explicit plugin URL). The
+   `mise-registry`
    channel is best-effort; it warns and exits 0
    until the registry PR merges.
 
