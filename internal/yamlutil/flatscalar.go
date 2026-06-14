@@ -246,24 +246,37 @@ func parseDoubleQuoted(raw []byte) (string, bool) {
 
 // parseSingleQuoted decodes a single-quoted YAML scalar (raw must start and
 // end with '\''). The only escape sequence in single-quoted YAML strings is
-// '' (two single quotes) representing a literal single quote.
+// '' (two single quotes) representing a literal single quote. Inside the
+// inner content, every ' must therefore be part of a '' pair; a lone ' means
+// the real closing quote was earlier and there is trailing content, so the
+// value is not a single self-contained single-quoted scalar and the function
+// bails (false) for the caller to route through the full parser.
 func parseSingleQuoted(raw []byte) (string, bool) {
 	if len(raw) < 2 || raw[len(raw)-1] != '\'' {
 		return "", false // unclosed
 	}
 	inner := raw[1 : len(raw)-1]
 
-	// Check for unclosed-quote problem: the last character of inner should
-	// not be a lone ' (which would mean the real close is further back).
-	// With '' being the only escape, the last ' in inner followed by the
-	// outer closing ' could be mis-parsed. The YAML rule: an odd number of
-	// trailing single-quotes in inner means the string was not correctly
-	// delimited, but since we already stripped the outer '...' pair, just
-	// handle '' substitution.
-	if !bytes.Contains(inner, []byte("''")) {
+	// Fast path: no embedded quote at all.
+	if bytes.IndexByte(inner, '\'') < 0 {
 		return string(inner), true
 	}
-	return string(bytes.ReplaceAll(inner, []byte("''"), []byte("'"))), true
+
+	var buf strings.Builder
+	buf.Grow(len(inner))
+	for i := 0; i < len(inner); i++ {
+		if inner[i] != '\'' {
+			buf.WriteByte(inner[i])
+			continue
+		}
+		// A ' must be the first half of a '' escape pair.
+		if i+1 >= len(inner) || inner[i+1] != '\'' {
+			return "", false // lone ' → premature close + trailing content
+		}
+		buf.WriteByte('\'')
+		i++ // consume the second ' of the pair
+	}
+	return buf.String(), true
 }
 
 // parsePlainFlatScalar returns the Go value for a plain (unquoted) YAML
