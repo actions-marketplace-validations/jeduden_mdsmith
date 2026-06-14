@@ -66,7 +66,9 @@ on `asdf plugin add mdsmith`.
    before filing — adoption is the current gate.
 4. File a PR to mise's curated registry at
    [`jdx/mise`](https://github.com/jdx/mise).
-   Each tool gets one TOML file under `registry/`.
+   Each tool gets one TOML file under `registry/`
+   (the former `mise-plugins/registry` repo is
+   archived; PRs go to `jdx/mise` instead).
    Add `registry/mdsmith.toml` with a
    `[tools.mdsmith]` section on the
    `github:jeduden/mdsmith` backend and a `test`
@@ -78,7 +80,7 @@ on `asdf plugin add mdsmith`.
    backend prefix.
 
    **Filed and rejected.** See the Status section
-   for details and re-submission criteria.
+   for details and the re-submission trigger.
 5. Update
    [docs/guides/install.md](../docs/guides/install.md)
    to drop the "pending follow-up" badge from the
@@ -154,8 +156,3 @@ pending an upstream-acceptance window; revisit when
 the project's traction clears the registries' bars.
 The next concrete action is a mise re-submission once
 star/fork counts grow, then mirror it to asdf-plugins.
-
-Re-verified on 2026-06-14. `jeduden/mdsmith` is still
-at 7 stars. That is unchanged since the mise PR was
-closed. The adoption blocker holds. No new registry PR
-is warranted yet.
