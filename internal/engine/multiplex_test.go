@@ -44,7 +44,9 @@ func (m *mockNodeChecker) CheckNode(n ast.Node, entering bool, f *lint.File) []l
 
 // checkRules is a test helper that calls checker.CheckRulesWithIntraFile
 // with skipSourceContext=true and intraFileCap=1 (serial).
-func checkRules(f *lint.File, rules []rule.Rule, effective map[string]config.RuleCfg, skipSourceContext bool) ([]lint.Diagnostic, []error) {
+func checkRules(
+	f *lint.File, rules []rule.Rule, effective map[string]config.RuleCfg, skipSourceContext bool,
+) ([]lint.Diagnostic, []error) {
 	return checker.CheckRulesWithIntraFile(f, rules, effective, skipSourceContext, 1)
 }
 
