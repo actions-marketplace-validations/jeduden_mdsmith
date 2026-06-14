@@ -77,9 +77,7 @@ func FlatScalarFrontMatter(body []byte) (map[string]any, bool) {
 		if result == nil {
 			result = make(map[string]any, 4)
 		}
-		// yaml.v3 rejects duplicate mapping keys with an error; the fast
-		// path must not silently overwrite and commit to a result the full
-		// parser would have refused.
+		// Bail on duplicates: yaml.v3 errors; the fast path must not accept them.
 		if _, dup := result[key]; dup {
 			return nil, false
 		}
