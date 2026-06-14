@@ -1,11 +1,11 @@
 ---
 summary: >-
-  Why mdsmith-parity trails gomarklint on benchmark 2: gomarklint
-  is a line scanner that never builds an AST, while 27 of
-  parity's 30 rules force mdsmith's CommonMark parse — the
-  ~35% of parity wall time that is the whole gap. Reviews
-  gomarklint's architecture and records the optimization
-  levers and their ceilings.
+  How to beat gomarklint in mdsmith's parity config on benchmark 2.
+  Reviews gomarklint's line-scan architecture, measures every
+  optimization lever (arena, PGO, GC — all rejected with numbers),
+  shows that even a free parse leaves parity above gomarklint, and
+  scopes the one design that reaches the goal: a parity line-scan
+  pipeline that skips the CommonMark AST entirely.
 ---
 # gomarklint architecture and the parity gap
 
@@ -122,62 +122,97 @@ substantially (~81 → ~50 ms estimated) with no code change. This is
 a fairness gap in the comparison, not a regression in mdsmith;
 `mdsmith-parity` already sidesteps it by selecting an explicit config.
 
-## Optimization levers and their ceilings
+## Goal: beat gomarklint in the parity config
 
-What actually moves the parity number, ranked by realism.
+The target is to make `mdsmith check -c parity` finish benchmark 2
+in less wall time than gomarklint. This section records every lever
+tried with its measured effect, then the one design the numbers leave
+standing.
 
-### Allocation tuning — done, but marginal for wall time
+### What does not get there (measured, not guessed)
 
-The parse's allocation pressure (`mallocgc` + zeroing is ~20% of
-CPU) suggested an allocation win. The per-parse slab arena
-(`pkg/goldmark/arena`, plans 197/198) already absorbs Text,
-Paragraph, Segments, CodeSpan, Link, and Emphasis nodes but **not**
-Heading or ListItem — which the heading- and list-dense Rust corpus
-allocated on the heap, ~8,200 objects per run.
+Three "free" levers were measured on the real corpus and rejected:
 
-Extending the arena to `Heading` and `ListItem` (this change)
-removes those allocations cleanly: `ast.NewHeading` and
-`ast.NewListItem` no longer appear in the allocation profile, the
-arena-vs-non-arena equivalence gate still passes, and the per-file
-alloc budget drops. But wall time barely moved (within run-to-run
-noise). The lesson is decisive: **parity's wall time is dominated by
-parse and rule computation, not by allocation.** Small structural
-nodes are cheap to allocate; cutting them helps GC pressure under the
-concurrent file pool but is not a path to gomarklint's number.
+- **Allocation / arena.** The per-parse slab arena already absorbs
+  Text, Paragraph, Segments, CodeSpan, Link, Emphasis. Extending it
+  to Heading and ListItem (shipped in this PR) removes ~8.2k heap
+  objects per run — they vanish from the allocation profile and the
+  equivalence gate stays green — but **wall time moved within noise.**
+- **PGO.** A profile-guided rebuild of `cmd/mdsmith` (the shipped
+  binary is already PGO'd) left parity flat to ~1%.
+- **GC tuning.** `GOGC=off` and `GOGC=800` left parity flat. The
+  ~16% GC seen in the in-process bench is an artifact of running 60
+  iterations back to back; the real single-shot CLI barely collects
+  before it exits.
 
-### Faster goldmark parse — high risk, low confidence
+The lesson is decisive: **parity's wall time is parse + rule
+computation, not allocation or GC.** Micro-optimization does not
+reach gomarklint.
 
-The remaining parse cost is goldmark's own block and inline parsing
-loops. The top allocators inside it are on the link path
-(`blockReader.Value`'s per-link byte copy, Unicode case folding of
-reference labels) — both load-bearing for correctness and shared by
-every inline parser, so making them zero-copy risks aliasing the
-source buffer that callers expect to own. This is deep surgery on a
-vendored fork that 15+ prior performance plans have already tuned;
-it is not a safe single-session change.
+### Why even a free parse is not enough
 
-### Line-scan fast-path — large project, and it skips parity anyway
+Break parity's wall time into buckets (CPU profile shares):
+parse ~38%, rules ~42%, per-file + walk + output ~19%. So even if the
+goldmark parse cost dropped to **zero**, parity would still spend
+rules + overhead ≈ 60% of its current time — roughly 48 ms against
+gomarklint's ~44 ms. And the parse cannot drop to zero by tuning:
+goldmark is the fastest pure-Go CommonMark parser, and mado (Rust,
+which *also* parses) lands at ~29 ms next to parity's ~31 ms — every
+parsing linter clusters together. gomarklint's ~18 ms is an outlier
+for exactly one reason: it never builds a tree.
 
-The only design that fully closes the gap is gomarklint's: run the
-structural rules as line scanners and build the AST lazily, only when
-an AST-requiring rule is enabled. It would help a default-style run
-that enables mostly line rules — but it **does not help parity**,
-whose 27 AST-requiring rules force the parse regardless. Pursuing it
-is a multi-PR architectural effort justified by the broad rule set,
-not by this benchmark.
+Conclusion: beating gomarklint requires doing what gomarklint does —
+**not building the AST for the parity rule set** — *and* trimming the
+rule/overhead cost below a line scanner's. Nothing short of that
+clears the bar.
 
-## Conclusion
+## The path that reaches the goal: a parity line-scan pipeline
 
-`mdsmith-parity` trails gomarklint because it builds a CommonMark AST
-that gomarklint never builds, and parity's rules require that AST.
-The parse is ~35% of parity's wall time and is irreducible for the
-parity rule set; the rest is spread thinly across already-tuned
-rules. Allocation tuning (the arena extension that ships with this
-note) is correct and worth keeping for GC pressure, but it does not
-close a wall-time gap that is fundamentally compute, not garbage.
+This is the only design the arithmetic leaves, and it is a real
+multi-PR project, not a single-session tweak. It is gomarklint's
+architecture, applied to the rules parity keeps.
 
-The honest target is therefore not "parity == gomarklint" — that
-asks an AST linter to match a line scanner on the line scanner's
-terms — but "keep parity in the same class as the Rust markdownlint
-ports (mado, rumdl) while doing strictly more," which it already
-does.
+1. **Line-scan structural model.** A single-pass scanner over
+   `f.Lines` that yields what the block-structure rules consume:
+   per-line class (heading / fence / list / blockquote / blank /
+   HTML / paragraph), code-fence line ranges, and front-matter
+   bounds — gomarklint's fence-and-heading tracking, exposed on the
+   `*lint.File`.
+2. **Line-scan inline model.** A byte scanner for the six
+   inline-dependent parity rules — links and autolinks
+   (`no-bare-urls`, `link-validity`), images (`no-empty-alt-text`),
+   reference definitions and uses (`no-unused-link-definitions`,
+   `no-undefined-reference-labels`), and whole-paragraph emphasis
+   (`no-emphasis-as-heading`) — so no parity rule needs the inline
+   AST.
+3. **`LineRule` capability + parse skip.** A rule interface that
+   consumes the line-scan models, and an engine gate: when every
+   enabled rule is line-capable (parity, and many default-style
+   configs), skip `NewFileFromSourcePooled` entirely. This is where
+   the ~38% parse cost actually disappears.
+4. **Equivalence harness.** Diff every converted rule's output
+   (line-scan vs current AST path) across the corpus and the rule
+   fixtures, the same way the arena change is gated against the
+   non-arena renderer — CommonMark block edge cases are the risk, and
+   this is how it is contained.
+
+**Acceptance:** `mdsmith check -c parity` beats gomarklint on
+benchmark 2; every existing rule fixture passes; the line-scan vs
+AST equivalence gate is green.
+
+**Cost and risk, stated plainly.** Twenty-one block-structure rules
+and six inline rules move onto the line-scan models — a large surface
+with two code paths per rule to maintain, and real CommonMark
+edge-case exposure (lazy continuation, setext headings, nested
+fences, reference-label folding). Stage 1 (the structural scanner) is
+the natural first increment and is independently testable; it yields
+benchmark movement only once stage 3 lets the engine skip the parse.
+
+## Where this PR leaves it
+
+The arena extension shipped here is the safe down payment: a correct,
+equivalence-gated allocation win that reduces GC pressure under the
+file pool. It does **not** close the wall-time gap — by the
+measurements above, nothing at the allocation or GC layer can. The
+route to actually beating gomarklint is the line-scan pipeline above,
+scoped as staged work with a hard, measurable acceptance bar.
