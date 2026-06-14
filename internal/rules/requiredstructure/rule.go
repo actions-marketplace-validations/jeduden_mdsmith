@@ -2287,7 +2287,7 @@ func checkBodySync(
 
 	// Join consecutive non-blank lines into paragraphs and check each.
 	// Pre-size to the maximum lines in this section to avoid repeated growth allocs.
-	para := make([][]byte, 0, endLine-startLine+1)
+	para := make([][]byte, 0, max(0, endLine-startLine+1))
 	for i := startLine - 1; i <= endLine && i <= len(f.Lines); i++ {
 		var lineB []byte
 		if i < endLine && i < len(f.Lines) {

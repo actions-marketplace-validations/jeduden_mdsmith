@@ -234,8 +234,9 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		return out
 	}
 
-	// Apply edits line by line. replaceMarker copies the line internally,
-	// so unedited lines can reference f.Lines directly (joinLines only reads them).
+	// Apply edits line by line. replaceMarker allocates a fresh copy when it
+	// finds a marker; it returns the input unchanged when no marker is found.
+	// Either way joinLines only reads the slices, so f.Lines aliases are safe.
 	resultLines := make([][]byte, len(f.Lines))
 	for i, line := range f.Lines {
 		lineNum := i + 1

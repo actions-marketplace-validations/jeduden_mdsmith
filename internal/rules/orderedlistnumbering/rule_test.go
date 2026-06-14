@@ -541,7 +541,8 @@ func TestFix_BlockquoteInListItem(t *testing.T) {
 // must not allocate one buffer copy per line.
 func TestFix_AllocBudget_PerLineNotPerEdit(t *testing.T) {
 	// 10 lines: ordered list with wrong numbers (all-ones style but sequential source)
-	src := []byte("1. first\n2. second\n3. third\n4. fourth\n5. fifth\n6. sixth\n7. seventh\n8. eighth\n9. ninth\n10. tenth\n")
+	src := []byte("1. first\n2. second\n3. third\n4. fourth\n5. fifth\n" +
+		"6. sixth\n7. seventh\n8. eighth\n9. ninth\n10. tenth\n")
 	f, err := lint.NewFile("test.md", src)
 	require.NoError(t, err)
 	r := &Rule{Style: StyleAllOnes}

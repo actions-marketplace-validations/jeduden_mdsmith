@@ -144,11 +144,7 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		// spaces on both sides so CommonMark's single-space trim removes them
 		// symmetrically, leaving the correct content.
 		if trimmed[0] == '`' || trimmed[len(trimmed)-1] == '`' {
-			padded := make([]byte, len(trimmed)+2)
-			padded[0] = ' '
-			copy(padded[1:], trimmed)
-			padded[len(padded)-1] = ' '
-			trimmed = padded
+			trimmed = padBacktickContent(trimmed)
 		}
 		if bytes.Equal(trimmed, raw) {
 			return ast.WalkContinue, nil
@@ -173,6 +169,18 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	}
 	out.Write(f.Source[prev:])
 	return out.Bytes()
+}
+
+// padBacktickContent wraps b in a single space on each side so that
+// CommonMark's rule that strips one leading and one trailing space from a
+// code-span does not merge a leading/trailing backtick in b into the
+// delimiter run.
+func padBacktickContent(b []byte) []byte {
+	padded := make([]byte, len(b)+2)
+	padded[0] = ' '
+	copy(padded[1:], b)
+	padded[len(padded)-1] = ' '
+	return padded
 }
 
 // openingBacktickOffset returns the byte offset of the opening backtick
