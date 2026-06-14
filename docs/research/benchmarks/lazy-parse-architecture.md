@@ -379,6 +379,67 @@ on its own is necessary, not sufficient.
 
 [spike-plan]: ../../../plan/2606141901_spike-block-only-parse-cost.md
 
+### Per-rule bottleneck: line-length vs gomarklint
+
+The parity number averages ~30 rules. To see where the floor actually
+sits, the harness was re-pointed at a single-rule config (the harness
+now honours `MDSMITH_SPIKE_CONFIG`): only `line-length` (MDS001), max
+80 — the most-run rule, and the canonical Layer-0 rule, since its sole
+AST need is the code-block line set a block scan produces. gomarklint's
+matching `max-line-length` was enabled alone; it ships **off** by
+default, so the parity benchmark never actually compared this rule. Same
+corpus, same box.
+
+CLI wall time (hyperfine medians). The `0 diags` rows raise the limit to
+10000 so the rule still scans every line but emits nothing — isolating
+the lint pipeline from output rendering; the `5455 diags` rows are the
+real max-80 run:
+
+| Run                                      | wall     | vs gomarklint |
+| ---------------------------------------- | -------- | ------------- |
+| gomarklint (max-line-length, 4400 diags) | ~16.7 ms | 1.0x          |
+| mdsmith MDS001 block-only, 0 diags       | ~21.0 ms | ~1.26x        |
+| mdsmith MDS001 block-only, 5455 diags    | ~27.8 ms | ~1.67x        |
+| mdsmith MDS001 full parse, 0 diags       | ~27.5 ms | ~1.65x        |
+| mdsmith MDS001 full parse, 5455 diags    | ~40.0 ms | ~2.40x        |
+
+The gap splits into three separable bottlenecks:
+
+1. **Inline parse — ~6.5 ms.** Block-only over full parse at equal
+   output (21.0 vs 27.5 ms, 0 diags). This is what Layer 1 sheds; the
+   block-only flag already removes it.
+2. **Output rendering — ~6.8 ms.** The max-80 run over the 10000 run,
+   block-only (27.8 vs 21.0 ms). mdsmith's default text formatter
+   renders each of 5455 diagnostics with a two-line source window, a
+   caret underline, and colour; gomarklint prints one terse line per
+   error, so its 4400-diagnostic output is nearly free. This cost is
+   orthogonal to the parse — a formatter concern that only bites on
+   diagnostic-heavy files. (`-f json` is *slower* still — heavier
+   serialisation — so it is no escape hatch.)
+3. **Residual lint floor — ~4.3 ms (the 1.26x that survives both).**
+   Block-only with *zero output* is still ~21.0 ms against gomarklint's
+   ~16.7 ms. In-process (serial, output excluded) this floor is
+   dominated by the **goldmark block parse — ~14 ms, which still builds
+   a block *node tree*** — plus the per-file engine overhead gomarklint
+   has no analog for (config resolution, gitignore, generated-section
+   scan, front-matter parse, FS setup). The block-only proxy does *not*
+   remove this: it suppresses the inline phase but keeps goldmark's
+   block-node build.
+
+The reading: even on the cheapest possible rule, with the inline parse
+gone and *no* output, mdsmith holds a ~1.26x floor — and that floor is
+almost entirely the block-node-tree build. A *true* flat Layer-0 scan
+(gomarklint-style fence/heading/table tracking over `f.Lines`, no node
+tree) is designed to replace exactly that. So the decisive question the
+goldmark proxy cannot settle is: does a flat line classifier close the
+1.26x on the pure-lint case? That is scoped as a measurement-first
+prototype in [plan 2606142147][flat-l0-plan] — build the classifier,
+re-back line-length on it, and re-run this head-to-head. The
+diagnostic-heavy case additionally needs an output-formatter trim
+(bottleneck 2), tracked there as a separate front.
+
+[flat-l0-plan]: ../../../plan/2606142147_flat-layer0-line-classifier.md
+
 ## Migration path and risk
 
 - **Seam-first.** Re-back `CollectCodeBlockLines`, the PI line set,
