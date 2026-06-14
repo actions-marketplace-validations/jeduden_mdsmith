@@ -145,7 +145,10 @@ current adoption level:
   the registry's bar for new tools. The bare
   `mise use mdsmith@VER` form cannot resolve until a
   re-submission is accepted.
-- **asdf (Task 3):** no PR to
+- **asdf (Task 3):** the one-successful-release-cycle
+  precondition is now met — the pipeline has shipped
+  through `v0.47.0` (2026-06-14) — so the only remaining
+  gate is adoption. No PR to
   [`asdf-vm/asdf-plugins`](https://github.com/asdf-vm/asdf-plugins)
   has been filed; that index has comparable curation
   expectations, so a submission now would likely meet
@@ -166,3 +169,8 @@ pending an upstream-acceptance window; revisit when
 the project's traction clears the registries' bars.
 The next concrete action is a mise re-submission once
 star/fork counts grow, then mirror it to asdf-plugins.
+
+Re-verified on 2026-06-14. `jeduden/mdsmith` is still
+at 7 stars. That is unchanged since the mise PR was
+closed. The adoption blocker holds. No new registry PR
+is warranted yet.
