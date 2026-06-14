@@ -23,14 +23,14 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 
-	buildrule "github.com/jeduden/mdsmith/internal/rules/build"
+	"github.com/jeduden/mdsmith/internal/rules/buildpathutil"
 )
 
 // mkdirTempFn is the os.MkdirTemp implementation; tests may replace it.
 var mkdirTempFn = os.MkdirTemp
 
 // builderGlobCapFn is the CheckGlobMatchCap implementation; tests may replace it.
-var builderGlobCapFn = buildrule.CheckGlobMatchCap
+var builderGlobCapFn = buildpathutil.CheckGlobMatchCap
 
 // snapshotDirsFn is the snapshotDirs implementation; tests may replace it to
 // inject snapshot failures in the before/after post-condition scan.
@@ -407,7 +407,7 @@ func (b *CustomBuilder) resolveInputs(target Target) ([]string, error) {
 				return nil, err
 			}
 			for _, m := range matches {
-				rel, err := buildrule.ResolvePathInRoot(root, m, true)
+				rel, err := buildpathutil.ResolvePathInRoot(root, m, true)
 				if err != nil {
 					return nil, err
 				}
@@ -415,7 +415,7 @@ func (b *CustomBuilder) resolveInputs(target Target) ([]string, error) {
 			}
 			continue
 		}
-		rel, err := buildrule.ResolvePathInRoot(root, entry, true)
+		rel, err := buildpathutil.ResolvePathInRoot(root, entry, true)
 		if err != nil {
 			return nil, err
 		}
@@ -434,11 +434,11 @@ func (b *CustomBuilder) resolveInputs(target Target) ([]string, error) {
 func (b *CustomBuilder) resolveOutputs(target Target) ([]string, error) {
 	out := make([]string, 0, len(target.Outputs))
 	for _, entry := range target.Outputs {
-		rel, err := buildrule.ResolvePathInRoot(target.Root, entry, false)
+		rel, err := buildpathutil.ResolvePathInRoot(target.Root, entry, false)
 		if err != nil {
 			return nil, err
 		}
-		if buildrule.UnderMdsmithDir(rel) {
+		if buildpathutil.UnderMdsmithDir(rel) {
 			return nil, fmt.Errorf("output %q is under .mdsmith/; refusing to overwrite mdsmith state", rel)
 		}
 		out = append(out, rel)
