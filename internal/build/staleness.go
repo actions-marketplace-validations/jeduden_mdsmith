@@ -125,6 +125,9 @@ func resolveOutputs(in StalenessInput) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		if buildpathutil.UnderMdsmithDir(rel) {
+			return nil, fmt.Errorf("output %q is under .mdsmith/; refusing to overwrite mdsmith state", rel)
+		}
 		out = append(out, rel)
 	}
 	sort.Strings(out)
