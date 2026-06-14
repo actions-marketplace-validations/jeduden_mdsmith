@@ -234,15 +234,17 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		return out
 	}
 
-	// Apply edits line by line
+	// Apply edits line by line. replaceMarker allocates a fresh copy when it
+	// finds a marker; it returns the input unchanged when no marker is found.
+	// Either way joinLines only reads the slices, so f.Lines aliases are safe.
 	resultLines := make([][]byte, len(f.Lines))
 	for i, line := range f.Lines {
 		lineNum := i + 1
-		newLine := append([]byte(nil), line...)
 		if newMarker, ok := markerEdits[lineNum]; ok {
-			newLine = replaceMarker(newLine, newMarker)
+			resultLines[i] = replaceMarker(line, newMarker)
+		} else {
+			resultLines[i] = line
 		}
-		resultLines[i] = newLine
 	}
 
 	return joinLines(resultLines)

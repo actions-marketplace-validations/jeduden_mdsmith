@@ -535,3 +535,24 @@ func TestFix_BlockquoteInListItem(t *testing.T) {
 	got := r.Fix(f)
 	assert.Equal(t, string(src), string(got))
 }
+
+// TestFix_AllocBudget_PerLineNotPerEdit verifies Fix allocates proportional
+// to edits rather than total lines. A 10-line file with 2 numbering errors
+// must not allocate one buffer copy per line.
+func TestFix_AllocBudget_PerLineNotPerEdit(t *testing.T) {
+	// 10 lines: ordered list with wrong numbers (all-ones style but sequential source)
+	src := []byte("1. first\n2. second\n3. third\n4. fourth\n5. fifth\n" +
+		"6. sixth\n7. seventh\n8. eighth\n9. ninth\n10. tenth\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	r := &Rule{Style: StyleAllOnes}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = r.Fix(f)
+	})
+	// After fix: 2 maps + resultLines + 10 replaceLeadingDigits + bytes.Join result ≈ 15.
+	// Before: additionally 10 per-line append copies = ~25 allocs.
+	if allocs > 18 {
+		t.Fatalf("Fix allocs per call: want ≤ 18, got %v (copying every line unconditionally)", allocs)
+	}
+}

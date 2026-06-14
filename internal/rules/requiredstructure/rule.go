@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/jeduden/mdsmith/internal/bytelimit"
@@ -1431,6 +1432,7 @@ func appendBodySyncFields(
 var (
 	piOpenPrefix = []byte("<?")
 	piClose      = []byte("?>")
+	spaceSep     = []byte{' '}
 )
 
 // fenceOpenRun reports the marker character and run length when a
@@ -2275,32 +2277,31 @@ func checkBodySync(
 		endLine = allHeadings[headingIdx+1].Line - 1
 	}
 
-	// Check each individual line first (fast path).
-	for i := startLine - 1; i < endLine && i < len(f.Lines); i++ {
-		line := strings.TrimSpace(string(f.Lines[i]))
-		if line == expected {
-			return nil
-		}
-	}
+	// Convert expected once so per-line comparisons need no string() cast.
+	expectedBytes := []byte(expected)
 
-	// Join consecutive non-blank lines into paragraphs and check each.
-	var para []string
+	// Single pass: trim each line once, check for a single-line match (fast path),
+	// and accumulate consecutive non-blank lines into paragraphs for a joined match.
+	// Pre-size para to the section line count to avoid growth allocs.
+	para := make([][]byte, 0, max(0, endLine-startLine+1))
 	for i := startLine - 1; i <= endLine && i <= len(f.Lines); i++ {
-		var line string
+		var lineB []byte
 		if i < endLine && i < len(f.Lines) {
-			line = strings.TrimSpace(string(f.Lines[i]))
+			lineB = bytes.TrimFunc(f.Lines[i], unicode.IsSpace)
+			if bytes.Equal(lineB, expectedBytes) {
+				return nil
+			}
 		}
-		if line == "" || i == endLine || i == len(f.Lines) {
+		if len(lineB) == 0 || i == endLine || i == len(f.Lines) {
 			if len(para) > 0 {
-				joined := strings.Join(para, " ")
-				if joined == expected {
+				if bytes.Equal(bytes.Join(para, spaceSep), expectedBytes) {
 					return nil
 				}
 				para = para[:0]
 			}
 			continue
 		}
-		para = append(para, line)
+		para = append(para, lineB)
 	}
 
 	return []lint.Diagnostic{makeDiag(f.Path, dh.Line,

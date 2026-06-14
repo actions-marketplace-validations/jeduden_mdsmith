@@ -423,3 +423,23 @@ func TestBlockFirstLine_DirectLines(t *testing.T) {
 	p.Lines().Append(text.NewSegment(9, 17))
 	assert.Equal(t, 2, blockFirstLine(f, p))
 }
+
+// TestFix_AllocBudget_PerLineNotPerEdit verifies Fix allocates proportional
+// to the number of edits rather than the total number of lines. A file with
+// 10 lines and 2 list-marker edits must not allocate one buffer per line.
+func TestFix_AllocBudget_PerLineNotPerEdit(t *testing.T) {
+	// 10 lines: 2 asterisk items needing dash, 8 already-correct dash items
+	src := []byte("* bad one\n- good\n- good\n- good\n- good\n- good\n- good\n- good\n- good\n* bad two\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	r := &Rule{Style: StyleDash}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = r.Fix(f)
+	})
+	// After the fix: resultLines slice + 2 replaceMarker copies + joinLines buf = ≤ 4 allocs.
+	// Before: 10 append copies + 2 replaceMarker copies + resultLines + joinLines = 14+.
+	if allocs > 6 {
+		t.Fatalf("Fix allocs per call: want ≤ 6, got %v (copying every line, not just edited ones)", allocs)
+	}
+}
