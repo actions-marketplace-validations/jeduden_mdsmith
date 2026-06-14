@@ -104,6 +104,12 @@ func FlatScalarFrontMatter(body []byte) (map[string]any, bool) {
 		if result == nil {
 			result = make(map[string]any, 4)
 		}
+		// yaml.v3 rejects duplicate mapping keys with an error; the fast
+		// path must not silently overwrite and commit to a result the full
+		// parser would have refused.
+		if _, dup := result[key]; dup {
+			return nil, false
+		}
 		result[key] = val
 	}
 
@@ -265,6 +271,22 @@ func parseSingleQuoted(raw []byte) (string, bool) {
 // for ambiguous or complex values that yaml.v3 would interpret in ways the
 // fast path cannot replicate without the full parser.
 func parsePlainFlatScalar(raw []byte) (any, bool) {
+	// A plain scalar may not begin with a YAML indicator character.
+	// yaml.v3 raises a parse error for these, so the fast path must defer
+	// rather than treat the value as a plain string. The first-byte switch
+	// in FlatScalarFrontMatter already rejects | > [ { & * ? ! and quotes;
+	// here we cover the remainder: ',' and '%' (and '@', '`' for safety),
+	// plus '-', '?', ':' when followed by a space or end of value (which
+	// make them block-sequence / mapping indicators rather than scalars).
+	switch raw[0] {
+	case ',', '%', '@', '`':
+		return nil, false
+	case '-', '?', ':':
+		if len(raw) == 1 || raw[1] == ' ' || raw[1] == '\t' {
+			return nil, false
+		}
+	}
+
 	s := string(raw)
 
 	// Null spellings.
