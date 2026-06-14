@@ -302,13 +302,82 @@ spike should confirm both before the parser is touched for real:
    gomarklint, the rule and per-file pipeline need trimming too. The
    spike below measures exactly this.
 
-**Spike (next concrete step):** add a parse mode that runs Layer 0
-only (block scan, no inline, no tree) and time `Layer 0 + the parity
-structural rules + overhead` against gomarklint on the neutral
-corpus. The number decides whether the rearchitecture clears the bar
-or whether rule/overhead trimming must ride alongside it. It is a
-contained measurement on the fork — no rule migration required to get
-the number.
+### Spike results (measured)
+
+[Plan 2606141901][spike-plan] built the measurement. A block-only parse
+mode (goldmark's block phase with the inline walk and AST transformers
+suppressed — `parser.WithBlockOnly`, reached through the engine's
+default-off `Runner.BlockOnlyParse` flag) stands in for Layer 0. It is
+an **upper bound** on Layer 0's parse cost: goldmark's block phase still
+builds a block node tree, where a real flat scan would be cheaper. Two
+harnesses ran over the pinned neutral corpus (234 Rust Book + Reference
+files, 2.2 MiB, 7419 parity diagnostics) on a 4-core dev box, against
+gomarklint v3.2.3:
+
+- an in-process serial decomposition
+  (`internal/engine/spike_blockparse_test.go`, gated on
+  `MDSMITH_SPIKE_CORPUS`) that times each phase of the lint pipeline
+  with GC pinned and output excluded; and
+- a CLI hyperfine run (`--warmup 3 --runs 15 -N`) that times the real
+  `mdsmith check` wall clock, with `MDSMITH_SPIKE_BLOCK_ONLY=1`
+  selecting the block-only mode.
+
+**Lint-pipeline CPU decomposition** (serial min, share of the 88 ms
+full-parity lint CPU — parse, rules, and per-file work, but *not* output
+rendering):
+
+| Phase                       | Share |
+| --------------------------- | ----- |
+| read + front-matter + split | ~3%   |
+| block parse                 | ~16%  |
+| inline parse                | ~21%  |
+| rules + merge + per-file    | ~60%  |
+
+So the goldmark parse is ~37% of the lint CPU and rules + overhead is
+~63% — the same split the [gomarklint study](gomarklint-architecture.md)
+estimated (parse ~38%, rules + overhead ~61%), now measured rather than
+profiled.
+
+**CLI wall time** (hyperfine medians; ratios are what transfer across
+hardware, per the benchmark note):
+
+| Run                         | wall    | vs gomarklint |
+| --------------------------- | ------- | ------------- |
+| gomarklint                  | ~31 ms  | 1.0x          |
+| mdsmith-parity (full parse) | ~59 ms  | ~1.87x        |
+| mdsmith-parity (block-only) | ~53 ms  | ~1.70x        |
+| mdsmith default             | ~134 ms | ~4.27x        |
+
+**Go / no-go: Layer 0 alone does NOT clear the bar — rule and overhead
+trimming must ride alongside it.** Three readings converge on it:
+
+- Suppressing the inline parse in the *real CLI* cut parity's wall time
+  only ~9% (59 → 53 ms) and left it at ~1.70x gomarklint — and that
+  figure is optimistic, because under block-only the inline rules see no
+  nodes and silently no-op (and emit fewer diagnostics, so even output
+  shrinks). A genuine Layer-0/1 pipeline would run those rules over a
+  light inline index, costing *more* than 53 ms.
+- The parse is ~37% of the lint CPU but the lint CPU is only part of the
+  wall clock (output rendering and process start are parse-independent
+  and, on this diagnostic-heavy corpus, large — parity's user CPU is
+  ~134 ms against a ~59 ms wall). Scaling the parse share to the wall
+  clock puts it near ~14 ms of the ~59 ms. Even a *free* parse leaves
+  parity at ~45 ms — still ~1.4x gomarklint.
+- The parse-free floor (read + rules + overhead) is ~63% of the lint
+  CPU, ~37 ms of equivalent wall — already above gomarklint's ~31 ms.
+  This is the honest bar's point 2, now measured: rules + overhead alone
+  exceed gomarklint.
+
+The lazy parse is still worth building for the reason the rest of this
+note argues — it removes the floor for the *simple* configs whose rules
+never needed the tree (the largest share of real `.mdsmith.yml` files).
+But the parity benchmark target needs both halves: Layer 0 to shed the
+parse *and* a trim of the rule/per-file path (re-backing the shared
+code-block-line and reference walks onto the cheap scan so they stop
+re-walking, and cutting the per-diagnostic and merge overhead). Layer 0
+on its own is necessary, not sufficient.
+
+[spike-plan]: ../../../plan/2606141901_spike-block-only-parse-cost.md
 
 ## Migration path and risk
 
@@ -342,8 +411,13 @@ rules with no parse; Layer 1 (a light inline index) backs the
 reference and URL rules; Layer 2 (the full goldmark AST) is built
 only when a rule navigates the tree. Simple and parity configs can
 shed the parse entirely; heavy configs keep it, unchanged. The open
-question is purely quantitative — is Layer 0 + rules + overhead under
-gomarklint? — and the spike above answers it before any parser
-surgery begins.
+quantitative question — is Layer 0 + rules + overhead under
+gomarklint? — is now answered by the [spike](#spike-results-measured):
+**no, not on its own.** Even a free parse leaves parity ~1.4x
+gomarklint, because rules + overhead alone already exceed it. Layer 0
+is the right first move — it is the big win for simple configs and the
+foundation for the rest — but beating gomarklint on parity needs Layer
+0 *paired with* a trim of the rule and per-file path, not Layer 0
+alone.
 
 [audit]: ../../../plan/2606022126_lines-only-rule-audit.md
