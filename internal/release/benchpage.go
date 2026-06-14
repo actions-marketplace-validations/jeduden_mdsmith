@@ -83,9 +83,8 @@ func githubURLForRelativeTarget(target, srcDirRel string) (string, bool) {
 	if i := strings.IndexByte(target, '#'); i >= 0 {
 		rel, frag = target[:i], target[i:]
 	}
-	if rel == "" {
-		return "", false
-	}
+	// rel is always non-empty here: the guard above rejects a
+	// leading '#', so any '#' found sits at index >= 1.
 	resolved := path.Join(srcDirRel, rel)
 	if strings.HasSuffix(rel, "/") {
 		resolved += "/"

@@ -99,8 +99,10 @@ func TestRenderBenchPageHappyPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(readme,
 		[]byte("# Bench\n\nReproduce with [`run.sh`](run.sh).\n"), 0o644))
 
+	// Exercise the package-level delegator (the public API) so its
+	// success path is covered within this package's profile.
 	out := filepath.Join(root, "pages", "benchmark.md")
-	require.NoError(t, New().RenderBenchPage(root, out))
+	require.NoError(t, RenderBenchPage(root, out))
 
 	got, err := os.ReadFile(out)
 	require.NoError(t, err)
