@@ -50,6 +50,26 @@ type GitIndexMutator interface {
 	MutatesGitIndex() bool
 }
 
+// LineCapable is implemented by rules that can run entirely from the flat
+// Layer-0 line classifier (lint.ClassifyLines) — they navigate no AST node
+// tree, reading only f.Lines and the classifier-backed projections
+// (lint.CollectCodeBlockLines, lint.FlatHeadingLines, and the byte-scan
+// table helper). The engine's flat-Layer-0 parse-skip gate
+// (Runner.FlatLayer0, plan 2606142147) skips the goldmark parse only when
+// EVERY enabled markdown rule reports LineCapable() true, so a single
+// non-line-capable rule keeps the whole run on the AST path. Prototype
+// scope: line-length (MDS001) is the only implementer.
+//
+// The gate calls LineCapable() on the CONFIGURED instance — it applies the
+// rule's effective settings (via ConfigureRule) before asking — so a rule
+// whose line-capability depends on configuration reports it from its own
+// settings. line-length, for example, returns false once a per-heading
+// limit is set, because the classifier's heading-line set is not guaranteed
+// byte-identical to the AST walk.
+type LineCapable interface {
+	LineCapable() bool
+}
+
 // Configurable is implemented by rules that have user-tunable settings.
 type Configurable interface {
 	ApplySettings(settings map[string]any) error
