@@ -157,29 +157,32 @@ func isFenceClose(rest []byte, ch byte, length int) bool {
 // scanner would misread as an indented code block; tracking them keeps
 // those lines out of the code set.
 //
-// The tag blocks (types 6, 7 — block-level elements) are not tracked: they
-// end on a blank line and their non-blank interior keeps the
-// paragraph-continuation flag set, so an indented interior line is already
-// kept out of the code set without tracking them.
-func htmlBlockEnd(rest []byte) (end []byte, type1, ok bool) {
+// The type-6 block-level tag blocks (`<div>`, `<details>`, `<table>`, …) are
+// tracked too, reported via blankTerm=true: they end on a blank line, and
+// tracking them stops a fence placed right after the open tag with no blank
+// line — the GitHub collapsible-code README idiom — from being misread as a
+// code block. Type-7 (arbitrary complete tags) is not tracked.
+func htmlBlockEnd(rest []byte) (end []byte, type1, blankTerm, ok bool) {
 	i := leadingSpaces(rest)
 	if i > 3 || i >= len(rest) || rest[i] != '<' {
-		return nil, false, false
+		return nil, false, false, false
 	}
 	s := rest[i:]
 	switch {
 	case bytes.HasPrefix(s, htmlOpenComment):
-		return htmlCloseComment, false, true
+		return htmlCloseComment, false, false, true
 	case bytes.HasPrefix(s, htmlOpenCDATA):
-		return htmlCloseCDATA, false, true
+		return htmlCloseCDATA, false, false, true
 	case bytes.HasPrefix(s, htmlOpenPI):
-		return htmlClosePI, false, true
+		return htmlClosePI, false, false, true
 	case len(s) >= 3 && s[1] == '!' && isASCIILetterByte(s[2]):
-		return htmlCloseDecl, false, true
+		return htmlCloseDecl, false, false, true
 	case htmlType1Start(s):
-		return nil, true, true
+		return nil, true, false, true
+	case htmlType6Start(s):
+		return nil, false, true, true
 	}
-	return nil, false, false
+	return nil, false, false, false
 }
 
 var (
@@ -213,15 +216,106 @@ func htmlType1Start(s []byte) bool {
 
 // containsType1Close reports whether line carries a type-1 raw block's
 // closing tag (`</script>`, `</pre>`, `</style>`, `</textarea>`),
-// case-insensitively — the CommonMark end condition for those blocks.
+// case-insensitively — the CommonMark end condition for those blocks. It
+// scans without allocating (no bytes.ToLower copy per body line).
 func containsType1Close(line []byte) bool {
-	lower := bytes.ToLower(line)
 	for _, c := range htmlType1Closers {
-		if bytes.Contains(lower, c) {
+		if containsFold(line, c) {
 			return true
 		}
 	}
 	return false
+}
+
+// containsFold reports whether line contains needle, comparing
+// case-insensitively (ASCII), without allocating. needle is a non-empty
+// lowercase ASCII string (the type-1 closers).
+func containsFold(line, needle []byte) bool {
+	last := len(line) - len(needle)
+	for i := 0; i <= last; i++ {
+		if equalFoldASCII(line[i:i+len(needle)], needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// equalFoldASCII reports whether a equals b ignoring ASCII case. b is
+// assumed lowercase.
+func equalFoldASCII(a, b []byte) bool {
+	for i := range b {
+		c := a[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// htmlType6Start reports whether s opens a CommonMark type-6 HTML block: `<`
+// or `</` followed by one of the block-level tag names (case-insensitive),
+// then whitespace, `>`, `/>`, or end of line. These blocks end on a blank
+// line. The tag-name comparison lowercases into a stack buffer so the set
+// lookup does not allocate.
+func htmlType6Start(s []byte) bool {
+	i := 1 // s[0] == '<'
+	if i < len(s) && s[i] == '/' {
+		i++
+	}
+	start := i
+	for i < len(s) && isASCIIAlnum(s[i]) {
+		i++
+	}
+	n := i - start
+	var buf [16]byte
+	if n == 0 || n > len(buf) {
+		return false
+	}
+	for k := 0; k < n; k++ {
+		c := s[start+k]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		buf[k] = c
+	}
+	if !htmlType6Tags[string(buf[:n])] {
+		return false
+	}
+	if i >= len(s) {
+		return true
+	}
+	switch s[i] {
+	case ' ', '\t', '>':
+		return true
+	case '/':
+		return i+1 < len(s) && s[i+1] == '>'
+	}
+	return false
+}
+
+// isASCIIAlnum reports whether b is an ASCII letter or digit.
+func isASCIIAlnum(b byte) bool {
+	return isASCIILetterByte(b) || (b >= '0' && b <= '9')
+}
+
+// htmlType6Tags is the CommonMark type-6 block-level tag set (lowercase).
+var htmlType6Tags = map[string]bool{
+	"address": true, "article": true, "aside": true, "base": true,
+	"basefont": true, "blockquote": true, "body": true, "caption": true,
+	"center": true, "col": true, "colgroup": true, "dd": true, "details": true,
+	"dialog": true, "dir": true, "div": true, "dl": true, "dt": true,
+	"fieldset": true, "figcaption": true, "figure": true, "footer": true,
+	"form": true, "frame": true, "frameset": true, "h1": true, "h2": true,
+	"h3": true, "h4": true, "h5": true, "h6": true, "head": true,
+	"header": true, "hr": true, "html": true, "iframe": true, "legend": true,
+	"li": true, "link": true, "main": true, "menu": true, "menuitem": true,
+	"nav": true, "noframes": true, "ol": true, "optgroup": true, "option": true,
+	"p": true, "param": true, "section": true, "summary": true, "table": true,
+	"tbody": true, "td": true, "tfoot": true, "th": true, "thead": true,
+	"title": true, "tr": true, "track": true, "ul": true,
 }
 
 var (

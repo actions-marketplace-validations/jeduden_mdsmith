@@ -88,45 +88,75 @@ func TestFenceScanners(t *testing.T) {
 }
 
 func TestHTMLScanners(t *testing.T) {
-	end, type1, ok := htmlBlockEnd([]byte("<!-- x"))
+	end, type1, blankTerm, ok := htmlBlockEnd([]byte("<!-- x"))
 	assert.True(t, ok)
 	assert.False(t, type1)
+	assert.False(t, blankTerm)
 	assert.Equal(t, "-->", string(end))
-	end, _, ok = htmlBlockEnd([]byte("<![CDATA[x"))
+	end, _, _, ok = htmlBlockEnd([]byte("<![CDATA[x"))
 	assert.True(t, ok)
 	assert.Equal(t, "]]>", string(end))
-	end, _, ok = htmlBlockEnd([]byte("<?php"))
+	end, _, _, ok = htmlBlockEnd([]byte("<?php"))
 	assert.True(t, ok)
 	assert.Equal(t, "?>", string(end))
-	end, _, ok = htmlBlockEnd([]byte("<!DOCTYPE html>"))
+	end, _, _, ok = htmlBlockEnd([]byte("<!DOCTYPE html>"))
 	assert.True(t, ok)
 	assert.Equal(t, ">", string(end))
-	_, type1, ok = htmlBlockEnd([]byte("<pre>")) // type-1 raw block
+	_, type1, _, ok = htmlBlockEnd([]byte("<pre>")) // type-1 raw block
 	assert.True(t, ok)
 	assert.True(t, type1)
-	_, type1, ok = htmlBlockEnd([]byte("<SCRIPT type=x")) // case-insensitive
+	_, type1, _, ok = htmlBlockEnd([]byte("<SCRIPT type=x")) // case-insensitive
 	assert.True(t, ok)
 	assert.True(t, type1)
-	_, _, ok = htmlBlockEnd([]byte("  <!-- x")) // ≤3 indent still opens
+	_, _, blankTerm, ok = htmlBlockEnd([]byte("<div>")) // type-6 block tag
 	assert.True(t, ok)
-	_, _, ok = htmlBlockEnd([]byte("    <!-- x")) // 4-space indent does not
+	assert.True(t, blankTerm)
+	_, _, blankTerm, ok = htmlBlockEnd([]byte("</Details>")) // closing tag, case-insensitive
+	assert.True(t, ok)
+	assert.True(t, blankTerm)
+	_, _, _, ok = htmlBlockEnd([]byte("  <!-- x")) // ≤3 indent still opens
+	assert.True(t, ok)
+	_, _, _, ok = htmlBlockEnd([]byte("    <!-- x")) // 4-space indent does not
 	assert.False(t, ok)
-	_, _, ok = htmlBlockEnd([]byte("<!5 not a decl"))
+	_, _, _, ok = htmlBlockEnd([]byte("<!5 not a decl"))
 	assert.False(t, ok)
-	_, _, ok = htmlBlockEnd([]byte("<div>"))
-	assert.False(t, ok, "block-level tag blocks are not tracked")
-	_, _, ok = htmlBlockEnd([]byte("<prefix>")) // not a type-1 tag (no boundary)
+	_, _, _, ok = htmlBlockEnd([]byte("<notatag>")) // not in the type-6 set
 	assert.False(t, ok)
-	_, _, ok = htmlBlockEnd([]byte("text"))
+	_, _, _, ok = htmlBlockEnd([]byte("<prefix>")) // not a type-1 tag (no boundary)
 	assert.False(t, ok)
+	_, _, _, ok = htmlBlockEnd([]byte("text"))
+	assert.False(t, ok)
+}
 
-	assert.True(t, containsType1Close([]byte("x</PRE>y")), "case-insensitive close")
-	assert.False(t, containsType1Close([]byte("x</em>y")))
-
+// TestByteClassHelpers pins the small ASCII-class predicates.
+func TestByteClassHelpers(t *testing.T) {
 	assert.True(t, isASCIILetterByte('a'))
 	assert.True(t, isASCIILetterByte('Z'))
 	assert.False(t, isASCIILetterByte('5'))
 	assert.False(t, isASCIILetterByte('!'))
+	assert.True(t, isASCIIAlnum('a'))
+	assert.True(t, isASCIIAlnum('7'))
+	assert.False(t, isASCIIAlnum('-'))
+}
+
+// TestHTMLType6AndClose pins the type-6 tag-block opener arms and the
+// case-insensitive type-1 close scan (containsType1Close / containsFold).
+func TestHTMLType6AndClose(t *testing.T) {
+	assert.True(t, htmlType6Start([]byte("<div>")))
+	assert.True(t, htmlType6Start([]byte("<section foo")), "whitespace boundary")
+	assert.True(t, htmlType6Start([]byte("<hr/>")), "self-closing boundary")
+	assert.True(t, htmlType6Start([]byte("</details>")), "closing tag")
+	assert.True(t, htmlType6Start([]byte("<TABLE")), "case-insensitive, EOL boundary")
+	assert.False(t, htmlType6Start([]byte("<div=x")), "non-boundary char after a tag name")
+	assert.False(t, htmlType6Start([]byte("<hr/x")), "slash not followed by >")
+	assert.False(t, htmlType6Start([]byte("<notatag>")), "name not in the type-6 set")
+	assert.False(t, htmlType6Start([]byte("<>")), "no tag name")
+	assert.False(t, htmlType6Start([]byte("<verylongtagnamexceeds>")), "name longer than the buffer")
+
+	assert.True(t, containsType1Close([]byte("x</PRE>y")), "case-insensitive close")
+	assert.True(t, containsType1Close([]byte("lead </TextArea> trail")))
+	assert.False(t, containsType1Close([]byte("x</em>y")))
+	assert.False(t, containsType1Close([]byte("short")), "shorter than any closer")
 }
 
 func TestContainerMarkerScanners(t *testing.T) {

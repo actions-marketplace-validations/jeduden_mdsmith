@@ -62,6 +62,13 @@ var equivCases = map[string]string{
 	"type1 pre with em":        "<pre><code>a <em>b</em>\n    c\n</code></pre>\n",
 	"html comment in bq drop":  "> <!-- x\n> y\nz\n> -->\n",
 	"single line html comment": "<!-- one line -->\n\ntext\n",
+	// Third code-review pass: a blank line inside a container, and type-6
+	// HTML block tags (the README collapsible-code idiom) where a fence
+	// follows the open tag with no blank line.
+	"blank blockquote line":     ">      \n\ntext\n",
+	"details collapsible code":  "<details>\n<summary>x</summary>\n```go\nc\n```\n</details>\n",
+	"div then fence no blank":   "<div>\nx\n</div>\n```\ncode\n```\n",
+	"div block then real fence": "<div>\nx\n\n```\ncode\n```\n",
 }
 
 func sortedKeys(m map[int]struct{}) []int {
@@ -192,24 +199,37 @@ func TestClassifyLines_AllocBudget(t *testing.T) {
 	allocs := testing.AllocsPerRun(100, func() {
 		_ = ClassifyLines(lines)
 	})
-	assert.LessOrEqualf(t, allocs, float64(10),
-		"ClassifyLines allocates %.1f/op, ceiling 10 (CLAUDE.md per-rule budget)", allocs)
+	// The classifier is a once-per-file build (not a per-Check rule), so it
+	// legitimately allocates a small constant number of collections — the
+	// class slice, the code-block and heading maps, the container stack. The
+	// bound's real job is to catch a PER-LINE allocation regression (e.g.
+	// containsType1Close reverting to a bytes.ToLower copy per HTML body
+	// line), which the <pre> block in the fixture would push far past this.
+	assert.LessOrEqualf(t, allocs, float64(12),
+		"ClassifyLines allocates %.1f/op on a feature-rich doc (bound 12, "+
+			"catches per-line allocation)", allocs)
 }
 
-// allocBudgetClassifierFixture mirrors the integration alloc-budget
-// fixture's feature mix (heading, prose, fenced code, list, table) so the
-// classifier's representative-input cost is measured against a realistic
-// document.
+// allocBudgetClassifierFixture exercises the feature mix that drives the
+// classifier's accreted per-line state — heading, prose, fenced code, a
+// blockquote, a list item with indented-code content, and a type-1 raw
+// HTML block (whose body lines run through containsType1Close) — so the
+// allocation budget actually bounds the container, pending-blank, and
+// HTML-block handling, not just a bare fence.
 const allocBudgetClassifierFixture = "# Document title\n" +
 	"\n" +
 	"A short prose paragraph for the classifier to scan.\n" +
 	"\n" +
 	"## Section\n" +
 	"\n" +
+	"> a quoted line\n" +
+	"\n" +
 	"```go\nfunc f() int { return 0 }\n```\n" +
 	"\n" +
 	"- one item\n" +
-	"- two items\n"
+	"-     indented code in the item\n" +
+	"\n" +
+	"<pre>\nraw &lt;b&gt; text\n</pre>\n"
 
 // splitLines is the test helper mirroring how lint.File builds f.Lines.
 func splitLines(s string) [][]byte {

@@ -132,9 +132,10 @@ type lc0Pass struct {
 	fenceHadInfo  bool
 	fenceOpenLine int // 1-based
 
-	inHTML    bool   // inside an HTML block
-	htmlEnd   []byte // closing string for a marker-terminated HTML block
-	htmlType1 bool   // the block is a type-1 raw block (script/pre/style/textarea)
+	inHTML        bool   // inside an HTML block
+	htmlEnd       []byte // closing string for a marker-terminated HTML block
+	htmlType1     bool   // the block is a type-1 raw block (script/pre/style/textarea)
+	htmlBlankTerm bool   // the block is a type-6 tag block, terminated by a blank line
 
 	prevParagraph bool // previous emitted line was paragraph text (setext gate)
 	indentCode    bool // currently inside an indented code run
@@ -217,23 +218,28 @@ func (p *lc0Pass) classifyLine(i int) {
 		return
 	}
 	if p.inHTML {
-		p.handleHTMLBody(ln, rest)
+		p.handleHTMLBody(i, ln, rest)
 		return
 	}
 	if isBlankBytes(rest) {
-		p.out.classes[i] = LineBlank
-		p.prevParagraph = false
 		// A blank line ends a paragraph but does not close list items
 		// (CommonMark allows interior blanks); blockquotes that fail to
-		// match were already popped by consumeContainers above. A blank
-		// inside an indented code run is held pending — it is part of the
-		// block only if more indented content follows.
-		if p.indentCode {
-			p.pendingBlanks = append(p.pendingBlanks, ln)
-		}
+		// match were already popped by consumeContainers above.
+		p.markBlank(i, ln)
 		return
 	}
 	p.handleContent(i, ln, line, off, rest)
+}
+
+// markBlank classifies the 1-based line ln (index i) as blank. A blank
+// inside an indented code run is held pending — it belongs to the block
+// only if more indented content follows (flushPendingBlanks / endIndentRun).
+func (p *lc0Pass) markBlank(i, ln int) {
+	p.out.classes[i] = LineBlank
+	p.prevParagraph = false
+	if p.indentCode {
+		p.pendingBlanks = append(p.pendingBlanks, ln)
+	}
 }
 
 // closeBlockAtBoundary ends the open fenced or HTML block because the line
@@ -246,9 +252,7 @@ func (p *lc0Pass) closeBlockAtBoundary(ln int) {
 		p.inFence = false
 		return
 	}
-	p.inHTML = false
-	p.htmlEnd = nil
-	p.htmlType1 = false
+	p.endHTMLBlock()
 }
 
 // trimTrailingCR returns b without a single trailing carriage return, so a
@@ -271,22 +275,34 @@ func (p *lc0Pass) handleFenceBody(ln int, rest []byte) {
 	}
 }
 
-// handleHTMLBody classifies a line inside a marker-terminated HTML block:
-// every line is LineHTML (never code), and the block ends on the line that
-// contains its closing string.
-func (p *lc0Pass) handleHTMLBody(ln int, rest []byte) {
-	p.out.classes[ln-1] = LineHTML
-	if p.htmlBlockCloses(rest) {
-		p.inHTML = false
-		p.htmlEnd = nil
-		p.htmlType1 = false
+// handleHTMLBody classifies a line inside an open HTML block. A type-6 tag
+// block ends at the first blank line, which is NOT part of the block (it is
+// reclassified as blank); every other line is LineHTML, and a
+// marker/type-1 block ends on the line carrying its closing condition.
+func (p *lc0Pass) handleHTMLBody(i, ln int, rest []byte) {
+	if p.htmlBlankTerm && isBlankBytes(rest) {
+		p.endHTMLBlock()
+		p.markBlank(i, ln)
+		return
+	}
+	p.out.classes[i] = LineHTML
+	if !p.htmlBlankTerm && p.htmlBlockCloses(rest) {
+		p.endHTMLBlock()
 	}
 }
 
-// htmlBlockCloses reports whether rest carries the closing condition of the
-// open HTML block: any of the type-1 raw-block closing tags
-// (case-insensitive) for a type-1 block, or the recorded closing string
-// otherwise.
+// endHTMLBlock clears all HTML-block state.
+func (p *lc0Pass) endHTMLBlock() {
+	p.inHTML = false
+	p.htmlEnd = nil
+	p.htmlType1 = false
+	p.htmlBlankTerm = false
+}
+
+// htmlBlockCloses reports whether rest carries the closing condition of a
+// marker-terminated or type-1 HTML block: any of the type-1 raw-block
+// closing tags (case-insensitive) for a type-1 block, or the recorded
+// closing string otherwise. Not used for type-6 blocks (blank-terminated).
 func (p *lc0Pass) htmlBlockCloses(rest []byte) bool {
 	if p.htmlType1 {
 		return containsType1Close(rest)
@@ -294,28 +310,30 @@ func (p *lc0Pass) htmlBlockCloses(rest []byte) bool {
 	return bytes.Contains(rest, p.htmlEnd)
 }
 
-// tryStartHTML opens a marker-terminated HTML block (CommonMark types
-// 1–5) when rest begins one. It marks the start line LineHTML and, unless
-// the same line already carries the closing string, enters HTML-block mode
-// so the interior — which may hold blank then indented lines a fence-only
-// scanner would misread as indented code — is classified LineHTML, not
-// code. Returns false when rest opens no such block.
+// tryStartHTML opens a CommonMark HTML block (the marker-terminated types
+// 1–5, the type-1 raw blocks, and the type-6 block-level tag blocks) when
+// rest begins one. It marks the start line LineHTML and enters block mode
+// unless a marker/type-1 block already closes on its own line, so the
+// interior — which may hold a blank then indented line a fence-only scanner
+// would misread as indented code, or a fence the README collapsible-code
+// idiom places right after a `<details>`/`<div>` — is classified LineHTML,
+// not code. Returns false when rest opens no HTML block.
 func (p *lc0Pass) tryStartHTML(i int, rest []byte) bool {
-	end, type1, ok := htmlBlockEnd(rest)
+	end, type1, blankTerm, ok := htmlBlockEnd(rest)
 	if !ok {
 		return false
 	}
 	p.out.classes[i] = LineHTML
 	p.htmlEnd = end
 	p.htmlType1 = type1
-	// A start line that already carries the closing condition is a complete
-	// one-line block and never enters block mode.
-	if !p.htmlBlockCloses(rest) {
+	p.htmlBlankTerm = blankTerm
+	// A type-6 block is blank-terminated, so its non-blank start line never
+	// closes it; a marker/type-1 block may close on its own start line.
+	if blankTerm || !p.htmlBlockCloses(rest) {
 		p.inHTML = true
 		p.openBlockDepth = len(p.stack)
 	} else {
-		p.htmlEnd = nil
-		p.htmlType1 = false
+		p.endHTMLBlock()
 	}
 	return true
 }
@@ -326,6 +344,13 @@ func (p *lc0Pass) handleContent(i, ln int, line []byte, off int, rest []byte) {
 	// New containers (blockquote / list item) may open before the block
 	// content; push them and re-resolve the inner content slice.
 	rest = p.openContainers(line, off, rest)
+	if isBlankBytes(rest) {
+		// Blank once the container markers are stripped — e.g. `>     `, an
+		// empty blockquote line whose trailing spaces would otherwise read
+		// as a ≥4-column indented code block. Not code, not content.
+		p.markBlank(i, ln)
+		return
+	}
 	// rest is a suffix of line, so its start offset is the absolute column
 	// the block content begins at (container prefixes are single-column
 	// bytes) — the base a tab in rest must measure its indent from.
