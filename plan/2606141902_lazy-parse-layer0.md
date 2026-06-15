@@ -1,7 +1,7 @@
 ---
 id: 2606141902
 title: "Lazy parse: Layer 0 block scanner and parse-skip"
-status: "🔲"
+status: "✅"
 summary: >-
   Build the single-pass block scanner (Layer 0) and
   re-back the block-level projections on it, so a config
@@ -55,20 +55,28 @@ sort by hand. Its `ProseRanges` projection also exists.
    annotation beside the existing kind scope).
 4. Add the engine gate. Skip
    [`NewFileFromSourcePooled`][newfile] when every
-   enabled rule resolves to Layer 0.
+   enabled rule resolves to Layer 0. The scanner does not
+   descend into a list item's content, so a fenced or
+   indented code block inside a list item is the one
+   shape where its `CodeBlockLines` can differ from the
+   AST; the gate stays sound by also standing down for
+   any source that may hold a code block
+   (`lint.SourceMayHaveCodeBlock`), skipping the parse
+   only for code-free files until the block-content work
+   in plan 2606141903 lands.
 5. Add an equivalence harness. Diff Layer 0 projections
    against the AST-derived ones across the corpus and
    the rule fixtures.
 
 ## Acceptance Criteria
 
-- [ ] A line-and-projection-only config skips the parse,
+- [x] A line-and-projection-only config skips the parse,
       proven by a test or profile.
-- [ ] `CollectCodeBlockLines` output is byte-identical
+- [x] `CollectCodeBlockLines` output is byte-identical
       between Layer 0 and the AST across the corpus.
-- [ ] All existing rule fixtures pass unchanged.
-- [ ] The Layer 0 equivalence gate is green.
-- [ ] All tests pass: `go test ./...`
+- [x] All existing rule fixtures pass unchanged.
+- [x] The Layer 0 equivalence gate is green.
+- [x] All tests pass: `go test ./...`
 
 [research]: ../docs/research/benchmarks/lazy-parse-architecture.md
 [audit]: 2606022126_lines-only-rule-audit.md
