@@ -13,8 +13,8 @@
   {
     "id": "MDS002",
     "name": "heading-style",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -24,18 +24,18 @@
   {
     "id": "MDS003",
     "name": "heading-increment",
-    "category": "ast-required",
+    "category": "hybrid",
     "nil_ast_safe": false,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": false,
-    "uses_ast_walk": true,
+    "uses_ast_walk": false,
     "reads_file_ast": true
   },
   {
     "id": "MDS004",
     "name": "first-line-heading",
-    "category": "ast-required",
+    "category": "hybrid",
     "nil_ast_safe": false,
     "code_block_sensitive": false,
     "fired": true,
@@ -46,12 +46,12 @@
   {
     "id": "MDS005",
     "name": "no-duplicate-headings",
-    "category": "ast-required",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": false,
-    "uses_ast_walk": true,
+    "uses_ast_walk": false,
     "reads_file_ast": true
   },
   {
@@ -101,8 +101,8 @@
   {
     "id": "MDS010",
     "name": "fenced-code-style",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -112,19 +112,19 @@
   {
     "id": "MDS011",
     "name": "fenced-code-language",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
     "uses_ast_walk": false,
-    "reads_file_ast": false
+    "reads_file_ast": true
   },
   {
     "id": "MDS012",
     "name": "no-bare-urls",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -145,8 +145,8 @@
   {
     "id": "MDS014",
     "name": "blank-line-around-lists",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -156,8 +156,8 @@
   {
     "id": "MDS015",
     "name": "blank-line-around-fenced-code",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -167,8 +167,8 @@
   {
     "id": "MDS016",
     "name": "list-indent",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -178,24 +178,24 @@
   {
     "id": "MDS017",
     "name": "no-trailing-punctuation-in-heading",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
     "uses_ast_walk": false,
-    "reads_file_ast": false
+    "reads_file_ast": true
   },
   {
     "id": "MDS018",
     "name": "no-emphasis-as-heading",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
     "uses_ast_walk": true,
-    "reads_file_ast": false
+    "reads_file_ast": true
   },
   {
     "id": "MDS019",
@@ -332,24 +332,24 @@
   {
     "id": "MDS031",
     "name": "unclosed-code-block",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
     "uses_ast_walk": false,
-    "reads_file_ast": false
+    "reads_file_ast": true
   },
   {
     "id": "MDS032",
     "name": "no-empty-alt-text",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
     "uses_ast_walk": false,
-    "reads_file_ast": false
+    "reads_file_ast": true
   },
   {
     "id": "MDS033",
@@ -365,8 +365,8 @@
   {
     "id": "MDS034",
     "name": "markdown-flavor",
-    "category": "ast-required",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": false,
@@ -442,19 +442,19 @@
   {
     "id": "MDS041",
     "name": "no-inline-html",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "B-prose-only",
+    "nil_ast_safe": true,
     "code_block_sensitive": true,
     "fired": true,
     "is_node_checker": true,
     "uses_ast_walk": false,
-    "reads_file_ast": false
+    "reads_file_ast": true
   },
   {
     "id": "MDS042",
     "name": "emphasis-style",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -486,8 +486,8 @@
   {
     "id": "MDS045",
     "name": "list-marker-style",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -497,8 +497,8 @@
   {
     "id": "MDS046",
     "name": "ordered-list-numbering",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -530,8 +530,8 @@
   {
     "id": "MDS049",
     "name": "no-space-in-link-text",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -541,8 +541,8 @@
   {
     "id": "MDS050",
     "name": "proper-names",
-    "category": "ast-required",
-    "nil_ast_safe": false,
+    "category": "B-prose-only",
+    "nil_ast_safe": true,
     "code_block_sensitive": true,
     "fired": true,
     "is_node_checker": false,
@@ -552,8 +552,8 @@
   {
     "id": "MDS051",
     "name": "single-h1",
-    "category": "ast-required",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": false,
@@ -563,8 +563,8 @@
   {
     "id": "MDS052",
     "name": "no-space-in-code-spans",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "B-prose-only",
+    "nil_ast_safe": true,
     "code_block_sensitive": true,
     "fired": true,
     "is_node_checker": true,
@@ -574,8 +574,8 @@
   {
     "id": "MDS053",
     "name": "no-unused-link-definitions",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": false,
@@ -640,8 +640,8 @@
   {
     "id": "MDS059",
     "name": "blockquote-whitespace",
-    "category": "ast-required",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": false,
@@ -649,10 +649,21 @@
     "reads_file_ast": true
   },
   {
-    "id": "MDS061",
-    "name": "list-marker-space",
+    "id": "MDS060",
+    "name": "occurrence",
     "category": "hybrid",
     "nil_ast_safe": false,
+    "code_block_sensitive": false,
+    "fired": true,
+    "is_node_checker": false,
+    "uses_ast_walk": false,
+    "reads_file_ast": true
+  },
+  {
+    "id": "MDS061",
+    "name": "list-marker-space",
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
@@ -662,8 +673,8 @@
   {
     "id": "MDS062",
     "name": "link-validity",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": false,
@@ -673,13 +684,13 @@
   {
     "id": "MDS063",
     "name": "descriptive-link-text",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": true,
     "uses_ast_walk": true,
-    "reads_file_ast": false
+    "reads_file_ast": true
   },
   {
     "id": "MDS064",
@@ -695,8 +706,8 @@
   {
     "id": "MDS065",
     "name": "code-block-style",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": false,
@@ -706,8 +717,8 @@
   {
     "id": "MDS066",
     "name": "commands-show-output",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "B-prose-only",
+    "nil_ast_safe": true,
     "code_block_sensitive": true,
     "fired": true,
     "is_node_checker": true,
@@ -717,8 +728,8 @@
   {
     "id": "MDS067",
     "name": "callout-type",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": false,
@@ -728,8 +739,8 @@
   {
     "id": "MDS068",
     "name": "link-style",
-    "category": "hybrid",
-    "nil_ast_safe": false,
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
     "code_block_sensitive": false,
     "fired": true,
     "is_node_checker": false,
@@ -746,5 +757,60 @@
     "is_node_checker": false,
     "uses_ast_walk": false,
     "reads_file_ast": false
+  },
+  {
+    "id": "MDS070",
+    "name": "same-file-anchor",
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
+    "code_block_sensitive": false,
+    "fired": true,
+    "is_node_checker": false,
+    "uses_ast_walk": true,
+    "reads_file_ast": true
+  },
+  {
+    "id": "MDS071",
+    "name": "required-frontmatter",
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
+    "code_block_sensitive": false,
+    "fired": true,
+    "is_node_checker": false,
+    "uses_ast_walk": false,
+    "reads_file_ast": false
+  },
+  {
+    "id": "MDS072",
+    "name": "external-link-check",
+    "category": "inconclusive-not-fired",
+    "nil_ast_safe": false,
+    "code_block_sensitive": false,
+    "fired": false,
+    "is_node_checker": false,
+    "uses_ast_walk": true,
+    "reads_file_ast": true
+  },
+  {
+    "id": "MDS073",
+    "name": "slide-structure",
+    "category": "A-no-skipping",
+    "nil_ast_safe": true,
+    "code_block_sensitive": false,
+    "fired": true,
+    "is_node_checker": false,
+    "uses_ast_walk": false,
+    "reads_file_ast": false
+  },
+  {
+    "id": "MDS075",
+    "name": "over-repetition",
+    "category": "hybrid",
+    "nil_ast_safe": false,
+    "code_block_sensitive": false,
+    "fired": true,
+    "is_node_checker": false,
+    "uses_ast_walk": false,
+    "reads_file_ast": true
   }
 ]

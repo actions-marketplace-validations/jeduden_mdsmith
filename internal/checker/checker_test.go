@@ -31,6 +31,16 @@ func (r *diagRule) Check(_ *lint.File) []lint.Diagnostic {
 	return []lint.Diagnostic{r.diag}
 }
 
+// multiDiagRule returns a fixed batch of diagnostics per Check call, so a
+// test can build many rule slots that each contribute several diagnostics
+// without needing real rule logic.
+type multiDiagRule struct {
+	plainRule
+	diags []lint.Diagnostic
+}
+
+func (r *multiDiagRule) Check(_ *lint.File) []lint.Diagnostic { return r.diags }
+
 type nodeCheckerRule struct {
 	plainRule
 	diag lint.Diagnostic
@@ -81,6 +91,61 @@ func (r *blockCheckerRule) EnteringKinds() []ast.NodeKind {
 }
 
 var _ rule.BlockChecker = (*blockCheckerRule)(nil)
+
+// inlineCheckerRule is a NodeChecker that is NOT a BlockChecker but
+// implements rule.InlineChecker: its Check serves the nil-AST path itself.
+// It lets a test pin that the engine routes such a rule to its own Check on
+// a parse-skipped File rather than dropping it.
+type inlineCheckerRule struct {
+	plainRule
+	message string
+}
+
+func (r *inlineCheckerRule) Check(f *lint.File) []lint.Diagnostic {
+	if f != nil && f.AST == nil {
+		// Stand in for the real rules' lint.InlineBlocks consumption.
+		return []lint.Diagnostic{{Line: 1, RuleID: r.id, Message: r.message}}
+	}
+	return rule.WalkNodes(r, f)
+}
+
+func (r *inlineCheckerRule) CheckNode(n ast.Node, entering bool, _ *lint.File) []lint.Diagnostic {
+	if entering && n.Kind() == ast.KindParagraph {
+		return []lint.Diagnostic{{Line: 1, RuleID: r.id, Message: r.message}}
+	}
+	return nil
+}
+
+func (r *inlineCheckerRule) InlineCapable() bool { return true }
+
+var _ rule.InlineChecker = (*inlineCheckerRule)(nil)
+
+// linesCheckerRule is a NodeChecker that is NOT a BlockChecker but implements
+// rule.LinesChecker: its Check serves the nil-AST path from f.Lines (standing
+// in for the list rules' listscan consumption). It pins that the engine
+// routes such a rule to its own Check on a parse-skipped File.
+type linesCheckerRule struct {
+	plainRule
+	message string
+}
+
+func (r *linesCheckerRule) Check(f *lint.File) []lint.Diagnostic {
+	if f != nil && f.AST == nil {
+		return []lint.Diagnostic{{Line: 1, RuleID: r.id, Message: r.message}}
+	}
+	return rule.WalkNodes(r, f)
+}
+
+func (r *linesCheckerRule) CheckNode(n ast.Node, entering bool, _ *lint.File) []lint.Diagnostic {
+	if entering && n.Kind() == ast.KindParagraph {
+		return []lint.Diagnostic{{Line: 1, RuleID: r.id, Message: r.message}}
+	}
+	return nil
+}
+
+func (r *linesCheckerRule) LinesCapable() bool { return true }
+
+var _ rule.LinesChecker = (*linesCheckerRule)(nil)
 
 type goodConfigurable struct {
 	plainRule
@@ -177,6 +242,60 @@ func TestCheckRulesWithIntraFile_serial(t *testing.T) {
 	assert.Equal(t, "TST001", diags[0].RuleID)
 }
 
+// TestCheckConfiguredRules_MergeAllocBudget pins the allocation cost of
+// merging many rule slots' diagnostics into the final slice.
+// CheckConfiguredRules previously grew that slice with a bare `append`
+// (no pre-sizing), unlike the analogous cross-file merge in
+// internal/engine/runner.go (runFiles), which explicitly pre-sizes to
+// avoid the geometric-growth reallocations append triggers when the
+// final size is knowable up front
+// (docs/development/high-performance-go.md "Pre-size slices"). With
+// many rule slots each contributing several diagnostics — representative
+// of a real workspace file with many enabled rules — the unsized append
+// regrows and copies the accumulator slice repeatedly.
+func TestCheckConfiguredRules_MergeAllocBudget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("alloc gate skipped in -short mode")
+	}
+	if raceEnabled {
+		t.Skip("alloc gate skipped under -race; the race detector " +
+			"adds allocation bookkeeping that perturbs the count")
+	}
+	const numRules = 40
+	const diagsPerRule = 5
+	rules := make([]rule.Rule, 0, numRules)
+	ids := make([]string, 0, numRules)
+	for i := 0; i < numRules; i++ {
+		id := "TST" + string(rune('A'+i%26)) + string(rune('0'+i/26))
+		diags := make([]lint.Diagnostic, diagsPerRule)
+		for j := range diags {
+			diags[j] = lint.Diagnostic{Line: j + 1, RuleID: id, Message: "hit"}
+		}
+		rules = append(rules, &multiDiagRule{plainRule: plainRule{id: id}, diags: diags})
+		ids = append(ids, id)
+	}
+	eff := enabled(ids...)
+	f := newTestFile(t, "# Hello\n\nParagraph.\n")
+
+	// Warm up once so the measured loop reflects steady state.
+	diags, errs := checker.CheckRulesWithIntraFile(f, rules, eff, true, 1)
+	require.Empty(t, errs)
+	require.Len(t, diags, numRules*diagsPerRule)
+
+	const runs = 50
+	allocs := testing.AllocsPerRun(runs, func() {
+		_, _ = checker.CheckRulesWithIntraFile(f, rules, eff, true, 1)
+	})
+	const budget = 6
+	t.Logf("CheckRulesWithIntraFile allocs/op with %d rules x %d diags = %.0f (budget = %d)",
+		numRules, diagsPerRule, allocs, budget)
+	require.LessOrEqualf(t, allocs, float64(budget),
+		"CheckRulesWithIntraFile allocs/op = %.0f, budget = %d; the final "+
+			"diagnostic merge should pre-size like internal/engine/runner.go "+
+			"does (see docs/development/high-performance-go.md)",
+		allocs, budget)
+}
+
 func TestCheckRulesWithIntraFile_concurrent(t *testing.T) {
 	f := newTestFile(t, "# Hello\n\nParagraph.\n")
 	rules := []rule.Rule{
@@ -209,6 +328,48 @@ func TestCheckRulesWithIntraFile_nodeCheckerNilAST(t *testing.T) {
 	diags, errs := checker.CheckRulesWithIntraFile(f, rules, enabled("TST001"), true, 1)
 	assert.Empty(t, errs)
 	assert.Empty(t, diags, "NodeChecker without BlockChecker emits nothing on nil-AST path")
+}
+
+// TestCheckRulesWithIntraFile_inlineCheckerNilAST pins the InlineChecker
+// branch of classifySlot: a NodeChecker that is not a BlockChecker but
+// implements rule.InlineChecker is routed to its own Check on a
+// parse-skipped File (AST nil), so its diagnostics surface from the shared
+// inline parse rather than being dropped.
+func TestCheckRulesWithIntraFile_inlineCheckerNilAST(t *testing.T) {
+	f := lint.NewFileLines("doc.md", []byte("# Hello\n\nParagraph.\n"))
+	f.RootDir = "."
+	f.RunCache = lint.NewRunCache()
+	rules := []rule.Rule{&inlineCheckerRule{plainRule: plainRule{id: "TST001"}, message: "inline hit"}}
+	diags, errs := checker.CheckRulesWithIntraFile(f, rules, enabled("TST001"), true, 1)
+	assert.Empty(t, errs)
+	require.Len(t, diags, 1, "InlineChecker fires through its own Check on the nil-AST path")
+	assert.Equal(t, "inline hit", diags[0].Message)
+}
+
+// TestCheckRulesWithIntraFile_inlineCheckerASTPath pins that the same rule
+// still runs through the shared AST walk when a tree is present.
+func TestCheckRulesWithIntraFile_inlineCheckerASTPath(t *testing.T) {
+	f := newTestFile(t, "# Hello\n\nParagraph.\n")
+	rules := []rule.Rule{&inlineCheckerRule{plainRule: plainRule{id: "TST001"}, message: "inline hit"}}
+	diags, errs := checker.CheckRulesWithIntraFile(f, rules, enabled("TST001"), true, 1)
+	assert.Empty(t, errs)
+	require.Len(t, diags, 1, "InlineChecker fires through the shared AST walk on the parsed path")
+}
+
+// TestCheckRulesWithIntraFile_linesCheckerNilAST pins the LinesChecker branch
+// of classifySlot: a NodeChecker that is not a BlockChecker but implements
+// rule.LinesChecker (the list rules) is routed to its own Check on a
+// parse-skipped File (AST nil), so its diagnostics surface from f.Lines
+// rather than being dropped — the dead-code defect this capability fixes.
+func TestCheckRulesWithIntraFile_linesCheckerNilAST(t *testing.T) {
+	f := lint.NewFileLines("doc.md", []byte("- item\n- item two\n"))
+	f.RootDir = "."
+	f.RunCache = lint.NewRunCache()
+	rules := []rule.Rule{&linesCheckerRule{plainRule: plainRule{id: "TST002"}, message: "lines hit"}}
+	diags, errs := checker.CheckRulesWithIntraFile(f, rules, enabled("TST002"), true, 1)
+	assert.Empty(t, errs)
+	require.Len(t, diags, 1, "LinesChecker fires through its own Check on the nil-AST path")
+	assert.Equal(t, "lines hit", diags[0].Message)
 }
 
 // TestCheckRulesWithIntraFile_blockCheckerNilAST pins the BlockSpan

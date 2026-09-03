@@ -4,16 +4,18 @@ import (
 	"fmt"
 	"io/fs"
 	"net/url"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/jeduden/mdsmith/internal/bytelimit"
 	"github.com/jeduden/mdsmith/internal/globpath"
 	"github.com/jeduden/mdsmith/internal/linkgraph"
 	"github.com/jeduden/mdsmith/internal/lint"
+	"github.com/jeduden/mdsmith/internal/mdpath"
 	"github.com/jeduden/mdsmith/internal/placeholders"
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/jeduden/mdsmith/internal/setutil"
@@ -34,14 +36,19 @@ type LinksConfig struct {
 
 // Rule checks Markdown links for missing target files and missing heading
 // anchors in linked Markdown files.
+// Fields are ordered large-to-small to eliminate bool-induced padding:
+// slices first, then string, then embedded struct, then bools last.
 type Rule struct {
-	Include       []string
-	Exclude       []string
-	Strict        bool
-	Placeholders  []string // placeholder tokens to treat as opaque
-	Wikilinks     bool     // when true, validate Obsidian-style [[...]] targets
-	WikilinkStyle string   // resolution style; only "obsidian" ships today
-	Links         LinksConfig
+	Include          []string
+	Exclude          []string
+	Placeholders     []string // placeholder tokens to treat as opaque
+	globSettingsErr  error    // cached validateGlobSettings verdict, see cachedGlobSettingsErr
+	WikilinkStyle    string   // resolution style; only "obsidian" ships today
+	Links            LinksConfig
+	globSettingsMu   sync.Mutex
+	globSettingsDone atomic.Bool
+	Strict           bool
+	Wikilinks        bool // when true, validate Obsidian-style [[...]] targets
 }
 
 // ID implements rule.Rule.
@@ -49,6 +56,13 @@ func (r *Rule) ID() string { return "MDS027" }
 
 // Name implements rule.Rule.
 func (r *Rule) Name() string { return "cross-file-reference-integrity" }
+
+// WordlistTarget implements rule.WordlistConsumer: resolved `lists:`
+// entries union into this rule's "placeholders" setting (its
+// include/exclude settings are globs, not word-lists).
+func (r *Rule) WordlistTarget() string { return "placeholders" }
+
+var _ rule.WordlistConsumer = (*Rule)(nil)
 
 // Category implements rule.Rule.
 func (r *Rule) Category() string { return "link" }
@@ -62,15 +76,18 @@ func (r *Rule) Category() string { return "link" }
 // relative-link check needs them and the cache is package-scope
 // (cachedAbsRoot) so the cost is paid once across all Files in
 // one run. Plan 195 task 5.
+// checkCtx fields are ordered so pointer-containing fields (maps, then
+// strings) precede the bool, reducing the GC pointer-scan span from 72 to 56.
 type checkCtx struct {
-	f                *lint.File
-	rule             *Rule
+	f           *lint.File
+	rule        *Rule
+	selfAnchors map[string]struct{}
+	anchorCache map[string]map[string]struct{}
+
 	resolvedRoot     string
 	resolvedSiteRoot string
 
-	selfAnchors      map[string]struct{}
 	selfAnchorsBuilt bool
-	anchorCache      map[string]map[string]struct{}
 }
 
 // ensureSelfAnchors lazily builds the heading-anchor set for f.
@@ -107,7 +124,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 		return nil
 	}
 
-	if err := r.validateGlobSettings(); err != nil {
+	if err := r.cachedGlobSettingsErr(); err != nil {
 		return []lint.Diagnostic{configDiag(f.Path, r, err)}
 	}
 
@@ -183,7 +200,7 @@ func (r *Rule) checkWikilinkAnchor(
 	root fs.FS,
 	anchorCache map[string]map[string]struct{},
 ) []lint.Diagnostic {
-	if wl.Anchor == "" || !isMarkdownPath(resolved) {
+	if wl.Anchor == "" || !mdpath.IsMarkdownPath(resolved) {
 		return nil
 	}
 	anchors, err := wikilinkAnchorsForTarget(f, root, resolved, anchorCache)
@@ -258,7 +275,7 @@ func wikilinkRoot(f *lint.File) fs.FS {
 		return f.RootFS
 	}
 	if f.RootDir != "" {
-		return os.DirFS(f.RootDir)
+		return lint.OpenRootFS(f.RootDir)
 	}
 	return f.FS
 }
@@ -269,12 +286,15 @@ func wikilinkRoot(f *lint.File) fs.FS {
 // via f.RunCache), the resolver serves every lookup from that
 // index — turning N files × M targets × workspace-walk into one
 // walk per workspace.
+// wikilinkResolver fields are ordered so the interface (root) and pointer
+// fields (index, memory) precede the strings, reducing GC pointer-scan span
+// from 64 to 56 bytes.
 type wikilinkResolver struct {
 	root   fs.FS
-	from   string
-	style  string
 	index  *linkgraph.WikilinkIndex
 	memory map[string]wikilinkResolveResult
+	from   string
+	style  string
 }
 
 type wikilinkResolveResult struct {
@@ -464,7 +484,7 @@ func (r *Rule) checkLink(
 		return r.checkSiteAbsoluteLink(ctx.f, link, linkPath, ctx.resolvedSiteRoot)
 	}
 
-	if !isImage && !r.Strict && !isMarkdownPath(linkPath) {
+	if !isImage && !r.Strict && !mdpath.IsMarkdownPath(linkPath) {
 		return nil
 	}
 
@@ -487,7 +507,7 @@ func (r *Rule) checkRelativeTarget(
 	// readable targetFile" step so we only pay for the read
 	// closure (which would otherwise escape to the heap) when an
 	// anchor actually has to be resolved. Plan 195 task 5.
-	if target.Anchor == "" || !isMarkdownPath(linkPath) {
+	if target.Anchor == "" || !mdpath.IsMarkdownPath(linkPath) {
 		if !targetExists(ctx.f, linkPath, ctx.resolvedRoot) {
 			if ctx.resolvedRoot != "" && linkEscapesRoot(ctx.f, linkPath, ctx.resolvedRoot) {
 				return nil
@@ -591,7 +611,35 @@ func (r *Rule) ApplySettings(settings map[string]any) error {
 			return err
 		}
 	}
-	return r.validateGlobSettings()
+	// Force a fresh validation for the settings just applied: without
+	// this reset, a Rule instance reconfigured after an earlier
+	// ApplySettings (or after Check already ran once) would keep
+	// serving the previous verdict from cachedGlobSettingsErr's cache.
+	r.globSettingsDone.Store(false)
+	return r.cachedGlobSettingsErr()
+}
+
+// cachedGlobSettingsErr returns validateGlobSettings' verdict for the
+// rule's current Include/Exclude, computed once and cached. Check
+// calls this once per file across the whole workspace, but
+// Include/Exclude are a pure function of static config that does not
+// change between files in one run, so validatePatterns re-running the
+// same doublestar validation on every file is pure waste — the
+// "redundant re-scanning that could be memoized" anti-pattern
+// docs/development/high-performance-go.md calls out. atomic.Bool +
+// mutex avoids the closure-box sync.Once would force on every call
+// (matching internal/lint's memoEntry/runCacheEntry pattern).
+func (r *Rule) cachedGlobSettingsErr() error {
+	if r.globSettingsDone.Load() {
+		return r.globSettingsErr
+	}
+	r.globSettingsMu.Lock()
+	defer r.globSettingsMu.Unlock()
+	if !r.globSettingsDone.Load() {
+		defer r.globSettingsDone.Store(true)
+		r.globSettingsErr = r.validateGlobSettings()
+	}
+	return r.globSettingsErr
 }
 
 func (r *Rule) applyOneSetting(key string, v any) error {
@@ -767,7 +815,10 @@ func (r *Rule) SettingMergeMode(key string) rule.MergeMode {
 	return rule.MergeReplace
 }
 
+// targetFile fields are ordered so the func field (a single pointer) precedes
+// the strings, reducing the GC pointer-scan span from 40 to 32 bytes.
 type targetFile struct {
+	read func() ([]byte, error)
 	// cacheKey is the per-Check cache key (the `cache` map in
 	// anchorsForFile). Prefixed with "os:" or "fs:" so OS and FS
 	// resolutions of the same path do not collide within one
@@ -780,7 +831,6 @@ type targetFile struct {
 	// runCacheKey signals "skip the RunCache slot, use the
 	// per-Check cache only".
 	runCacheKey string
-	read        func() ([]byte, error)
 }
 
 func anchorsForFile(
@@ -984,11 +1034,6 @@ func resolveWorkspaceRelTarget(sourcePath, linkPath string) (string, bool) {
 		return "", false
 	}
 	return rel, true
-}
-
-func isMarkdownPath(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	return ext == ".md" || ext == ".markdown"
 }
 
 func normalizeLinkPath(linkPath string) string {

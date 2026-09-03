@@ -32,6 +32,12 @@ func (r *Rule) ID() string { return "MDS054" }
 // Name implements rule.Rule.
 func (r *Rule) Name() string { return "no-undefined-reference-labels" }
 
+// WordlistTarget implements rule.WordlistConsumer: resolved `lists:`
+// entries union into this rule's "placeholders" setting.
+func (r *Rule) WordlistTarget() string { return "placeholders" }
+
+var _ rule.WordlistConsumer = (*Rule)(nil)
+
 // Category implements rule.Rule.
 func (r *Rule) Category() string { return "link" }
 
@@ -308,7 +314,8 @@ func (r *Rule) scanFullRefs(
 			continue
 		}
 		label := source[cs2:ce2]
-		if len(r.Placeholders) > 0 && placeholders.ContainsBodyToken(string(label), r.Placeholders) {
+		if len(r.Placeholders) > 0 &&
+			placeholders.ContainsBodyToken(util.BytesToReadOnlyString(label), r.Placeholders) {
 			i = advanceBracket(brs, i, ca2)
 			continue
 		}
@@ -362,7 +369,7 @@ func (r *Rule) scanCollapsedRefs(
 			i = advanceBracket(brs, i+1, ca+2)
 			continue
 		}
-		if len(r.Placeholders) > 0 && placeholders.ContainsBodyToken(string(text), r.Placeholders) {
+		if len(r.Placeholders) > 0 && placeholders.ContainsBodyToken(util.BytesToReadOnlyString(text), r.Placeholders) {
 			i = advanceBracket(brs, i+1, ca+2)
 			continue
 		}
@@ -434,7 +441,8 @@ func (r *Rule) scanShortcutRefs(
 			i = advanceBracket(brs, i+1, ca)
 			continue
 		}
-		if len(r.Placeholders) > 0 && placeholders.ContainsBodyToken(string(label), r.Placeholders) {
+		if len(r.Placeholders) > 0 &&
+			placeholders.ContainsBodyToken(util.BytesToReadOnlyString(label), r.Placeholders) {
 			i = advanceBracket(brs, i+1, ca)
 			continue
 		}
@@ -460,14 +468,23 @@ func collectRefDefLines(source []byte) map[int]struct{} {
 	lines := make(map[int]struct{})
 	lineNum := 1
 	start := 0
-	for i := 0; i <= len(source); i++ {
-		if i == len(source) || source[i] == '\n' {
-			if refDefLineStarts(source, start, i) {
-				lines[lineNum] = struct{}{}
-			}
-			lineNum++
-			start = i + 1
+	// Walk line by line with bytes.IndexByte (SIMD) rather than a
+	// non-vectorized byte-at-a-time scan; the final iteration (no newline)
+	// processes the trailing segment, matching the old i==len(source) case.
+	for start <= len(source) {
+		nl := bytes.IndexByte(source[start:], '\n')
+		end := len(source)
+		if nl >= 0 {
+			end = start + nl
 		}
+		if refDefLineStarts(source, start, end) {
+			lines[lineNum] = struct{}{}
+		}
+		lineNum++
+		if nl < 0 {
+			break
+		}
+		start = end + 1
 	}
 	return lines
 }

@@ -1,6 +1,10 @@
 package lint
 
-import "sync"
+import (
+	"strings"
+	"sync"
+	"sync/atomic"
+)
 
 // RunCache memoizes per-target-file reads (front matter, include
 // adjacency) across every host file processed in one engine.Run pass.
@@ -16,13 +20,16 @@ import "sync"
 // lifetime and calls Invalidate when a document edit could change
 // what the next Check would read from disk.
 type RunCache struct {
-	frontMatter  sync.Map // string (absPath) -> *runCacheEntry
-	includes     sync.Map // string (absPath) -> *runCacheEntry
-	anchors      sync.Map // string (absPath) -> *anchorEntry
-	wikilinks    sync.Map // string (root key) -> *runCacheEntry
-	globMatches  sync.Map // string (base+patterns key) -> *runCacheEntry
-	parsedSchema sync.Map // string (absPath) -> *runCacheEntry
-	compiledCUE  sync.Map // string (CUE source) -> *runCacheEntry
+	frontMatter         sync.Map // string (absPath) -> *runCacheEntry
+	rawSchemaFile       sync.Map // string (absPath) -> *runCacheEntry
+	includes            sync.Map // string (absPath) -> *runCacheEntry
+	anchors             sync.Map // string (absPath) -> *anchorEntry
+	wikilinks           sync.Map // string (root key) -> *runCacheEntry
+	globMatches         sync.Map // string (base+patterns key) -> *runCacheEntry
+	parsedSchema        sync.Map // string (absPath) -> *runCacheEntry
+	compiledCUE         sync.Map // string (CUE source) -> *runCacheEntry
+	duplicateParagraphs sync.Map // string (absPath+"\x00"+settings key) -> *runCacheEntry
+	corpusIndex         sync.Map // string (corpus+settings key) -> *runCacheEntry
 
 	// uniqueFieldIndex memoizes MDS069's per-scope value→first-file
 	// index. Keys encode a rule scope (field + globs), not a path.
@@ -69,10 +76,16 @@ type RunCache struct {
 }
 
 // runCacheEntry guards a single cache slot so build runs exactly once
-// per key even when multiple goroutines race for it.
+// per key even when multiple goroutines race for it. atomic.Bool +
+// mutex is used instead of sync.Once, matching file.go's memoEntry:
+// once.Do takes a func() argument, and the closure load would pass
+// (`func() { e.val = build() }`) captures e and build, so it
+// allocates on every call regardless of whether Do's internal check
+// makes it a no-op.
 type runCacheEntry struct {
-	once sync.Once
 	val  any
+	done atomic.Bool
+	mu   sync.Mutex
 }
 
 // ParsedSchemaMetadata is the optional interface a parsed-schema
@@ -108,6 +121,17 @@ func NewRunCache() *RunCache {
 // same key block on the same once and observe the same value.
 func (c *RunCache) FrontMatter(absPath string, build func() any) any {
 	return load(&c.frontMatter, absPath, build)
+}
+
+// RawSchemaFile returns build's result for absPath, computed at most
+// once per absPath in this cache's lifetime. Distinct from
+// ParsedSchema: this slot memoizes a schema file's raw on-disk bytes
+// (and any lightweight peek a caller derives from them before
+// deciding how to parse) so a schema referenced by many host files —
+// the common case for a workspace-wide kind — is read and inspected
+// once per run instead of once per host file.
+func (c *RunCache) RawSchemaFile(absPath string, build func() any) any {
+	return load(&c.rawSchemaFile, absPath, build)
 }
 
 // ScopeInvalidator scopes the unique-field-index slot's response to
@@ -160,6 +184,19 @@ func (c *RunCache) dropUniqueFieldIndexes(absPath string) {
 	})
 }
 
+// dropDuplicateParagraphs evicts every DuplicateParagraphs slot whose
+// key was built from absPath, regardless of the settings suffix
+// (e.g. min-chars) a caller appended after the "\x00" separator.
+func (c *RunCache) dropDuplicateParagraphs(absPath string) {
+	prefix := absPath + "\x00"
+	c.duplicateParagraphs.Range(func(k, _ any) bool {
+		if key, ok := k.(string); ok && strings.HasPrefix(key, prefix) {
+			c.duplicateParagraphs.Delete(k)
+		}
+		return true
+	})
+}
+
 // Includes returns build's result for absPath. The value is the list
 // of absolute filesystem paths every <?include?> in the file at
 // absPath resolves to. Position-independent so two host files whose
@@ -208,9 +245,9 @@ func (c *RunCache) Anchors(absPath string, build func() (map[string]struct{}, er
 // the build path returns an error and a successful build must
 // be cacheable while a failed one stays retryable.
 type anchorEntry struct {
+	anchors map[string]struct{}
 	mu      sync.Mutex
 	done    bool
-	anchors map[string]struct{}
 }
 
 // GlobMatches returns build's result for key, computed at most once
@@ -233,6 +270,63 @@ func (c *RunCache) GlobMatches(key string, build func() []string) []string {
 func (c *RunCache) InvalidateGlobMatches() {
 	c.globMatches.Range(func(k, _ any) bool {
 		c.globMatches.Delete(k)
+		return true
+	})
+	// A create/delete/rename also changes which files a corpus-index
+	// aggregate summed over, on top of the content-driven drop in
+	// invalidate.
+	c.dropCorpusIndex()
+}
+
+// DuplicateParagraphs returns build's result for key, computed at
+// most once per key in this cache's lifetime. The canonical caller
+// is MDS037 (duplicated-content): a corpus file's fingerprinted
+// paragraphs are a pure function of its bytes plus the rule's
+// min-chars setting, so memoizing them here collapses the per-host-
+// file corpus walk from re-reading and re-parsing every sibling file
+// to reading each sibling at most once per Run.
+//
+// key must be the target's absolute on-disk path followed by a NUL
+// byte and a settings suffix (e.g. min-chars), never a bare path —
+// Invalidate(absPath) below drops every slot whose key starts with
+// "absPath\x00" so an LSP document edit evicts the right entries
+// regardless of which settings suffix produced them. A caller with
+// no stable absolute path (an in-memory FS) must not use this cache.
+func (c *RunCache) DuplicateParagraphs(key string, build func() any) any {
+	return load(&c.duplicateParagraphs, key, build)
+}
+
+// CorpusIndex returns build's result for key, computed at most once
+// per key in this cache's lifetime. The canonical caller is MDS037
+// (duplicated-content): buildCorpusIndex aggregates every corpus
+// file's fingerprinted paragraphs (each already memoized via
+// DuplicateParagraphs) into one fingerprint->matches map and sorts
+// each entry's matches. Without this cache that aggregation — and its
+// reflect-driven sort.Slice — reran on every one of the workspace's N
+// host files' Check calls even though the per-file leaves were
+// already memoized, an O(N) rebuild of an O(N)-sized map repeated N
+// times across the run.
+//
+// key must encode the corpus signature (rootDir plus include/exclude)
+// and the settings that affect which paragraphs qualify (min-chars),
+// mirroring corpusFilesKey's shape — Invalidate(absPath) below drops
+// every slot unconditionally on any content edit, since any corpus
+// key's aggregate could include absPath.
+func (c *RunCache) CorpusIndex(key string, build func() any) any {
+	return load(&c.corpusIndex, key, build)
+}
+
+// dropCorpusIndex clears every cached corpus-index aggregate. Called
+// from the per-path Invalidate (unlike GlobMatches, which only cares
+// about tree shape): a content edit to any file can change what that
+// file's paragraphs fingerprint to, and the aggregate cache has no
+// cheap way to know which corpus keys included the edited path.
+// MDS037 is opt-in and a one-shot `mdsmith check` never invalidates
+// (its corpus is immutable for the run), so this only costs a rebuild
+// on the LSP's edit-driven path.
+func (c *RunCache) dropCorpusIndex() {
+	c.corpusIndex.Range(func(k, _ any) bool {
+		c.corpusIndex.Delete(k)
 		return true
 	})
 }
@@ -401,7 +495,7 @@ func (c *RunCache) CompiledCUE(source string, build func() any) any {
 // the workspace; the LSP must InvalidateWikilinks (or build a
 // fresh RunCache) when the filesystem layout changes.
 func (c *RunCache) Invalidate(absPath string) {
-	c.invalidate(absPath, map[string]bool{})
+	c.invalidate(absPath, map[string]struct{}{})
 }
 
 // invalidate is the recursive worker for Invalidate. The visited set
@@ -412,15 +506,18 @@ func (c *RunCache) Invalidate(absPath string) {
 // encounter. The set is per-call (allocated by the public
 // Invalidate entry point) so independent Invalidate calls do not
 // share visited state.
-func (c *RunCache) invalidate(absPath string, visited map[string]bool) {
-	if visited[absPath] {
+func (c *RunCache) invalidate(absPath string, visited map[string]struct{}) {
+	if _, ok := visited[absPath]; ok {
 		return
 	}
-	visited[absPath] = true
+	visited[absPath] = struct{}{}
 
 	c.frontMatter.Delete(absPath)
+	c.rawSchemaFile.Delete(absPath)
 	c.includes.Delete(absPath)
 	c.anchors.Delete(absPath)
+	c.dropDuplicateParagraphs(absPath)
+	c.dropCorpusIndex()
 
 	c.dropUniqueFieldIndexes(absPath)
 
@@ -471,7 +568,7 @@ func (c *RunCache) evictSchemaArtifacts(absPath string) (includes []string) {
 // with only the live dependents. The visited set carried through the recursion
 // is the cycle guard — a dependent already invalidated in this top-level call
 // is skipped.
-func (c *RunCache) invalidateDependents(absPath string, visited map[string]bool) {
+func (c *RunCache) invalidateDependents(absPath string, visited map[string]struct{}) {
 	c.depsMu.Lock()
 	set, ok := c.schemaDependents[absPath]
 	c.depsMu.Unlock()
@@ -547,10 +644,33 @@ func (c *RunCache) InvalidateWikilinks() {
 	})
 }
 
-// load is the shared LoadOrStore + sync.Once primitive for both maps.
+// load is the shared cache-slot primitive for every RunCache map. It
+// checks Load before LoadOrStore so the warm (already-built) path
+// never constructs the throwaway &runCacheEntry{} that LoadOrStore's
+// second argument would otherwise allocate on every call — the same
+// value gets discarded whenever the key is already present, but Go
+// evaluates that argument before LoadOrStore can say so. build is
+// invoked directly (no wrapping closure), mirroring file.go's Memo.
 func load(m *sync.Map, key string, build func() any) any {
+	if v, ok := m.Load(key); ok {
+		return loadEntry(v.(*runCacheEntry), build)
+	}
 	ei, _ := m.LoadOrStore(key, &runCacheEntry{})
-	e := ei.(*runCacheEntry)
-	e.once.Do(func() { e.val = build() })
+	return loadEntry(ei.(*runCacheEntry), build)
+}
+
+// loadEntry runs build at most once for e, then returns the cached
+// value. The atomic.Bool fast path costs one atomic load on every
+// warm call; the mutex only guards the cold build.
+func loadEntry(e *runCacheEntry, build func() any) any {
+	if e.done.Load() {
+		return e.val
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.done.Load() {
+		defer e.done.Store(true)
+		e.val = build()
+	}
 	return e.val
 }

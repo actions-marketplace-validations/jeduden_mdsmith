@@ -62,14 +62,17 @@ func (e LabelConflictError) Error() string {
 }
 
 // LinkRef computes the in-file edits that rename a link-reference
-// label from oldLabel (already normalized via util.ToLinkReference)
-// to newName. The rewrite is file-local: the `[label]: url`
-// definition plus every `[text][label]` and shortcut `[label]` use.
+// label from oldLabel to newName. The rewrite is file-local: the
+// `[label]: url` definition plus every `[text][label]` and shortcut
+// `[label]` use. oldLabel is normalized internally (CommonMark
+// link-label normalization: lowercase, whitespace collapsed) so
+// callers may pass raw label text or a pre-normalized form.
 //
 // Returns ErrEmptyLabel, an InvalidLabelRuneError, or a
 // LabelConflictError without producing any edit when the rename is
 // unsafe, so callers can surface the failure before applying.
 func LinkRef(source []byte, oldLabel, newName string) ([]Edit, error) {
+	oldLabel = NormalizedLabel([]byte(oldLabel))
 	if strings.TrimSpace(newName) == "" {
 		return nil, ErrEmptyLabel
 	}
@@ -80,7 +83,7 @@ func LinkRef(source []byte, oldLabel, newName string) ([]Edit, error) {
 	// → "Docs API") is allowed — it refreshes casing/spacing across
 	// the def and every use. labelConflict matches on the normalized
 	// form so such a rename never collides with itself.
-	newLabel := normalizedLabel([]byte(newName))
+	newLabel := NormalizedLabel([]byte(newName))
 	if conflict := labelConflict(source, oldLabel, newLabel); conflict != "" {
 		return nil, LabelConflictError{Conflict: conflict}
 	}
@@ -91,10 +94,10 @@ func LinkRef(source []byte, oldLabel, newName string) ([]Edit, error) {
 // reference definition goldmark accepted (not a code-block
 // look-alike). The LSP prepare-rename gate consults it so the rename
 // UI never surfaces on a `[label]: url`-shaped code sample.
-func ValidRefDefBodyLines(body []byte) map[int]bool {
-	out := map[int]bool{}
+func ValidRefDefBodyLines(body []byte) map[int]struct{} {
+	out := map[int]struct{}{}
 	for _, m := range validRefDefMatches(body) {
-		out[m.bodyLine] = true
+		out[m.bodyLine] = struct{}{}
 	}
 	return out
 }
@@ -124,7 +127,10 @@ func invalidLinkRefRune(s string) rune {
 	return 0
 }
 
-func normalizedLabel(b []byte) string {
+// NormalizedLabel returns the CommonMark-normalized form of a link
+// label — lowercase with internal whitespace collapsed — by delegating
+// to goldmark's util.ToLinkReference.
+func NormalizedLabel(b []byte) string {
 	return string(util.ToLinkReference(b))
 }
 
@@ -164,16 +170,19 @@ type validRefDefMatch struct {
 // def. This drops paragraph-continuation lookalikes, code-block
 // content, and PI bodies in one pass.
 func validRefDefMatches(body []byte) []validRefDefMatch {
+	if !bytes.Contains(body, []byte("]:")) {
+		return nil
+	}
 	root := lint.NewParser().Parse(text.NewReader(body), parser.WithContext(parser.NewContext()))
 	consumed := contentBlockLines(root, body)
 	var out []validRefDefMatch
 	for _, m := range index.RefDefRegexpMatches(body) {
 		bodyLine := lineOfBodyOffset(body, m[2])
-		if consumed[bodyLine] {
+		if _, ok := consumed[bodyLine]; ok {
 			continue
 		}
 		raw := body[m[2]:m[3]]
-		norm := normalizedLabel(raw)
+		norm := NormalizedLabel(raw)
 		out = append(out, validRefDefMatch{
 			bodyLine:  bodyLine,
 			rawLabel:  string(raw),
@@ -190,8 +199,8 @@ func validRefDefMatches(body []byte) []validRefDefMatch {
 // is by definition not a def. The Document root and
 // LinkReferenceDefinition nodes are skipped: the former spans the
 // whole buffer, the latter IS the line a real def lives on.
-func contentBlockLines(root ast.Node, body []byte) map[int]bool {
-	out := map[int]bool{}
+func contentBlockLines(root ast.Node, body []byte) map[int]struct{} {
+	out := map[int]struct{}{}
 	_ = ast.Walk(root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -206,7 +215,7 @@ func contentBlockLines(root ast.Node, body []byte) map[int]bool {
 		ls := n.Lines()
 		for i := 0; i < ls.Len(); i++ {
 			seg := ls.At(i)
-			out[lineOfBodyOffset(body, seg.Start)] = true
+			out[lineOfBodyOffset(body, seg.Start)] = struct{}{}
 		}
 		return ast.WalkContinue, nil
 	})
@@ -246,7 +255,7 @@ func refDefEditsInBody(
 			continue
 		}
 		row := lines[fileLine-1]
-		bracket := refDefBracketBytes(row)
+		bracket := RefDefBracketBytes(row)
 		startCh := mdtext.UTF16FromByteOffset(row, bracket[0])
 		endCh := mdtext.UTF16FromByteOffset(row, bracket[1])
 		out = append(out, Edit{
@@ -276,7 +285,7 @@ func refUseEditsInBody(
 		if !ok || l.Reference == nil {
 			return ast.WalkContinue, nil
 		}
-		if normalizedLabel(l.Reference.Value) != oldLabel {
+		if NormalizedLabel(l.Reference.Value) != oldLabel {
 			return ast.WalkContinue, nil
 		}
 		edit, ok := refUseEdit(l, body, lines, fmOffset, newName, idx)
@@ -376,10 +385,10 @@ func linkTextBounds(l *ast.Link, body []byte) (int, int) {
 	return start, end
 }
 
-// refDefBracketBytes returns the [start, end) byte offsets of the
+// RefDefBracketBytes returns the [start, end) byte offsets of the
 // label inside a CommonMark reference-definition line, or nil when
 // row is not a reference definition.
-func refDefBracketBytes(row []byte) []int {
+func RefDefBracketBytes(row []byte) []int {
 	i := 0
 	for i < len(row) && i < 3 && row[i] == ' ' {
 		i++
@@ -413,13 +422,9 @@ func lineOfBodyOffset(body []byte, off int) int {
 	if off > len(body) {
 		off = len(body)
 	}
-	line := 1
-	for i := 0; i < off; i++ {
-		if body[i] == '\n' {
-			line++
-		}
-	}
-	return line
+	// bytes.Count special-cases a one-byte separator to a SIMD byte count;
+	// a hand-rolled scan loop is not vectorized.
+	return 1 + bytes.Count(body[:off], []byte{'\n'})
 }
 
 // bodyLineIndex precomputes every line-start offset so a rename

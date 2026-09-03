@@ -59,6 +59,25 @@ budget.
   per-finding "suggested fix". Single
   sentences over ~30 words trip MDS023 /
   MDS024 on the audit log.
+- **When the archive itself crosses the
+  300-line budget**: do not bump
+  `max-file-length` on it — that needs
+  explicit user consent per
+  [CLAUDE.md](../../../CLAUDE.md)'s
+  "Never modify `.mdsmith.yml` ...
+  without explicit user consent" rule.
+  Instead, split it the same way the
+  main log split into it: move the
+  oldest entries into a new numbered
+  shard (`architecture-audit-archive-2.md`,
+  then `-3.md`, ...), moved verbatim, not
+  reworded. Each shard links to the next
+  one it overflowed into, and the
+  original `architecture-audit-archive.md`
+  stays the entry point new readers find
+  first. Re-run `mdsmith fix .` after the
+  split so every parent catalog picks up
+  the new shard.
 
 ## Initial file template
 
@@ -211,8 +230,8 @@ explicit mention here:
 - **A rule package importing another
   rule package** — always a DIP
   blocker. Helpers belong in
-  `internal/mdtext` or
-  `internal/rules/astutil`.
+  `internal/mdtext`, `internal/rules/astutil`,
+  or `internal/rules/listscan`.
 - **`cmd/mdsmith/main.go` past ~1000
   lines** — handler bodies have crept
   in; relocate to `internal/engine` or

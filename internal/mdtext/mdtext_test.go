@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/mdtext"
+	"github.com/jeduden/mdsmith/internal/rules/paragraphreadability"
 	"github.com/jeduden/mdsmith/pkg/goldmark"
 	"github.com/jeduden/mdsmith/pkg/goldmark/ast"
 	"github.com/jeduden/mdsmith/pkg/goldmark/text"
@@ -292,6 +293,23 @@ func TestSplitSentences_Abbreviation(t *testing.T) {
 	require.Len(t, got, 1)
 }
 
+func TestIsAbbrevToken(t *testing.T) {
+	cases := []struct {
+		tok  string
+		want bool
+	}{
+		{"Dr.", true},   // trained honorific
+		{"vs.", true},   // trained reference form
+		{"e.g.", true},  // dotted pattern
+		{"cat.", false}, // ordinary word ending a sentence
+		{"plain", false},
+	}
+	for _, c := range cases {
+		assert.Equalf(t, c.want, mdtext.IsAbbrevToken(c.tok),
+			"IsAbbrevToken(%q)", c.tok)
+	}
+}
+
 func TestSplitSentences_Decimal(t *testing.T) {
 	got := mdtext.SplitSentences("The value is 3.14 today.")
 	require.Len(t, got, 1)
@@ -407,6 +425,23 @@ func TestSlugify_LeadingTrailingDashes(t *testing.T) {
 	assert.Equal(t, "hello", mdtext.Slugify("---hello---"))
 }
 
+// TestSlugify_PreSizesBuilder pins Slugify's allocation count for a
+// moderately long heading. strings.Builder grows geometrically as
+// WriteRune/WriteByte calls exceed its capacity; without an upfront
+// Grow(len(s)) call — output length is always <= input length, since
+// Slugify only emits letters/digits plus single collapsed dashes — a
+// ~50-byte heading forces several successive regrows. Grow(len(s))
+// reduces that to the single upfront allocation plus the one
+// strings.ToLower copy TrimSpace/ToLower already pays for.
+func TestSlugify_PreSizesBuilder(t *testing.T) {
+	s := "This Is A Reasonably Long Heading Title For Testing"
+	allocs := testing.AllocsPerRun(50, func() {
+		_ = mdtext.Slugify(s)
+	})
+	assert.LessOrEqual(t, allocs, 2.0,
+		"Slugify should allocate at most twice (ToLower's copy + one pre-sized Builder buffer)")
+}
+
 func TestSlugify_Unicode(t *testing.T) {
 	// Unicode letters are preserved.
 	result := mdtext.Slugify("Ångström")
@@ -461,4 +496,37 @@ func TestCollectTOCItems_HeadingWithEmptySlug(t *testing.T) {
 	items := mdtext.CollectTOCItems(doc, src)
 	require.Len(t, items, 1, "heading with empty slug should be skipped")
 	assert.Equal(t, "Normal", items[0].Text)
+}
+
+func TestARI_Empty(t *testing.T) {
+	assert.Equal(t, 0.0, mdtext.ARI(""))
+}
+
+func TestARI_ZeroWords(t *testing.T) {
+	assert.Equal(t, 0.0, mdtext.ARI("   "))
+}
+
+func TestARI_SimpleText(t *testing.T) {
+	// "The cat sat on the mat." -> 6 words, 1 sentence, 17 chars
+	got := mdtext.ARI("The cat sat on the mat.")
+	assert.InDelta(t, -5.08, got, 0.5)
+}
+
+func TestARI_ComplexText(t *testing.T) {
+	text := "The implementation of concurrent distributed systems " +
+		"requires sophisticated understanding of fundamental " +
+		"computational paradigms. Synchronization mechanisms " +
+		"must guarantee linearizability across heterogeneous " +
+		"processing environments."
+	got := mdtext.ARI(text)
+	assert.Greater(t, got, 14.0, "complex text should have ARI > 14")
+}
+
+func TestARI_AgreesWithParagraphReadabilityDelegate(t *testing.T) {
+	// ARI in mdtext must produce the same result as the one in
+	// paragraphreadability (which now delegates here).
+	text := "I am here. You are there."
+	got := mdtext.ARI(text)
+	gotPR := paragraphreadability.ARI(text)
+	assert.InDelta(t, got, gotPR, 0.0001, "mdtext.ARI and paragraphreadability.ARI must agree")
 }

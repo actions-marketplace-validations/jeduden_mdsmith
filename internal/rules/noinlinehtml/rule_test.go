@@ -19,6 +19,22 @@ func newRawHTMLNode() *ast.RawHTML {
 
 // --- extractTag unit tests ---
 
+// TestAllowSet_ContainsLowercasedTags verifies allowSet stores tag names in
+// lowercase and uses struct{} as the zero-byte set value.
+func TestAllowSet_ContainsLowercasedTags(t *testing.T) {
+	r := &Rule{Allow: []string{"DIV", "span"}}
+	m := r.allowSet()
+	if _, ok := m["div"]; !ok {
+		t.Error("allowSet: 'DIV' should be stored as 'div'")
+	}
+	if _, ok := m["span"]; !ok {
+		t.Error("allowSet: 'span' should be present")
+	}
+	if _, ok := m["DIV"]; ok {
+		t.Error("allowSet: original-case 'DIV' should not be present")
+	}
+}
+
 func TestExtractTag_Opening(t *testing.T) {
 	assert.Equal(t, "div", extractTag([]byte("<div>")))
 }
@@ -243,7 +259,7 @@ func TestCachedAllowSet(t *testing.T) {
 	require.NoError(t, err)
 
 	first := r.cachedAllowSet(f)
-	require.Equal(t, map[string]bool{"span": true, "div": true, "strong": true}, first,
+	require.Equal(t, map[string]struct{}{"span": {}, "div": {}, "strong": {}}, first,
 		"lookup keys must be lowercase normalisations of r.Allow")
 
 	second := r.cachedAllowSet(f)
@@ -284,6 +300,13 @@ func TestRegisteredDefault_AllowCommentsTrue(t *testing.T) {
 		"registered MDS041 must have AllowComments=true to match DefaultSettings")
 }
 
+// TestInlineCapable pins that MDS041 implements rule.InlineChecker and returns true,
+// so the nil-AST engine path routes it through lint.InlineBlocks and Layer 0 spans.
+func TestInlineCapable(t *testing.T) {
+	r := &Rule{}
+	assert.True(t, r.InlineCapable())
+}
+
 func TestRawHTMLBytes_ZeroSegments(t *testing.T) {
 	// A freshly allocated RawHTML node has no segments; rawHTMLBytes must
 	// return nil rather than a non-nil empty slice.
@@ -315,4 +338,54 @@ func TestRawHTMLBytes_ForceNewline(t *testing.T) {
 	node.Segments.Append(seg)
 	got := rawHTMLBytes(node, source)
 	assert.Equal(t, []byte("<br>\n"), got)
+}
+
+// TestCheck_NilASTMatchesAST pins the parse-skipped path byte-identical to
+// the AST path over both HTML shapes: an HTML block, an inline span, a
+// self-closing inline tag, an inline tag nested inside emphasis, and a
+// comment. The nil-AST path reconstructs block HTML from the Layer 0 spans
+// and inline HTML from the shared inline parse, so any divergence surfaces
+// as a different diagnostic set.
+func TestCheck_NilASTMatchesAST(t *testing.T) {
+	cases := map[string]string{
+		"html block":          "# Title\n\n<div>block content</div>\n",
+		"inline span":         "Some text <span>x</span> tail\n",
+		"self-closing inline": "before<br/>after\n",
+		"inline in emphasis":  "a *strong <b>x</b>* tail\n",
+		"comment block":       "# Title\n\n<!-- a comment -->\n",
+		"clean prose":         "Just plain prose with no HTML.\n",
+		"block and inline":    "# Title\n\n<div>block</div>\n\ntext <span>x</span> end\n",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := &Rule{AllowComments: false}
+
+			fAST, err := lint.NewFile("test.md", []byte(src))
+			require.NoError(t, err)
+			astDiags := r.Check(fAST)
+
+			fNil, err := lint.NewFile("test.md", []byte(src))
+			require.NoError(t, err)
+			fNil.AST = nil
+			nilDiags := r.Check(fNil)
+
+			assert.Equal(t, astDiags, nilDiags)
+		})
+	}
+}
+
+// TestAllowSet_SetType verifies that allowSet returns map[string]struct{}
+// rather than map[string]bool. Per the high-performance Go guidelines:
+// “map[K]struct{} for sets — zero-byte value type.”
+func TestAllowSet_SetType(t *testing.T) {
+	r := &Rule{Allow: []string{"kbd"}}
+	m := r.allowSet()
+	got := reflect.TypeOf(m).String()
+	want := reflect.TypeOf(map[string]struct{}{}).String()
+	assert.Equal(t, want, got, "allowSet must return map[string]struct{} (guideline: use map[K]struct{} for sets)")
+	assert.Contains(t, m, "kbd", "allowSet must contain the lowercased Allow entry")
+}
+
+func TestWordlistTarget(t *testing.T) {
+	assert.Equal(t, "allow", (&Rule{}).WordlistTarget())
 }

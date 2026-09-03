@@ -8,11 +8,14 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
+
+	"github.com/jeduden/mdsmith/internal/bytelimit"
 )
 
 // Workspace is the filesystem seam the engine reads through. The same
@@ -65,24 +68,35 @@ type OSWorkspace struct {
 	Root string
 }
 
-// ReadFile reads path from the host filesystem. When Root is set and
-// path is workspace-relative, it is resolved against Root so ReadFile
-// and FS (which is rooted at Root) name the same file for one uri — see
-// the Root field doc. An absolute path is read unchanged.
+// ReadFile reads path from the host filesystem. When Root is set and path
+// is workspace-relative, it is read through readFileRooted so a symlink
+// escaping Root is refused the same way FS() refuses it — see the Root
+// field doc — without leaking an open directory handle per call the way
+// repeatedly fetching FS() would (see FS's doc comment). This containment
+// is RESOLVE_BENEATH via os.OpenRoot on non-tinygo builds; readFileRooted's
+// tinygo variant uses os.DirFS with no containment, matching FS()'s own
+// per-build-tag split (OSWorkspace is not used in wasm builds — see
+// workspace_fs_tinygo.go). An absolute path, or any path when Root is
+// empty, is read unchanged with no workspace boundary to enforce.
 func (w OSWorkspace) ReadFile(p string) ([]byte, error) {
-	return os.ReadFile(w.resolve(p)) //nolint:gosec // path is caller-controlled; OSWorkspace is the native disk seam
+	if w.Root == "" || filepath.IsAbs(p) {
+		return os.ReadFile(p) //nolint:gosec // path is caller-controlled; OSWorkspace is the native disk seam
+	}
+	return readFileRooted(w.Root, path.Clean(filepath.ToSlash(p)))
 }
 
-// resolve maps a workspace-relative path to an absolute one rooted at
-// Root, mirroring how FS (os.DirFS(Root)) interprets the same path.
-// An absolute path, or any path when Root is empty, is returned
-// unchanged so the zero-value workspace and absolute-path callers keep
-// reading paths exactly as passed.
-func (w OSWorkspace) resolve(p string) string {
+// readFileLimited is ReadFile's bounded counterpart: it stops reading at
+// max+1 bytes via bytelimit rather than loading an oversized file fully
+// into memory first, and returns a "file too large" error when the file
+// exceeds max. frontMatterFor uses it so resolving a file's kind never
+// pulls an arbitrarily large document fully resident just to read its
+// leading front-matter block. Shares ReadFile's Root/absolute-path
+// dispatch and containment.
+func (w OSWorkspace) readFileLimited(p string, max int64) ([]byte, error) {
 	if w.Root == "" || filepath.IsAbs(p) {
-		return p
+		return bytelimit.ReadFileLimited(p, max)
 	}
-	return filepath.Join(w.Root, filepath.FromSlash(p))
+	return readFileRootedLimited(w.Root, path.Clean(filepath.ToSlash(p)), max)
 }
 
 // Glob expands a doublestar pattern against the host filesystem.
@@ -93,16 +107,6 @@ func (w OSWorkspace) Glob(pattern string) ([]string, error) {
 	}
 	sort.Strings(matches)
 	return matches, nil
-}
-
-// FS returns an os.DirFS rooted at Root, or rooted at "." when Root is
-// empty.
-func (w OSWorkspace) FS() fs.FS {
-	root := w.Root
-	if root == "" {
-		root = "."
-	}
-	return os.DirFS(root)
 }
 
 // MemWorkspace is an in-memory Workspace backed by a map from
@@ -200,11 +204,11 @@ func (w *MemWorkspace) Delete(p string) {
 func (w *MemWorkspace) FS() fs.FS {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	snap := make(memFS, len(w.files))
+	snap := make(map[string][]byte, len(w.files))
 	for k, v := range w.files {
 		snap[k] = bytes.Clone(v)
 	}
-	return snap
+	return newMemFS(snap)
 }
 
 // memFS is a minimal read-only fs.FS over a map of slash-paths to
@@ -212,13 +216,30 @@ func (w *MemWorkspace) FS() fs.FS {
 // and bytelimit.ReadFSFileLimited operate without per-file Open overhead,
 // and fs.ReadDirFS so directory walks (e.g. doublestar's recursive
 // descent) resolve.
-type memFS map[string][]byte
+//
+// dirs indexes every directory's immediate children, built once in
+// newMemFS rather than rescanned by dirEntries on every ReadDir call.
+// A snapshot is immutable for its lifetime (see FS), so the index
+// never goes stale: fs.WalkDir calls ReadDir once per directory
+// visited, and rescanning every file on every one of those calls
+// turned an O(files) index build into O(files x directories)
+// (docs/development/high-performance-go.md "Memoize per-input
+// computations").
+type memFS struct {
+	files map[string][]byte
+	dirs  map[string][]fs.DirEntry
+}
+
+// newMemFS wraps files and builds its directory index once.
+func newMemFS(files map[string][]byte) memFS {
+	return memFS{files: files, dirs: buildDirIndex(files)}
+}
 
 func (m memFS) Open(name string) (fs.File, error) {
 	if name == "." {
 		return &memDir{name: ".", entries: m.dirEntries(".")}, nil
 	}
-	if data, ok := m[name]; ok {
+	if data, ok := m.files[name]; ok {
 		return &memFile{name: name, data: data}, nil
 	}
 	// A name with descendants is a directory.
@@ -229,7 +250,7 @@ func (m memFS) Open(name string) (fs.File, error) {
 }
 
 func (m memFS) ReadFile(name string) ([]byte, error) {
-	data, ok := m[name]
+	data, ok := m.files[name]
 	if !ok {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 	}
@@ -238,7 +259,7 @@ func (m memFS) ReadFile(name string) ([]byte, error) {
 
 func (m memFS) Glob(pattern string) ([]string, error) {
 	var out []string
-	for key := range m {
+	for key := range m.files {
 		// doublestar.Match (not stdlib path.Match) so the fs.GlobFS view
 		// honours `**` and brace alternatives, matching MemWorkspace.Glob
 		// and every other glob surface in mdsmith. stdlib path.Match does
@@ -259,7 +280,7 @@ func (m memFS) Glob(pattern string) ([]string, error) {
 func (m memFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	ents := m.dirEntries(name)
 	if name != "." && len(ents) == 0 {
-		if _, isFile := m[name]; isFile {
+		if _, isFile := m.files[name]; isFile {
 			return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
 		}
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrNotExist}
@@ -268,45 +289,72 @@ func (m memFS) ReadDir(name string) ([]fs.DirEntry, error) {
 }
 
 // dirEntries returns the immediate children of dir (files and
-// subdirectories), deduplicated and sorted by name.
+// subdirectories), sorted by name; a lookup into the index newMemFS
+// already built.
 func (m memFS) dirEntries(dir string) []fs.DirEntry {
-	prefix := ""
-	if dir != "." {
-		prefix = dir + "/"
-	}
-	seen := make(map[string]bool)
-	var ents []fs.DirEntry
-	for key := range m {
-		if prefix != "" {
-			if len(key) <= len(prefix) || key[:len(prefix)] != prefix {
-				continue
+	return m.dirs[dir]
+}
+
+// buildDirIndex walks every file path once and records each path
+// segment as a child of its parent directory (root is "."),
+// deduplicating repeated ancestors and sorting each directory's
+// entries by name.
+//
+// A path segment that is empty (a "//" in the raw key, which
+// NewMemWorkspace's path.Clean normally prevents) stops indexing that
+// key from that point on, without registering an empty-named entry —
+// the original per-call dirEntries never surfaced such a key past the
+// malformed segment either, since fs.WalkDir cannot descend into a
+// directory whose parent never listed it as a child.
+func buildDirIndex(files map[string][]byte) map[string][]fs.DirEntry {
+	idx := make(map[string][]fs.DirEntry)
+	seen := make(map[string]struct{}, len(files))
+	for key, data := range files {
+		dir := "."
+		start := 0
+		for {
+			rest := key[start:]
+			i := indexSlash(rest)
+			if i < 0 {
+				addDirEntry(idx, seen, dir, rest, false, int64(len(data)))
+				break
 			}
-		}
-		rest := key[len(prefix):]
-		if i := indexSlash(rest); i >= 0 {
 			name := rest[:i]
-			if name != "" && !seen[name] {
-				seen[name] = true
-				ents = append(ents, memDirEntry{name: name, dir: true})
+			if name == "" {
+				break
 			}
-			continue
-		}
-		if rest != "" && !seen[rest] {
-			seen[rest] = true
-			ents = append(ents, memDirEntry{name: rest, size: int64(len(m[key])), dir: false})
+			addDirEntry(idx, seen, dir, name, true, 0)
+			if dir == "." {
+				dir = name
+			} else {
+				dir = dir + "/" + name
+			}
+			start += i + 1
 		}
 	}
-	sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
-	return ents
+	for dir, ents := range idx {
+		sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
+		idx[dir] = ents
+	}
+	return idx
+}
+
+// addDirEntry appends a name/dir entry once per (dir, name) pair,
+// deduplicating the many files that share a common ancestor directory.
+func addDirEntry(idx map[string][]fs.DirEntry, seen map[string]struct{}, dir, name string, isDir bool, size int64) {
+	if name == "" {
+		return
+	}
+	key := dir + "\x00" + name
+	if _, ok := seen[key]; ok {
+		return
+	}
+	seen[key] = struct{}{}
+	idx[dir] = append(idx[dir], memDirEntry{name: name, size: size, dir: isDir})
 }
 
 func indexSlash(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '/' {
-			return i
-		}
-	}
-	return -1
+	return strings.IndexByte(s, '/')
 }
 
 // memFile is an fs.File over a byte slice.
@@ -329,7 +377,10 @@ func (f *memFile) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func (f *memFile) Close() error { return nil }
+func (f *memFile) Close() error {
+	// no test by design — trivial accessor
+	return nil
+}
 
 // memDir is an fs.ReadDirFile for in-memory directories.
 type memDir struct {
@@ -343,10 +394,14 @@ func (d *memDir) Stat() (fs.FileInfo, error) {
 }
 
 func (d *memDir) Read([]byte) (int, error) {
+	// no test by design — trivial accessor
 	return 0, &fs.PathError{Op: "read", Path: d.name, Err: fs.ErrInvalid}
 }
 
-func (d *memDir) Close() error { return nil }
+func (d *memDir) Close() error {
+	// no test by design — trivial accessor
+	return nil
+}
 
 func (d *memDir) ReadDir(n int) ([]fs.DirEntry, error) {
 	if n <= 0 {
@@ -373,8 +428,14 @@ type memDirEntry struct {
 	dir  bool
 }
 
-func (e memDirEntry) Name() string { return e.name }
-func (e memDirEntry) IsDir() bool  { return e.dir }
+func (e memDirEntry) Name() string {
+	// no test by design — trivial accessor
+	return e.name
+}
+func (e memDirEntry) IsDir() bool {
+	// no test by design — trivial accessor
+	return e.dir
+}
 func (e memDirEntry) Type() fs.FileMode {
 	if e.dir {
 		return fs.ModeDir
@@ -382,6 +443,7 @@ func (e memDirEntry) Type() fs.FileMode {
 	return 0
 }
 func (e memDirEntry) Info() (fs.FileInfo, error) {
+	// no test by design — trivial accessor
 	// memDirEntry and memFileInfo share an identical field layout, so
 	// the conversion copies name/size/dir across one-for-one.
 	return memFileInfo(e), nil
@@ -394,14 +456,29 @@ type memFileInfo struct {
 	dir  bool
 }
 
-func (i memFileInfo) Name() string { return i.name }
-func (i memFileInfo) Size() int64  { return i.size }
+func (i memFileInfo) Name() string {
+	// no test by design — trivial accessor
+	return i.name
+}
+func (i memFileInfo) Size() int64 {
+	// no test by design — trivial accessor
+	return i.size
+}
 func (i memFileInfo) Mode() fs.FileMode {
 	if i.dir {
 		return fs.ModeDir | 0o555
 	}
 	return 0o444
 }
-func (i memFileInfo) ModTime() time.Time { return time.Time{} }
-func (i memFileInfo) IsDir() bool        { return i.dir }
-func (i memFileInfo) Sys() any           { return nil }
+func (i memFileInfo) ModTime() time.Time {
+	// no test by design — trivial accessor
+	return time.Time{}
+}
+func (i memFileInfo) IsDir() bool {
+	// no test by design — trivial accessor
+	return i.dir
+}
+func (i memFileInfo) Sys() any {
+	// no test by design — trivial accessor
+	return nil
+}

@@ -63,6 +63,15 @@ func TestLinkRef_SameNormalizedFormRefreshesCasing(t *testing.T) {
 	require.Len(t, edits, 2)
 }
 
+func TestLinkRef_NormalizesOldLabel(t *testing.T) {
+	// LinkRef normalizes oldLabel internally, so callers may pass
+	// the raw label text without pre-normalizing it.
+	src := []byte("See [spec].\n\n[spec]: u\n")
+	edits, err := LinkRef(src, "Spec", "rfc")
+	require.NoError(t, err)
+	require.Len(t, edits, 2)
+}
+
 func TestLinkRef_CodeFenceDefNotRewritten(t *testing.T) {
 	src := []byte("Use [spec].\n\n```\n[spec]: fake\n```\n\n[spec]: real\n")
 	edits, err := LinkRef(src, "spec", "rfc")
@@ -88,9 +97,12 @@ func TestLinkRef_WithFrontMatterLineOffset(t *testing.T) {
 
 func TestValidRefDefBodyLines(t *testing.T) {
 	body := []byte("para\n\n[a]: u\n\n```\n[b]: v\n```\n")
+	// ValidRefDefBodyLines returns map[int]struct{} — presence means valid def.
 	got := ValidRefDefBodyLines(body)
-	assert.True(t, got[3], "real def on body line 3")
-	assert.False(t, got[6], "fenced def-shaped line is not a def")
+	_, ok3 := got[3]
+	assert.True(t, ok3, "real def on body line 3")
+	_, ok6 := got[6]
+	assert.False(t, ok6, "fenced def-shaped line is not a def")
 }
 
 func TestBodyAndFMOffset(t *testing.T) {
@@ -120,4 +132,22 @@ func TestLinkRef_NoMatchingLabel(t *testing.T) {
 	edits, err := LinkRef([]byte("# Just a heading\n"), "ghost", "spirit")
 	require.NoError(t, err)
 	assert.Empty(t, edits)
+}
+
+func TestNormalizedLabel(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"spec", "spec"},
+		{"Spec", "spec"},
+		{"API Docs", "api docs"},
+		{"API  Docs", "api docs"},
+		{"  leading  ", "leading"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			assert.Equal(t, tc.want, NormalizedLabel([]byte(tc.input)))
+		})
+	}
 }

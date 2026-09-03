@@ -3,6 +3,7 @@ package astutil
 import (
 	"bytes"
 	"testing"
+	"unsafe"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/pkg/goldmark/ast"
@@ -347,6 +348,323 @@ func TestHeadingText_AndExtractText_NoChildren(t *testing.T) {
 	assert.Equal(t, "", buf.String())
 }
 
+// --- HeadingLineBase ---
+
+// TestHeadingLineBase_SetextHeading covers the lines.Len() > 0 branch: goldmark
+// sets Lines() on both setext and ATX headings; HeadingLineBase must use
+// base + lines.At(0).Start to map the run-local offset to the document.
+// This test uses a setext heading not at the start of the file so the base
+// computation is non-trivial, then verifies the result matches HeadingLine.
+func TestHeadingLineBase_SetextHeading(t *testing.T) {
+	// "Intro.\n\nTitle\n=====\n": paragraph at line 1, setext heading at line 3.
+	src := []byte("Intro.\n\nTitle\n=====\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+
+	var setext *ast.Heading
+	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if h, ok := n.(*ast.Heading); ok {
+			setext = h
+			return ast.WalkStop, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	require.NotNil(t, setext, "heading must be found")
+	// HeadingLineBase with base==0 must equal HeadingLine.
+	assert.Equal(t, HeadingLine(setext, f), HeadingLineBase(setext, f, 0))
+	assert.Equal(t, 3, HeadingLineBase(setext, f, 0))
+}
+
+// TestHeadingLineBase_ATXBase pins that base is correctly added for ATX headings:
+// with base == 0 the result must equal HeadingLine (no offset shift).
+func TestHeadingLineBase_ATXBase(t *testing.T) {
+	src := []byte("# Title\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+
+	var h *ast.Heading
+	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if heading, ok := n.(*ast.Heading); ok {
+			h = heading
+			return ast.WalkStop, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	require.NotNil(t, h)
+	assert.Equal(t, HeadingLine(h, f), HeadingLineBase(h, f, 0))
+}
+
+// TestHeadingLineBase_EmptyFallback covers the constant-1 fallback: a synthetic
+// heading with no Lines and no Text children returns 1 regardless of base,
+// matching HeadingLine's own fallback.
+func TestHeadingLineBase_EmptyFallback(t *testing.T) {
+	src := []byte("# t\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	h := ast.NewHeading(1) // no children, no lines
+	assert.Equal(t, 1, HeadingLineBase(h, f, 99))
+}
+
+// --- HeadingTextBase ---
+
+// TestHeadingTextBase_WithBase pins that HeadingTextBase extracts the correct text
+// when base == 0: the result must equal HeadingText, and the pool
+// get/put path and extractTextBase's *ast.Text branch are both exercised.
+func TestHeadingTextBase_WithBase(t *testing.T) {
+	src := []byte("# My Heading\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+
+	var h *ast.Heading
+	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if heading, ok := n.(*ast.Heading); ok {
+			h = heading
+			return ast.WalkStop, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	require.NotNil(t, h)
+	want := HeadingText(h, src)
+	got := HeadingTextBase(h, src, 0)
+	assert.Equal(t, want, got)
+	assert.Equal(t, "My Heading", got)
+}
+
+// TestHeadingTextBase_NoChildren covers the empty-heading path: a heading with
+// no children returns "" from HeadingTextBase, matching HeadingText's contract.
+func TestHeadingTextBase_NoChildren(t *testing.T) {
+	h := ast.NewHeading(1)
+	assert.Equal(t, "", HeadingTextBase(h, nil, 0))
+}
+
+// TestHeadingTextBase_NestedEmphasis covers extractTextBase's recursive path:
+// a heading whose child is *ast.Emphasis (not *ast.Text) must recurse into its
+// children to find the text.
+func TestHeadingTextBase_NestedEmphasis(t *testing.T) {
+	src := []byte("# *emph*\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+
+	var h *ast.Heading
+	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if heading, ok := n.(*ast.Heading); ok {
+			h = heading
+			return ast.WalkStop, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	require.NotNil(t, h)
+	// With base == 0, HeadingTextBase and HeadingText must agree.
+	assert.Equal(t, HeadingText(h, src), HeadingTextBase(h, src, 0))
+}
+
+// TestHeadingTextCached_MemoizesPerHeading pins that HeadingTextCached
+// caches its result on f keyed by the heading node — the fix for
+// no-trailing-punctuation, no-duplicate-headings, heading-increment,
+// and first-line-heading each independently re-walking the same
+// heading's children within one Check pass over f. Mutating f.Source
+// after the first call (in place, same length) proves the second
+// call served the cached string instead of re-extracting from the
+// now-changed bytes.
+func TestHeadingTextCached_MemoizesPerHeading(t *testing.T) {
+	src := []byte("# My Heading\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+
+	h := firstHeading(t, f)
+
+	got := HeadingTextCached(f, h)
+	assert.Equal(t, "My Heading", got)
+
+	copy(f.Source[2:12], "ZZZZZZZZZZ")
+
+	again := HeadingTextCached(f, h)
+	assert.Equal(t, "My Heading", again,
+		"second call must serve the cached value, not re-walk the mutated source")
+}
+
+// TestHeadingTextBaseCached_MemoizesPerHeading covers
+// HeadingTextBaseCached's cache-hit path at base == 0, where it must
+// agree with HeadingText/HeadingTextCached exactly (the AST and
+// parse-skipped paths are equivalent at base 0 — see
+// TestHeadingTextBase_NestedEmphasis). See
+// TestHeadingTextBaseCached_NonzeroBase_ParseSkippedPath for coverage
+// of the actual parse-skipped, nonzero-base shape production uses.
+func TestHeadingTextBaseCached_MemoizesPerHeading(t *testing.T) {
+	src := []byte("# My Heading\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+
+	h := firstHeading(t, f)
+
+	got := HeadingTextBaseCached(f, h, 0)
+	assert.Equal(t, "My Heading", got)
+
+	copy(f.Source[2:12], "ZZZZZZZZZZ")
+
+	again := HeadingTextBaseCached(f, h, 0)
+	assert.Equal(t, "My Heading", again,
+		"second call must serve the cached value, not re-walk the mutated source")
+}
+
+// TestHeadingTextBaseCached_NonzeroBase_ParseSkippedPath exercises
+// HeadingTextBaseCached the way production actually calls it: via
+// lint.WalkInlineNodes on a parse-skipped (f.AST == nil) File, where a
+// heading past the first block gets a nonzero run-local base. Unlike
+// the mutation trick the base-0 tests use (offsets there are simple
+// enough to hand-compute), this proves caching by comparing the two
+// returned strings' backing data pointers with unsafe.StringData: a
+// recomputed (rather than cached) second call would read the same
+// bytes into a distinct string value.
+func TestHeadingTextBaseCached_NonzeroBase_ParseSkippedPath(t *testing.T) {
+	src := []byte("# First\n\nSome prose paragraph.\n\n# My Heading\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	f.AST = nil
+
+	var heading *ast.Heading
+	var base int
+	found := 0
+	lint.WalkInlineNodes(f, func(n ast.Node, b int) {
+		if h, ok := n.(*ast.Heading); ok {
+			found++
+			if found == 2 {
+				heading, base = h, b
+			}
+		}
+	})
+	require.NotNil(t, heading, "expected a second heading on the parse-skipped path")
+	require.Positive(t, base, "the second heading must carry a nonzero run-local base")
+
+	got := HeadingTextBaseCached(f, heading, base)
+	require.Equal(t, "My Heading", got)
+	// unsafe.StringData identity is only a valid proof of sharing for
+	// strings long enough that Go can't satisfy them from static/
+	// interned storage independently of caching (measured: length 0
+	// and 1 strings can share a data pointer across unrelated
+	// conversions; length >= 2 cannot). Guard the precondition so a
+	// future fixture edit can't silently turn this into a vacuous
+	// pass.
+	require.Greater(t, len(got), 1,
+		"fixture must produce a string long enough for StringData identity to be meaningful")
+
+	again := HeadingTextBaseCached(f, heading, base)
+	assert.Equal(t, "My Heading", again)
+	assert.Same(t, unsafe.StringData(got), unsafe.StringData(again),
+		"second call must serve the cached string, not a freshly re-walked one")
+}
+
+// TestHeadingTextBaseCached_DistinctBasesIndependent pins that the
+// same heading pointer queried at two different bases — the shape a
+// shared map keyed on the heading pointer alone would collide on —
+// gets two independent cache entries.
+func TestHeadingTextBaseCached_DistinctBasesIndependent(t *testing.T) {
+	src := []byte("# My Heading\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	h := firstHeading(t, f)
+
+	got0 := HeadingTextBaseCached(f, h, 0)
+	assert.Equal(t, "My Heading", got0)
+
+	// base 1 shifts every segment's read window 1 byte into the
+	// source (past "# M"), so the same heading pointer at a different
+	// base must not reuse base 0's cached answer.
+	got1 := HeadingTextBaseCached(f, h, 1)
+	assert.Equal(t, "y Heading\n", got1)
+	assert.NotEqual(t, got0, got1,
+		"a different base must not read base 0's cached entry")
+
+	again0 := HeadingTextBaseCached(f, h, 0)
+	assert.Equal(t, "My Heading", again0,
+		"base 0's own cached entry must survive an intervening call at base 1")
+}
+
+// TestHeadingTextCached_DistinctHeadingsIndependent pins that two
+// different headings in the same file get independent cache entries.
+func TestHeadingTextCached_DistinctHeadingsIndependent(t *testing.T) {
+	src := []byte("# First\n\n# Second\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+
+	var headings []*ast.Heading
+	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if heading, ok := n.(*ast.Heading); ok {
+			headings = append(headings, heading)
+		}
+		return ast.WalkContinue, nil
+	})
+	require.Len(t, headings, 2)
+
+	assert.Equal(t, "First", HeadingTextCached(f, headings[0]))
+	assert.Equal(t, "Second", HeadingTextCached(f, headings[1]))
+}
+
+// firstHeading returns the first *ast.Heading found in f.AST.
+func firstHeading(t *testing.T, f *lint.File) *ast.Heading {
+	t.Helper()
+	var h *ast.Heading
+	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if heading, ok := n.(*ast.Heading); ok {
+			h = heading
+			return ast.WalkStop, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	require.NotNil(t, h)
+	return h
+}
+
+// TestHeadingLineBase_WalkPath covers the ast.Walk fallback when a synthetic
+// heading has no Lines() but a direct *ast.Text child: the walk finds the
+// text segment and returns its line.
+func TestHeadingLineBase_WalkPath(t *testing.T) {
+	src := []byte("# Heading\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+
+	h := ast.NewHeading(1)
+	textNode := ast.NewText()
+	textNode.Segment = text.NewSegment(2, 9) // "Heading" at bytes 2..9 (line 1)
+	h.AppendChild(h, textNode)
+
+	assert.Equal(t, 1, HeadingLineBase(h, f, 0))
+}
+
+// TestHeadingLineBase_WalkNonTextChild covers the !ok branch (non-Text child)
+// and the !entering exit path: when the only child is a non-Text node (here
+// an *ast.Emphasis with no children), the walk visits it on enter (!ok →
+// WalkContinue) and on exit (!entering → WalkContinue), then returns line=1.
+func TestHeadingLineBase_WalkNonTextChild(t *testing.T) {
+	src := []byte("# t\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+
+	h := ast.NewHeading(1)
+	em := ast.NewEmphasis(1) // not *ast.Text; no children
+	h.AppendChild(h, em)
+
+	assert.Equal(t, 1, HeadingLineBase(h, f, 0))
+}
+
 // --- CollectSectionHeadings ---
 
 func TestCollectSectionHeadings_OrdersByLine(t *testing.T) {
@@ -367,6 +685,59 @@ func TestCollectSectionHeadings_NoHeadings(t *testing.T) {
 	f, err := lint.NewFile("test.md", []byte("just text\n"))
 	require.NoError(t, err)
 	assert.Empty(t, CollectSectionHeadings(f))
+}
+
+// TestCollectSectionHeadings_Memoized pins that repeated calls share
+// the same backing slice — MDS057 and MDS058 both enabled should pay
+// the AST walk once, not twice, mirroring
+// TestCollectSectionParagraphsWithText_Memoized below.
+func TestCollectSectionHeadings_Memoized(t *testing.T) {
+	src := []byte("# H1\n\n## H2\n\n### H3\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	h1 := CollectSectionHeadings(f)
+	h2 := CollectSectionHeadings(f)
+	require.Len(t, h1, 3)
+	require.Len(t, h2, 3)
+	assert.Same(t, &h1[0], &h2[0],
+		"repeated calls must return the cached slice")
+}
+
+// --- CollectHeadingNodes ---
+
+func TestCollectHeadingNodes_OrdersByLine(t *testing.T) {
+	src := []byte("# H1\n\n## H2\n\n### H3\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	got := CollectHeadingNodes(f)
+	require.Len(t, got, 3)
+	assert.Equal(t, 1, got[0].Level)
+	assert.Equal(t, 2, got[1].Level)
+	assert.Equal(t, 3, got[2].Level)
+	assert.Equal(t, 1, HeadingLine(got[0], f))
+	assert.Equal(t, 3, HeadingLine(got[1], f))
+	assert.Equal(t, 5, HeadingLine(got[2], f))
+}
+
+func TestCollectHeadingNodes_NoHeadings(t *testing.T) {
+	f, err := lint.NewFile("test.md", []byte("just text\n"))
+	require.NoError(t, err)
+	assert.Empty(t, CollectHeadingNodes(f))
+}
+
+// TestCollectHeadingNodes_Memoized pins that repeated calls share the
+// same backing slice — MDS003 and MDS005 both enabled should pay the
+// AST walk once, not twice, mirroring TestCollectSectionHeadings_Memoized.
+func TestCollectHeadingNodes_Memoized(t *testing.T) {
+	src := []byte("# H1\n\n## H2\n\n### H3\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	h1 := CollectHeadingNodes(f)
+	h2 := CollectHeadingNodes(f)
+	require.Len(t, h1, 3)
+	require.Len(t, h2, 3)
+	assert.Same(t, h1[0], h2[0],
+		"repeated calls must return the cached slice")
 }
 
 // --- CollectSectionParagraphs ---
@@ -614,6 +985,80 @@ func TestSectionBody_ExtractsFromNodeWhenTextEmpty(t *testing.T) {
 	assert.Equal(t, "first paragraph here. second paragraph too.", got)
 }
 
+// --- SectionBodies ---
+
+// TestSectionBodies_MatchesPerHeadingSectionBody pins that the batch
+// SectionBodies helper produces the exact same output as calling
+// SectionBody once per heading with SectionEnd's range — the O(H+P)
+// two-pointer sweep must be observationally identical to the O(H×P)
+// per-heading rescan it replaces. Nested headings (H1 > H2 > H3) make
+// ranges overlap, which is the case a naive single forward-only
+// pointer would get wrong.
+func TestSectionBodies_MatchesPerHeadingSectionBody(t *testing.T) {
+	src := []byte("# H1\n\nalpha.\n\n## H2\n\nbeta.\n\n### H3\n\ngamma.\n\n## H2b\n\ndelta.\n\n# H1b\n\nepsilon.\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	headings := CollectSectionHeadings(f)
+	require.Len(t, headings, 5)
+	paragraphs := CollectSectionParagraphsWithText(f)
+	require.Len(t, paragraphs, 5)
+
+	totalLines := len(f.Lines)
+	if totalLines > 0 && len(f.Lines[totalLines-1]) == 0 {
+		totalLines--
+	}
+
+	want := make([]string, len(headings))
+	for i, h := range headings {
+		end := SectionEnd(headings, i, totalLines)
+		want[i] = SectionBody(paragraphs, f.Source, h.Line, end)
+	}
+
+	got := SectionBodies(headings, paragraphs, f.Source, totalLines)
+	assert.Equal(t, want, got)
+	// Sanity: a nested section's body includes its own descendants
+	// (H2 covers H3's paragraph too), and the outer H1 body includes
+	// every descendant paragraph transitively.
+	assert.Equal(t, "beta. gamma.", want[1])
+	assert.Contains(t, want[0], "gamma.")
+}
+
+// TestSectionBodies_EmptyHeadings pins the degenerate case: no
+// headings means no bodies, regardless of paragraph count.
+func TestSectionBodies_EmptyHeadings(t *testing.T) {
+	got := SectionBodies(nil, []SectionParagraph{{Line: 1, Text: "x"}}, nil, 10)
+	assert.Empty(t, got)
+}
+
+// TestSectionBodies_AllocBudget pins that SectionBodies reuses its
+// per-heading `parts` buffer across iterations instead of
+// re-declaring it fresh every heading. A per-heading `var parts
+// []string` regrows from nil on every iteration; an xhigh-severity
+// review pass on PR #785 measured that as MORE total allocations than
+// the per-heading SectionBody loop this function replaces, on a
+// nested-heading document — 10 allocs versus 6 for the fixture below.
+// See docs/development/high-performance-go.md "Reuse loop-local
+// buffers".
+func TestSectionBodies_AllocBudget(t *testing.T) {
+	src := []byte("# H1\n\na.\n\nb.\n\n## H2\n\nc.\n\nd.\n\n## H2b\n\ne.\n\nf.\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	headings := CollectSectionHeadings(f)
+	paragraphs := CollectSectionParagraphsWithText(f)
+	require.Len(t, headings, 3)
+	totalLines := len(f.Lines)
+	if totalLines > 0 && len(f.Lines[totalLines-1]) == 0 {
+		totalLines--
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = SectionBodies(headings, paragraphs, f.Source, totalLines)
+	})
+	if allocs > 6 {
+		t.Fatalf("SectionBodies allocs per call: want <= 6, got %v", allocs)
+	}
+}
+
 // TestCollectSectionParagraphs_MemoizedPerFile pins that the
 // AST-walking collector runs once per File and serves a cached result
 // thereafter. On prose-heavy corpora (the neutral Rust Book
@@ -643,4 +1088,24 @@ func TestCollectSectionParagraphs_MemoizedPerFile(t *testing.T) {
 	o := CollectSectionParagraphs(f2)
 	require.Len(t, o, 1)
 	assert.Equal(t, "Different.", o[0].ExtractText(f2.Source))
+}
+
+// --- CountLeadingSpaces ---
+
+func TestCountLeadingSpaces(t *testing.T) {
+	assert.Equal(t, 0, CountLeadingSpaces([]byte("abc")))
+	assert.Equal(t, 2, CountLeadingSpaces([]byte("  abc")))
+	assert.Equal(t, 0, CountLeadingSpaces([]byte("")))
+	assert.Equal(t, 3, CountLeadingSpaces([]byte("   ")))
+	assert.Equal(t, 1, CountLeadingSpaces([]byte(" \tabc")))
+}
+
+// --- IsBlank ---
+
+func TestIsBlank(t *testing.T) {
+	assert.True(t, IsBlank([]byte("")))
+	assert.True(t, IsBlank([]byte("   ")))
+	assert.True(t, IsBlank([]byte(" \t ")))
+	assert.False(t, IsBlank([]byte("a")))
+	assert.False(t, IsBlank([]byte("  a")))
 }

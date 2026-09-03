@@ -113,6 +113,18 @@ func optInRules() []rule.Rule {
 	return out
 }
 
+// isNetworkBound reports whether a rule performs outbound network I/O in
+// Check and must be excluded from the per-rule alloc/timing gates. Those
+// gates call Check directly on a shared fixture. The alloc-budget
+// fixture carries an external URL (`[ref]: https://example.com/`), so a
+// network-bound rule there would issue a real request mid-test; the
+// per-rule bench doc currently has no external URL, so the skip is
+// defensive against a future fixture edit and keeps a network-bound
+// rule's timings out of the measured baseline either way. MDS072
+// (external-link-check) is the only such rule; the plan (2606280208)
+// documents the exclusion.
+func isNetworkBound(id string) bool { return id == "MDS072" }
+
 // perRuleBenchMakeFile returns a factory that builds a fresh lint.File
 // per call so per-File memos (LinkReferences, ProseRanges, newline
 // offsets) start cold, matching what the engine sees in production
@@ -297,9 +309,15 @@ var perRuleAllocCeiling = map[string]float64{
 	"MDS056": 4,   // forbidden-text: 0 allocs
 	"MDS057": 4,   // required-text-patterns: 0 allocs
 	"MDS058": 4,   // required-mentions: 0 allocs
+	"MDS060": 4,   // occurrence: 0 allocs (inert without tokens or pattern)
 	"MDS063": 44,  // descriptive-link-text: ~36 allocs
 	"MDS067": 12,  // callout-type: ~8 allocs
 	"MDS068": 4,   // link-style: 0 allocs
+	"MDS071": 4,   // required-frontmatter: 0 allocs (inert without fields)
+	// MDS072 (external-link-check) is network-bound and excluded from
+	// this gate via isNetworkBound; it has no alloc ceiling here.
+	"MDS073": 4, // slide-structure: 0 allocs (inert without slide markers)
+	"MDS075": 4, // over-repetition: 0 allocs (inert when Max <= 0)
 }
 
 // init pins MDS043's allocs ceiling from the build-tagged
@@ -326,6 +344,9 @@ func TestPerRuleBenchDocCompliant(t *testing.T) {
 	for _, r := range all {
 		r := r
 		t.Run(r.ID()+"_"+r.Name(), func(t *testing.T) {
+			if isNetworkBound(r.ID()) {
+				t.Skip("network-bound rule; excluded from the per-rule bench doc")
+			}
 			ds := r.Check(makeFile())
 			if len(ds) != 0 {
 				t.Fatalf("%s (%s) fires %d diagnostic(s) on perRuleBenchDoc "+
@@ -363,6 +384,9 @@ func TestPerRuleBenchBudget(t *testing.T) {
 	for _, r := range optInRules() {
 		r := r
 		t.Run(r.ID()+"_"+r.Name(), func(t *testing.T) {
+			if isNetworkBound(r.ID()) {
+				t.Skip("network-bound rule; excluded from the alloc/timing gate")
+			}
 			allocCeiling, ok := perRuleAllocCeiling[r.ID()]
 			if !ok {
 				t.Fatalf("%s (%s) is opt-in but has no pinned alloc ceiling "+
@@ -493,6 +517,9 @@ func BenchmarkOptInRule(b *testing.B) {
 	for _, r := range optInRules() {
 		r := r
 		b.Run(r.ID()+"_"+r.Name(), func(b *testing.B) {
+			if isNetworkBound(r.ID()) {
+				b.Skip("network-bound rule; excluded from the per-rule benchmark")
+			}
 			makeFile := perRuleBenchMakeFile(b, src, mapFS)
 			_ = r.Check(makeFile())
 			b.ReportAllocs()

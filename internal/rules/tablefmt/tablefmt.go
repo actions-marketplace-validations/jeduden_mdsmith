@@ -10,14 +10,15 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mattn/go-runewidth"
+	"github.com/jeduden/mdsmith/pkg/runewidth"
 )
 
 // Violation describes a single table whose source formatting differs
 // from the canonical layout produced by this package.
+// Message (a string, with a pointer) precedes StartLine to minimise GC scan span.
 type Violation struct {
-	StartLine int    // 1-based line number of the table's first row
 	Message   string // diagnostic message including the first differing row
+	StartLine int    // 1-based line number of the table's first row
 }
 
 // Config controls how tables are formatted.
@@ -171,18 +172,23 @@ func normalizeConfig(cfg Config) Config {
 }
 
 // table represents a parsed markdown table with its source location.
+// Fields are ordered so slices and the string (all pointer-bearing) precede
+// the scalar int, and the string sits between the two slices so all
+// pointers are contiguous — reducing GC pointer-scan span from 56 to 48.
 type table struct {
-	startLine int      // 1-based line number of the first row
 	rawLines  [][]byte // raw source lines (including prefix)
 	prefix    string   // blockquote/list prefix (e.g. "> ", "  ")
 	rows      []row    // parsed rows (header, separator, data)
+	startLine int      // 1-based line number of the first row
 }
 
 // row is a single table row with its cells.
+// Fields are ordered so pointer-containing fields (slices) precede the bool,
+// minimising the GC pointer-scan span.
 type row struct {
 	cells       []string // trimmed cell contents
-	isSeparator bool     // true for the separator row (|---|---|)
 	alignments  []align  // alignment per column (only for separator row)
+	isSeparator bool     // true for the separator row (|---|---|)
 }
 
 // align represents column alignment in a table.
@@ -349,9 +355,15 @@ func tryParseTable(lines [][]byte, start int, codeLines map[int]struct{}) (*tabl
 		return nil, start
 	}
 
-	// Collect all table rows.
-	var rawLines [][]byte
-	var rows []row
+	// Collect all table rows. dataRows counts the run of consecutive
+	// data-row lines without allocating (mirrors the loop below's
+	// stopping condition), so rawLines/rows can be pre-sized for the
+	// header, separator, and every data row up front — the capture
+	// loop below never triggers a slice-growth realloc
+	// (docs/development/high-performance-go.md).
+	dataRows := countDataRows(lines, prefix, start+2, codeLines)
+	rawLines := make([][]byte, 0, 2+dataRows)
+	rows := make([]row, 0, 2+dataRows)
 
 	// Header row.
 	headerCells := splitRowBytes(content)
@@ -385,6 +397,25 @@ func tryParseTable(lines [][]byte, start int, codeLines map[int]struct{}) (*tabl
 		prefix:    prefix,
 		rows:      rows,
 	}, end
+}
+
+// countDataRows returns the number of consecutive data-row lines starting
+// at i, mirroring the stopping condition of the data-row capture loop in
+// tryParseTable without allocating. Used only to pre-size that loop's
+// output slices.
+func countDataRows(lines [][]byte, prefix string, i int, codeLines map[int]struct{}) int {
+	n := 0
+	for i < len(lines) {
+		if _, ok := codeLines[i+1]; ok { // i is 0-based, codeLines is 1-based
+			break
+		}
+		if !isTableRow(stripPrefix(lines[i], prefix)) {
+			break
+		}
+		n++
+		i++
+	}
+	return n
 }
 
 // detectPrefix extracts the blockquote or list prefix from a line.
@@ -434,13 +465,16 @@ func detectPrefix(line []byte) string {
 }
 
 // stripPrefix removes the detected prefix from a line.
+// Uses the compiler-optimised string(line[:n]) == prefix comparison
+// (same pattern as tableformat/structure.go rowContent) to avoid
+// allocating a temporary string copy of the full line.
 func stripPrefix(line []byte, prefix string) []byte {
-	if prefix == "" {
+	plen := len(prefix)
+	if plen == 0 || len(line) < plen {
 		return line
 	}
-	s := string(line)
-	if strings.HasPrefix(s, prefix) {
-		return []byte(s[len(prefix):])
+	if string(line[:plen]) == prefix {
+		return line[plen:]
 	}
 	return line
 }

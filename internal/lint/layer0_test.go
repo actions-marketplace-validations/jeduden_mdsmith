@@ -2,6 +2,7 @@ package lint
 
 import (
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -190,6 +191,18 @@ func TestLayer0_NestedBlockquoteDepth(t *testing.T) {
 	require.Len(t, l0.BlockSpans, 1)
 	assert.Equal(t, BlockQuote, l0.BlockSpans[0].Kind)
 	assert.Equal(t, 2, l0.BlockSpans[0].Depth)
+}
+
+func TestLayer0_BlockquoteRecursionDepthCapped(t *testing.T) {
+	// A fence nested past maxBlockquoteDepth quote levels must not recurse
+	// arbitrarily far: the recursive scan into the quote body stops at the
+	// cap, so the fence past it is never reached and its lines are not
+	// marked as code. This guards against unbounded stack growth on a
+	// pathological line of deeply nested `>` markers (CWE-674).
+	prefix := strings.Repeat("> ", maxBlockquoteDepth+5)
+	src := prefix + "```\n" + prefix + "code\n" + prefix + "```\n"
+	l0 := scan(src)
+	assert.Empty(t, l0.CodeBlockLines, "fence nested past the depth cap must not be recursed into")
 }
 
 // spanKinds returns the set of block kinds present in the scan, counted.
@@ -404,6 +417,16 @@ func TestLayer0_LazyContinuationRejectsPIAndHTML(t *testing.T) {
 	l0 := scan("> para\n<?toc?>\n")
 	assert.Equal(t, BlockQuote, l0.BlockSpans[0].Kind)
 	assert.Equal(t, []int{2}, keysOf(l0.PIBlockLines))
+}
+
+func TestLayer0_LazyContinuationRejectsATXHeading(t *testing.T) {
+	// An ATX heading without a > prefix interrupts a block-quote lazy
+	// continuation and is not absorbed into the quote span.
+	l0 := scan("> para\n# heading\n")
+	require.GreaterOrEqual(t, len(l0.BlockSpans), 2)
+	assert.Equal(t, BlockQuote, l0.BlockSpans[0].Kind)
+	assert.Equal(t, 1, l0.BlockSpans[0].End, "quote must end at line 1, before the heading")
+	assert.Equal(t, BlockATXHeading, l0.BlockSpans[1].Kind)
 }
 
 func TestLayer0_ATXHeadingLevels(t *testing.T) {
@@ -636,5 +659,29 @@ func TestSourceMayHaveCodeBlock(t *testing.T) {
 	} {
 		assert.True(t, SourceMayHaveCodeBlock([]byte(src)),
 			"expected may-have-code: %q", src)
+	}
+}
+
+func TestSourceMayHaveBlockQuote(t *testing.T) {
+	// Quote-free sources: no `>` byte at all.
+	for _, src := range []string{
+		"# Title\n\nplain prose only\n",
+		"- a list\n- with items\n",
+		"",
+		"text with `inline` span\n",
+	} {
+		assert.False(t, SourceMayHaveBlockQuote([]byte(src)),
+			"expected quote-free: %q", src)
+	}
+	// Sources that may hold a block quote — the coarse `>` scan also trips on
+	// a `>` in prose, an autolink, or raw HTML, which is the sound direction.
+	for _, src := range []string{
+		"> # Quoted heading\n",        // the divergence class
+		"> a quote\n",                 // prose quote
+		"intro\n\n> nested\n> more\n", // multi-line quote
+		"a > b in prose\n",            // bare `>` (over-triggers, still sound)
+	} {
+		assert.True(t, SourceMayHaveBlockQuote([]byte(src)),
+			"expected may-have-quote: %q", src)
 	}
 }

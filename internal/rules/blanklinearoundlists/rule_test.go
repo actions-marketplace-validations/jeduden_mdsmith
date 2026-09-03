@@ -1,6 +1,7 @@
 package blanklinearoundlists
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -138,7 +139,7 @@ func TestFix_NoChange(t *testing.T) {
 	require.NoError(t, err)
 	r := &Rule{}
 	result := r.Fix(f)
-	if string(result) != string(src) {
+	if !bytes.Equal(result, src) {
 		t.Errorf("expected no change, got %q", string(result))
 	}
 }
@@ -167,7 +168,7 @@ func TestFix_FencedCodeBlockWithYAMLList_NoCorruption(t *testing.T) {
 	require.NoError(t, err)
 	r := &Rule{}
 	result := r.Fix(f)
-	if string(result) != string(src) {
+	if !bytes.Equal(result, src) {
 		t.Errorf("fix corrupted code block content:\nexpected: %q\ngot:      %q", string(src), string(result))
 	}
 }
@@ -256,4 +257,42 @@ func TestFix_PreSizeAllocBudget(t *testing.T) {
 	require.LessOrEqualf(t, allocs, float64(budget),
 		"Fix allocs/op = %.0f (budget=%d); pre-size resultLines with make([][]byte, 0, cap)",
 		allocs, budget)
+}
+
+func TestCheck_BothViolations(t *testing.T) {
+	// Heading immediately before list (no blank), heading immediately after (no blank).
+	src := []byte("## Title\n- item 1\n- item 2\n## After\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	r := &Rule{}
+	diags := r.Check(f)
+	require.Len(t, diags, 2, "expected 2 diagnostics (before + after), got %d", len(diags))
+}
+
+// TestCheck_NilASTMatchesAST pins the nil-AST path: Check on a parse-
+// skipped File (f.AST nil) must produce byte-identical diagnostics to the
+// AST path, including nested lists, a loose list, and a list holding a
+// code fence.
+func TestCheck_NilASTMatchesAST(t *testing.T) {
+	srcs := [][]byte{
+		[]byte("# Title\n\nContent here.\n- item one\n- item two\n"),
+		[]byte("# Title\n\n- a\n- b\n\nAfter.\n"),
+		[]byte("Para.\n- a\n- b\nNext para.\n"),
+		[]byte("- a\n  - nested\n- b\n\ntext\n"),
+		[]byte("- a\n\n- b\n\nafter\n"),
+		[]byte("- item\n  ```\n  code\n  ```\n- two\nafter\n"),
+		[]byte("text\n\n- a\n- b\n"),
+		[]byte("```\n- not a list, in code\n```\ntext\n"),
+		[]byte("# H\n\n- only item\n"),
+		[]byte("1. one\n2. two\nimmediately after\n"),
+		[]byte("text\n-\n-\ntext\n"),
+	}
+	for _, src := range srcs {
+		astFile, err := lint.NewFile("f.md", src)
+		require.NoError(t, err)
+		astDiags := (&Rule{}).Check(astFile)
+		l0Diags := (&Rule{}).Check(lint.NewFileLines("f.md", src))
+		assert.Equal(t, astDiags, l0Diags,
+			"nil-AST diagnostics must match AST for %q", string(src))
+	}
 }

@@ -10,14 +10,17 @@ import (
 	"io/fs"
 	gopath "path"
 	"path/filepath"
-	"sort"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/jeduden/mdsmith/internal/bytelimit"
 	"github.com/jeduden/mdsmith/internal/globpath"
 	"github.com/jeduden/mdsmith/internal/lint"
+	"github.com/jeduden/mdsmith/internal/mdpath"
 	"github.com/jeduden/mdsmith/internal/piparser"
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/jeduden/mdsmith/internal/rules/settings"
@@ -89,12 +92,24 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	// resolveCorpus is guaranteed non-nil here: the f.FS == nil
 	// guard above short-circuits, and resolveCorpus falls back to
 	// f.FS when RootFS is missing or rootRelative fails.
-	corpus, selfName := resolveCorpus(f)
+	corpus, selfName, rootDir := resolveCorpus(f)
 
-	index := buildCorpusIndex(
-		corpus, selfName, f.MaxInputBytes, minChars,
-		f.StripFrontMatter, r.Include, r.Exclude,
-	)
+	// index covers every corpus file, self included: it is shared and
+	// cached (via cfg.runCache.CorpusIndex) across every host file that
+	// scans this same corpus signature, so it cannot exclude any one
+	// host file's own entries at build time — the exclusion has to
+	// happen per host file, below, using this call's own selfName.
+	index := buildCorpusIndex(corpusScanConfig{
+		runCache:         f.RunCache,
+		rootDir:          rootDir,
+		corpus:           corpus,
+		maxBytes:         f.MaxInputBytes,
+		minChars:         minChars,
+		keySuffix:        "\x00" + strconv.Itoa(minChars),
+		stripFrontMatter: f.StripFrontMatter,
+		include:          r.Include,
+		exclude:          r.Exclude,
+	})
 
 	var diags []lint.Diagnostic
 	for _, p := range self {
@@ -103,6 +118,9 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 			continue
 		}
 		for _, m := range matches {
+			if m.path == selfName {
+				continue
+			}
 			diags = append(diags, lint.Diagnostic{
 				File:     f.Path,
 				Line:     p.line,
@@ -195,9 +213,30 @@ func inGeneratedRange(offset int, ranges [][2]int) bool {
 // (a shape goldmark never produces today, but cheap to guard), ones
 // shorter than the threshold, and paragraphs inside generated sections
 // (<?include?> or <?catalog?> bodies) are skipped.
+//
+// raw and norm are scratch []byte buffers reused across every paragraph
+// in the file (reset via buf[:0], never reallocated down). A prior
+// version rebuilt a fresh strings.Builder per paragraph for line-
+// gathering, another fresh one inside normalize for whitespace/case
+// folding, and a []byte(normalized) copy before hashing — three
+// allocations on every paragraph, none of them reusable because
+// strings.Builder.Reset drops its backing array (immutability: a
+// string already handed to a caller via String() must not be
+// invalidated by a later Write). Working end to end in []byte and
+// hashing sha256.Sum256(norm) directly (no string round-trip) lets the
+// same two buffers serve the whole file: their capacity stabilizes at
+// the largest paragraph seen, so later paragraphs allocate nothing.
+// slices.Grow before the first append into each buffer keeps the very
+// first (or largest-yet) paragraph in a file from paying incremental
+// regrowth the way a bare append from nil would — the segment-length
+// sum needed for it is pure arithmetic over already-fetched start/stop
+// offsets, not a second pass over the source bytes. See
+// docs/development/high-performance-go.md "Reuse loop-local buffers"
+// and "Pre-size slices".
 func extractParagraphs(f *lint.File, minChars int) []paragraph {
 	genRanges := generatedRanges(f)
 	var out []paragraph
+	var raw, norm []byte
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering || n.Kind() != ast.KindParagraph {
 			return ast.WalkContinue, nil
@@ -209,16 +248,26 @@ func extractParagraphs(f *lint.File, minChars int) []paragraph {
 		if inGeneratedRange(lines.At(0).Start, genRanges) {
 			return ast.WalkSkipChildren, nil
 		}
-		var b strings.Builder
+		size := 0
 		for i := 0; i < lines.Len(); i++ {
 			seg := lines.At(i)
-			b.Write(seg.Value(f.Source))
+			size += seg.Stop - seg.Start
 		}
-		normalized := normalize(b.String())
-		if runeLen(normalized) < minChars {
+		raw = slices.Grow(raw[:0], size)
+		for i := 0; i < lines.Len(); i++ {
+			seg := lines.At(i)
+			raw = append(raw, seg.Value(f.Source)...)
+		}
+		// Whitespace collapse only shrinks, and lowercasing a rune
+		// essentially never grows its UTF-8 encoding, so len(raw) is a
+		// good capacity estimate — not a hard guarantee, so append
+		// still grows norm on its own in the rare case this undersizes
+		// it, exactly as it would without the hint.
+		norm = appendNormalized(slices.Grow(norm[:0], len(raw)), raw)
+		if utf8.RuneCount(norm) < minChars {
 			return ast.WalkSkipChildren, nil
 		}
-		sum := sha256.Sum256([]byte(normalized))
+		sum := sha256.Sum256(norm)
 		out = append(out, paragraph{
 			fingerprint: hex.EncodeToString(sum[:]),
 			line:        f.LineOfOffset(lines.At(0).Start),
@@ -228,39 +277,40 @@ func extractParagraphs(f *lint.File, minChars int) []paragraph {
 	return out
 }
 
-// normalize collapses runs of whitespace to single spaces, lowercases
-// letters, and trims leading/trailing space. The goal is to treat
+// appendNormalized appends the normalized form of src onto dst: runs of
+// whitespace collapse to a single space, letters lowercase, and neither
+// a leading nor a trailing space survives. The goal is to treat
 // paragraphs that differ only by reflow or case as duplicates.
-func normalize(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
+func appendNormalized(dst, src []byte) []byte {
+	start := len(dst)
 	inSpace := false
-	for _, r := range s {
+	for i := 0; i < len(src); {
+		r, size := utf8.DecodeRune(src[i:])
+		i += size
 		if unicode.IsSpace(r) {
-			if !inSpace && b.Len() > 0 {
-				b.WriteRune(' ')
+			if !inSpace && len(dst) > start {
+				dst = append(dst, ' ')
 			}
 			inSpace = true
 			continue
 		}
-		b.WriteRune(unicode.ToLower(r))
+		dst = utf8.AppendRune(dst, unicode.ToLower(r))
 		inSpace = false
 	}
-	return strings.TrimSpace(b.String())
-}
-
-func runeLen(s string) int {
-	n := 0
-	for range s {
-		n++
+	if n := len(dst); n > start && dst[n-1] == ' ' {
+		dst = dst[:n-1]
 	}
-	return n
+	return dst
 }
 
 // resolveCorpus picks the filesystem to scan and the path of the current
 // file within it. RootFS (the project root) is preferred; otherwise the
 // file's own directory is used. The returned selfName is forward-slash,
-// fs.FS-style so it can be compared to fs.WalkDir's path argument.
+// fs.FS-style so it can be compared to fs.WalkDir's path argument. The
+// returned rootDir is f.RootDir when RootFS is in play, or "" for the
+// FS-only fallback — buildCorpusIndex uses it to form the absolute
+// on-disk path that keys the per-file RunCache memo; an empty rootDir
+// signals "no stable absolute path, skip the RunCache".
 //
 // f.Path may be absolute (CLI runs with a discovered root) or relative
 // to the project root (ResolveFiles returns things like "./docs/a.md").
@@ -269,13 +319,13 @@ func runeLen(s string) int {
 // falls through to the FS scope rather than walking the whole project
 // root behind the user's back. Callers guarantee f.FS != nil before
 // invoking this.
-func resolveCorpus(f *lint.File) (fs.FS, string) {
+func resolveCorpus(f *lint.File) (corpus fs.FS, selfName string, rootDir string) {
 	if f.RootFS != nil && f.RootDir != "" {
 		if selfName, ok := rootRelative(f.RootDir, f.Path); ok {
-			return f.RootFS, selfName
+			return f.RootFS, selfName, f.RootDir
 		}
 	}
-	return f.FS, filepath.Base(f.Path)
+	return f.FS, filepath.Base(f.Path), ""
 }
 
 // rootRelative returns path expressed relative to rootDir using forward
@@ -310,46 +360,157 @@ func rootRelative(rootDir, path string) (string, bool) {
 	return slash, true
 }
 
-// buildCorpusIndex walks corpus for .md files (excluding selfName) and
-// returns a map from paragraph fingerprint to every occurrence found.
-// Files that can't be read or parsed are silently skipped — this rule is
-// advisory and should never fail a run because a sibling file is
-// malformed or oversize.
-func buildCorpusIndex(
-	corpus fs.FS,
-	selfName string,
-	maxBytes int64,
-	minChars int,
-	stripFrontMatter bool,
-	include, exclude []string,
-) map[string][]externalMatch {
-	index := make(map[string][]externalMatch)
-	_ = fs.WalkDir(corpus, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			return walkDirDecision(path, exclude)
-		}
-		indexFileIfEligible(
-			index, corpus, path, selfName,
-			maxBytes, minChars, stripFrontMatter,
-			include, exclude,
-		)
-		return nil
-	})
+// corpusScanConfig bundles the settings buildCorpusIndex and
+// candidateParagraphs all need to walk one corpus. Building it once
+// in Check instead of re-threading each setting as its own
+// positional parameter keeps a future setting addition (RunCache and
+// keySuffix were both added this way) from growing an already-long
+// parameter list further.
+//
+// It deliberately carries no host-file-specific field (no selfName):
+// buildCorpusIndex's result is shared and cached across every host
+// file scanning the same corpus signature, so it must not depend on
+// which file is asking. Excluding the asking file's own entries from
+// the corpus is Check's job, applied to the shared result.
+type corpusScanConfig struct {
+	runCache *lint.RunCache
+	corpus   fs.FS
+	// rootDir is the absolute on-disk directory corpus is rooted at,
+	// or "" for the FS-only fallback (no stable absolute path) —
+	// candidateParagraphs skips the RunCache in that case.
+	rootDir  string
+	maxBytes int64
+	minChars int
+	// keySuffix is "\x00"+minChars, built once per Check call since
+	// minChars is fixed for the whole corpus walk.
+	keySuffix        string
+	stripFrontMatter bool
+	include, exclude []string
+}
 
-	// Sort each fingerprint's matches so diagnostics are deterministic.
-	for fp, matches := range index {
-		sort.Slice(matches, func(i, j int) bool {
-			if matches[i].path != matches[j].path {
-				return matches[i].path < matches[j].path
-			}
-			return matches[i].line < matches[j].line
-		})
-		index[fp] = matches
+// buildCorpusIndex resolves cfg's corpus file list (via corpusFiles)
+// and returns a map from paragraph fingerprint to every occurrence
+// found across every corpus file. It does NOT exclude the asking host
+// file's own entries — Check does that, after the call, using its own
+// selfName. The result is shared (via cfg.runCache.CorpusIndex) across
+// every host file that scans an identical corpus signature, and the
+// corpus signature does not include which file is asking, so an
+// exclusion baked in here would only be correct for whichever host
+// file happened to trigger the first build; every other host file
+// sharing the cache would see a stale exclusion (RunCache.CorpusIndex
+// caught this on review; TestCheck_SelfExclusionSurvivesSharedRunCache
+// pins it).
+//
+// Files that can't be read or parsed are silently skipped — this rule
+// is advisory and should never fail a run because a sibling file is
+// malformed or oversize.
+//
+// cfg.runCache and cfg.rootDir let candidateParagraphs memoize each
+// sibling's fingerprinted paragraphs on the engine's RunCache: a
+// workspace of N files enabling MDS037 otherwise re-reads and
+// re-parses every sibling from scratch on every host file's Check, an
+// O(N^2) cost across the run.
+//
+// The aggregation itself — allocating the map and populating it from
+// every corpus file's (already-memoized) paragraphs, then sorting
+// each fingerprint's matches — is memoized on cfg.runCache.CorpusIndex
+// too: without it, that O(N)-sized rebuild still ran once per host
+// file, an O(N^2) cost even though every leaf read was already
+// cached. See docs/development/high-performance-go.md, "Memoize
+// per-input computations".
+func buildCorpusIndex(cfg corpusScanConfig) map[string][]externalMatch {
+	build := func() map[string][]externalMatch {
+		index := make(map[string][]externalMatch)
+		for _, path := range corpusFiles(cfg) {
+			indexFile(index, cfg, path)
+		}
+
+		// Sort each fingerprint's matches so diagnostics are
+		// deterministic. slices.SortFunc sorts the concrete
+		// externalMatch values directly, unlike sort.Slice, which
+		// drives reflect.Swapper under the hood — see
+		// docs/development/high-performance-go.md's "reflect in hot
+		// paths" anti-pattern.
+		for fp, matches := range index {
+			slices.SortFunc(matches, func(a, b externalMatch) int {
+				if a.path != b.path {
+					return strings.Compare(a.path, b.path)
+				}
+				return a.line - b.line
+			})
+			index[fp] = matches
+		}
+		return index
 	}
+	if cfg.runCache == nil || cfg.rootDir == "" {
+		return build()
+	}
+	v := cfg.runCache.CorpusIndex(corpusFilesKey(cfg)+cfg.keySuffix, func() any { return build() })
+	index, _ := v.(map[string][]externalMatch)
 	return index
+}
+
+// corpusFiles resolves the corpus's eligible Markdown paths (matching
+// mdpath.IsMarkdownPath and cfg.include/cfg.exclude, honoring the same
+// directory-skip rules as before), memoized on cfg.runCache.GlobMatches
+// — the same tree-shape-only cache the catalog rule and the wikilink
+// index use. The result depends only on which files exist plus the
+// rule's include/exclude settings, never on file content, so a host
+// file's own edit cannot stale it; only a create/delete/rename can,
+// and the engine already calls RunCache.InvalidateGlobMatches on
+// those. Without cfg.runCache or cfg.rootDir (in-memory FS, no stable
+// absolute path) every call walks the tree directly.
+func corpusFiles(cfg corpusScanConfig) []string {
+	build := func() []string {
+		var files []string
+		_ = fs.WalkDir(cfg.corpus, ".", func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				return walkDirDecision(path, cfg.exclude)
+			}
+			if !mdpath.IsMarkdownPath(path) || !matchesFilters(path, cfg.include, cfg.exclude) {
+				return nil
+			}
+			files = append(files, path)
+			return nil
+		})
+		return files
+	}
+	if cfg.runCache == nil || cfg.rootDir == "" {
+		return build()
+	}
+	return cfg.runCache.GlobMatches(corpusFilesKey(cfg), build)
+}
+
+// corpusFilesKey builds corpusFiles' RunCache key from cfg.rootDir
+// plus cfg.include/cfg.exclude — the settings corpusFiles' build
+// closure actually reads. minChars is deliberately excluded: it
+// affects which paragraphs within a file qualify (candidateParagraphs'
+// own key already covers that), not which files the corpus walk
+// visits. Each pattern is length-prefixed so a boundary can never be
+// ambiguous between adjacent patterns, mirroring the catalog rule's
+// globMatchesKey.
+func corpusFilesKey(cfg corpusScanConfig) string {
+	var key strings.Builder
+	key.Grow(64)
+	writeKeyPart := func(s string) {
+		key.WriteString(strconv.Itoa(len(s)))
+		key.WriteByte(':')
+		key.WriteString(s)
+	}
+	key.WriteString("duplicatedcontent-corpus\x00")
+	writeKeyPart(cfg.rootDir)
+	key.WriteString(strconv.Itoa(len(cfg.include)))
+	for _, p := range cfg.include {
+		writeKeyPart(p)
+	}
+	key.WriteString(strconv.Itoa(len(cfg.exclude)))
+	for _, p := range cfg.exclude {
+		writeKeyPart(p)
+	}
+	return key.String()
 }
 
 // walkDirDecision returns the fs.WalkDirFunc verdict for a directory:
@@ -373,47 +534,58 @@ func walkDirDecision(p string, exclude []string) error {
 	return nil
 }
 
-// indexFileIfEligible parses a sibling Markdown file and appends every
-// paragraph fingerprint it contains into index. Files that are not
-// Markdown, match the current file, fail include/exclude, are
-// unreadable, or unparseable are silently dropped — this rule is
-// advisory and must not fail a run because of a sibling.
-func indexFileIfEligible(
-	index map[string][]externalMatch,
-	corpus fs.FS,
-	path, selfName string,
-	maxBytes int64,
-	minChars int,
-	stripFrontMatter bool,
-	include, exclude []string,
-) {
-	if !isMarkdownPath(path) || path == selfName {
-		return
-	}
-	if !matchesFilters(path, include, exclude) {
-		return
-	}
-	data, err := bytelimit.ReadFSFileLimited(corpus, path, maxBytes)
-	if err != nil {
-		return
-	}
-	// NewFileFromSource cannot fail for in-memory bytes that came
-	// out of ReadFSFileLimited successfully; goldmark's parser does
-	// not error on any input. The error return is kept in the
-	// signature for future-proofing but is dead here.
-	other, _ := lint.NewFileFromSource(path, data, stripFrontMatter) //nolint:errcheck
-	for _, p := range extractParagraphs(other, minChars) {
+// indexFile appends every paragraph fingerprint a corpus file
+// contains into index. corpusFiles has already applied
+// IsMarkdownPath and include/exclude filtering, so every path this
+// is called with belongs in the aggregate — including whichever
+// file will later ask about it as the host (Check excludes the
+// asking file's own entries after the call, not here; see
+// buildCorpusIndex). Unreadable or unparseable files are silently
+// dropped — this rule is advisory and must not fail a run because of
+// a sibling.
+func indexFile(index map[string][]externalMatch, cfg corpusScanConfig, path string) {
+	for _, p := range candidateParagraphs(cfg, path) {
 		index[p.fingerprint] = append(index[p.fingerprint], externalMatch{
 			path: path,
-			line: p.line + other.LineOffset,
+			line: p.line,
 		})
 	}
 }
 
-func isMarkdownPath(p string) bool {
-	lower := strings.ToLower(p)
-	return strings.HasSuffix(lower, ".md") ||
-		strings.HasSuffix(lower, ".markdown")
+// candidateParagraphs returns a corpus candidate's fingerprinted
+// paragraphs, adjusted for its own front-matter line offset. When
+// cfg.runCache and cfg.rootDir are both available, the result is
+// memoized on the RunCache keyed by the candidate's absolute on-disk
+// path plus cfg.keySuffix (built from minChars, the one rule setting
+// that can vary per file kind and therefore change which paragraphs
+// qualify) — RunCache.Invalidate evicts by the absPath prefix, so an
+// LSP document edit still refreshes the right slot. Without a stable
+// absolute path (in-memory FS, or no RunCache at all), every call
+// reads and re-parses the file directly.
+func candidateParagraphs(cfg corpusScanConfig, path string) []paragraph {
+	build := func() []paragraph {
+		data, err := bytelimit.ReadFSFileLimited(cfg.corpus, path, cfg.maxBytes)
+		if err != nil {
+			return nil
+		}
+		// NewFileFromSource cannot fail for in-memory bytes that came
+		// out of ReadFSFileLimited successfully; goldmark's parser
+		// does not error on any input. The error return is kept in
+		// the signature for future-proofing but is dead here.
+		other, _ := lint.NewFileFromSource(path, data, cfg.stripFrontMatter) //nolint:errcheck
+		paragraphs := extractParagraphs(other, cfg.minChars)
+		for i := range paragraphs {
+			paragraphs[i].line += other.LineOffset
+		}
+		return paragraphs
+	}
+	if cfg.runCache == nil || cfg.rootDir == "" {
+		return build()
+	}
+	absPath := filepath.Join(cfg.rootDir, filepath.FromSlash(path))
+	v := cfg.runCache.DuplicateParagraphs(absPath+cfg.keySuffix, func() any { return build() })
+	paragraphs, _ := v.([]paragraph)
+	return paragraphs
 }
 
 // shouldSkipDir reports whether a directory path matches one of the

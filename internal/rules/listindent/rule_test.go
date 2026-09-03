@@ -1,6 +1,7 @@
 package listindent
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -97,7 +98,7 @@ func TestFix_NoChange(t *testing.T) {
 	require.NoError(t, err)
 	r := &Rule{Spaces: 2}
 	result := r.Fix(f)
-	if string(result) != string(src) {
+	if !bytes.Equal(result, src) {
 		t.Errorf("expected no change, got %q", string(result))
 	}
 }
@@ -159,6 +160,16 @@ func TestCategory(t *testing.T) {
 	if r.Category() == "" {
 		t.Error("expected non-empty category")
 	}
+}
+
+func TestID(t *testing.T) {
+	r := &Rule{}
+	assert.Equal(t, "MDS016", r.ID())
+}
+
+func TestName(t *testing.T) {
+	r := &Rule{}
+	assert.Equal(t, "list-indent", r.Name())
 }
 
 // TestFirstLineOfListItem_LinesPath pins the
@@ -227,4 +238,29 @@ func TestFix_EmptyNestedListItem_NoAdjustment(t *testing.T) {
 	f.AST = doc
 	got := (&Rule{Spaces: 2}).Fix(f)
 	assert.Equal(t, src, got, "empty nested ListItem must hit the Fix bounds guard")
+}
+
+// TestCheck_NilASTMatchesAST pins the nil-AST path: Check on a parse-
+// skipped File (f.AST nil) must produce byte-identical diagnostics to the
+// AST path, including nested lists, a loose list, and a list holding a
+// code fence.
+func TestCheck_NilASTMatchesAST(t *testing.T) {
+	srcs := [][]byte{
+		[]byte("# Title\n\n- item one\n    - nested item\n"),
+		[]byte("- a\n  - b\n    - c\n"),
+		[]byte("- a\n\n- b\n  - nested\n"),
+		[]byte("- item\n  ```\n  code\n  ```\n  - nested after code\n"),
+		[]byte("- one\n   - over-indented\n- two\n"),
+		[]byte("1. a\n   1. nested\n   2. nested2\n2. b\n"),
+		[]byte("- outer\n  - inner ok\n- back\n"),
+		[]byte("text\n- a\n- b\n"),
+	}
+	for _, src := range srcs {
+		astFile, err := lint.NewFile("f.md", src)
+		require.NoError(t, err)
+		astDiags := (&Rule{Spaces: 2}).Check(astFile)
+		l0Diags := (&Rule{Spaces: 2}).Check(lint.NewFileLines("f.md", src))
+		assert.Equal(t, astDiags, l0Diags,
+			"nil-AST diagnostics must match AST for %q", string(src))
+	}
 }

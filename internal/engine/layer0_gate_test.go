@@ -3,6 +3,7 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -68,16 +69,77 @@ func TestLayer0Gate_SkipsParseForLayer0OnlyConfig(t *testing.T) {
 	assert.True(t, probe.sawNilAST, "expected the parse to be skipped (nil AST)")
 }
 
-// TestLayer0Gate_ParsesWhenAnASTRuleIsEnabled confirms the gate stands
-// down when any enabled rule needs the AST: line-length (MDS001) is
-// AST-requiring, so the File must carry a parsed tree.
-func TestLayer0Gate_ParsesWhenAnASTRuleIsEnabled(t *testing.T) {
+// TestLayer0Gate_LineCapableRuleSkipsParse proves the gate unification
+// (plan 2606171400): line-length (MDS001) is not in the static rulelayer
+// Layer-0 set, but with no per-heading limit it reports rule.LineCapable,
+// so it lints from f.Lines via the ClassifyLines projection the skip File
+// carries. The gate must therefore skip the parse for a line-capable rule,
+// where the static-only gate forced it.
+func TestLayer0Gate_LineCapableRuleSkipsParse(t *testing.T) {
 	withLayer0Skip(t, true)
 	dir, path := writeDoc(t, "# Title\n\nbody\n")
 
 	probe := &astProbeRule{}
 	cfg := layer0OnlyConfig()
 	cfg.Rules["line-length"] = config.RuleCfg{Enabled: true}
+	cfg.Rules[probe.Name()] = config.RuleCfg{Enabled: true}
+
+	r := &Runner{
+		Config:           cfg,
+		Rules:            append(rule.All(), probe),
+		StripFrontMatter: true,
+		RootDir:          dir,
+	}
+	res := r.Run([]string{path})
+	require.Empty(t, res.Errors)
+	assert.True(t, probe.sawNilAST,
+		"line-capable rule (line-length, no heading limit) must skip the parse")
+}
+
+// TestLayer0Gate_LineCapableDiagnosticsMatchFullParse is the equivalence
+// guarantee for the unification: a config that adds the line-capable
+// line-length rule produces identical diagnostics with the gate on (nil
+// AST, ClassifyLines) and off (full parse). The fixture has an over-length
+// line so line-length actually fires on both paths.
+func TestLayer0Gate_LineCapableDiagnosticsMatchFullParse(t *testing.T) {
+	longLine := "This is a deliberately long prose line that exceeds the default eighty column line-length budget.\n"
+	dir, path := writeDoc(t, "# Title\n\n"+longLine)
+	cfg := layer0OnlyConfig()
+	cfg.Rules["line-length"] = config.RuleCfg{Enabled: true}
+
+	run := func(skip bool) []lint.Diagnostic {
+		withLayer0Skip(t, skip)
+		r := &Runner{
+			Config:           cfg,
+			Rules:            rule.All(),
+			StripFrontMatter: true,
+			RootDir:          dir,
+		}
+		return r.Run([]string{path}).Diagnostics
+	}
+
+	skipped := run(true)
+	parsed := run(false)
+	require.NotEmpty(t, parsed, "line-length must fire so the comparison is not vacuous")
+	assert.Equal(t, parsed, skipped,
+		"line-capable parse-skip must match the full parse")
+}
+
+// TestLayer0Gate_ParsesWhenAnASTRuleIsEnabled confirms the gate stands
+// down when any enabled rule needs the AST: line-length WITH a per-heading
+// limit is not line-capable (it must walk headings), so the File must carry
+// a parsed tree. (Plain line-length, with no heading limit, is line-capable
+// and skips — see TestLayer0Gate_LineCapableRuleSkipsParse.)
+func TestLayer0Gate_ParsesWhenAnASTRuleIsEnabled(t *testing.T) {
+	withLayer0Skip(t, true)
+	dir, path := writeDoc(t, "# Title\n\nbody\n")
+
+	probe := &astProbeRule{}
+	cfg := layer0OnlyConfig()
+	cfg.Rules["line-length"] = config.RuleCfg{
+		Enabled:  true,
+		Settings: map[string]any{"heading-max": 60},
+	}
 	cfg.Rules[probe.Name()] = config.RuleCfg{Enabled: true}
 
 	r := &Runner{
@@ -161,12 +223,14 @@ func TestLayer0Gate_DiagnosticsMatchFullParse(t *testing.T) {
 		"Layer 0 parse-skip must produce identical diagnostics to a full parse")
 }
 
-// TestLayer0Gate_CodeBlockForcesParse proves the SourceMayHaveCodeBlock
-// guard: the Layer 0 scanner does not descend into a list item's content, so
-// a file that may hold a code block (here a hard tab — also a fence or a
-// four-space indent) forces the full parse rather than risk a CodeBlockLines
-// divergence, even when every enabled rule is otherwise Layer 0.
-func TestLayer0Gate_CodeBlockForcesParse(t *testing.T) {
+// TestLayer0Gate_CodeBlockSkipsParse proves the parse-skip now engages on
+// code-bearing files. The old SourceMayHaveCodeBlock guard bailed on any
+// code marker (here a hard tab — also a fence or a four-space indent) to
+// avoid a CodeBlockLines divergence; the skip File now carries the flat
+// ClassifyLines projection (gated byte-identical to the AST on code-bearing
+// corpus files), so a code marker no longer forces the parse when every
+// enabled rule is Layer 0.
+func TestLayer0Gate_CodeBlockSkipsParse(t *testing.T) {
 	withLayer0Skip(t, true)
 	dir, path := writeDoc(t, "# Title\n\nA line with a hard\ttab.\n")
 
@@ -182,17 +246,106 @@ func TestLayer0Gate_CodeBlockForcesParse(t *testing.T) {
 	}
 	res := r.Run([]string{path})
 	require.Empty(t, res.Errors)
-	assert.False(t, probe.sawNilAST,
-		"a source that may hold a code block must keep the AST parse")
+	assert.True(t, probe.sawNilAST,
+		"a code-bearing source with only Layer 0 rules must skip the parse")
 }
 
-// TestLayer0Gate_CodeSpanRuleForcesParse guards the soundness fix for the
-// inline-code-span gap: MDS054 (no-undefined-reference-labels) is
-// "A-no-skipping" in the AST-dependence audit but reads code-span ranges
-// that go empty without a parse, so it must force the parse even though it
-// never crashes on a nil AST. Without the parse it would emit a false
-// positive for `[ref]` inside a backtick span.
-func TestLayer0Gate_CodeSpanRuleForcesParse(t *testing.T) {
+// TestLayer0Gate_BlockQuoteForcesParse proves the SourceMayHaveBlockQuote
+// guard: the Layer 0 scanner collapses a block quote into a single
+// BlockQuote span and never emits the heading/fenced-code spans block-kind
+// rules react to for quote-nested content, so a quote-nested heading would
+// be missed on the parse-skip path. A file that may hold a block quote
+// (here `> # Quoted heading`) must force the full parse, even when every
+// enabled rule is otherwise Layer 0.
+func TestLayer0Gate_BlockQuoteForcesParse(t *testing.T) {
+	withLayer0Skip(t, true)
+	dir, path := writeDoc(t, "# Title\n\n> # Quoted heading\n")
+
+	probe := &astProbeRule{}
+	cfg := layer0OnlyConfig()
+	cfg.Rules["heading-style"] = config.RuleCfg{Enabled: true}
+	cfg.Rules[probe.Name()] = config.RuleCfg{Enabled: true}
+
+	r := &Runner{
+		Config:           cfg,
+		Rules:            append(rule.All(), probe),
+		StripFrontMatter: true,
+		RootDir:          dir,
+	}
+	res := r.Run([]string{path})
+	require.Empty(t, res.Errors)
+	assert.False(t, probe.sawNilAST,
+		"a source that may hold a block quote must keep the AST parse")
+}
+
+// TestLayer0Gate_ListSkipsParse proves a list-bearing file now takes the
+// parse-skip path (the old SourceMayHaveList guard is gone) and stays
+// byte-identical to the parsed path. The list rules re-derive list structure
+// from f.Lines via listscan (rule.LinesChecker routes them to Check on the
+// nil-AST File), and a heading nested in a list item at a <4-space indent is
+// still recorded by the block scan, so MDS002's setext check fires on the
+// skip path exactly as it does on the AST path.
+func TestLayer0Gate_ListSkipsParse(t *testing.T) {
+	// A list, plus a list-nested ATX heading that violates setext style.
+	dir, path := writeDoc(t, "- item\n- item two\n\n  # Nested ATX heading\n")
+
+	cfg := layer0OnlyConfig()
+	cfg.Rules["heading-style"] = config.RuleCfg{Enabled: true, Settings: map[string]any{"style": "setext"}}
+	cfg.Rules["list-marker-style"] = config.RuleCfg{Enabled: true, Settings: map[string]any{"style": "asterisk"}}
+
+	runWith := func(skip bool) *Result {
+		probe := &astProbeRule{}
+		c := cfg
+		c.Rules[probe.Name()] = config.RuleCfg{Enabled: true}
+		withLayer0Skip(t, skip)
+		r := &Runner{
+			Config:           c,
+			Rules:            append(rule.All(), probe),
+			StripFrontMatter: true,
+			RootDir:          dir,
+		}
+		res := r.Run([]string{path})
+		require.Empty(t, res.Errors)
+		if skip {
+			assert.True(t, probe.sawNilAST,
+				"a list-only-rule config must now skip the parse on a list file")
+		}
+		return res
+	}
+
+	skipped := runWith(true)
+	parsed := runWith(false)
+	// Both the list-marker verdict and the nested-heading verdict must appear,
+	// identically, on the parse-skipped and the parsed path.
+	assert.NotEmpty(t, skipped.Diagnostics)
+	assert.Equal(t, diagTriples(parsed.Diagnostics), diagTriples(skipped.Diagnostics),
+		"parse-skip diagnostics on a list file must match the full parse")
+}
+
+// diagTriples reduces diagnostics to comparable (line, col, rule, message)
+// tuples for the list-file equivalence assertion.
+func diagTriples(diags []lint.Diagnostic) [][4]string {
+	out := make([][4]string, 0, len(diags))
+	for _, d := range diags {
+		out = append(out, [4]string{
+			fmtInt(d.Line), fmtInt(d.Column), d.RuleID, d.Message,
+		})
+	}
+	return out
+}
+
+func fmtInt(n int) string { return strconv.Itoa(n) }
+
+// TestLayer0Gate_CodeSpanRuleSkipsParse proves the Layer 1 code-span fix
+// closed the old code-span soundness gap: MDS054
+// (no-undefined-reference-labels) is "A-no-skipping" and reads code-span
+// ranges. Those ranges used to go empty without a parse, so the rule was
+// forced to AST; the shared run-grouped inline parse (lint.InlineBlocks) now
+// reproduces them on the nil-AST path, so the rule resolves to Layer 0 and
+// skips the whole-document parse. The `[undefined]` bracket text sits inside
+// a code span, which that parse identifies, so the parse-skipped run reports
+// nothing — byte-identical to the full-parse run.
+func TestLayer0Gate_CodeSpanRuleSkipsParse(t *testing.T) {
 	withLayer0Skip(t, true)
 	dir, path := writeDoc(t, "# T\n\nUse `[undefined]` inline.\n")
 
@@ -209,9 +362,10 @@ func TestLayer0Gate_CodeSpanRuleForcesParse(t *testing.T) {
 	}
 	res := r.Run([]string{path})
 	require.Empty(t, res.Errors)
-	assert.False(t, probe.sawNilAST,
-		"a code-span-consuming rule must keep the AST parse")
-	// The bracket text sits inside a code span, so neither path reports it.
+	assert.True(t, probe.sawNilAST,
+		"a code-span-consuming rule backed by the inline index must skip the parse")
+	// The bracket text sits inside a code span the inline index identifies,
+	// so neither path reports it.
 	assert.Empty(t, res.Diagnostics)
 }
 

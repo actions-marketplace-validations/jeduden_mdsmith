@@ -1,6 +1,7 @@
 package lint
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -189,6 +190,16 @@ func TestHTMLType6AndClose(t *testing.T) {
 	assert.False(t, containsType1Close([]byte("short")), "shorter than any closer")
 }
 
+func TestContainsFold(t *testing.T) {
+	needle := []byte("</pre>")
+	assert.True(t, containsFold([]byte("</PRE>"), needle), "match at position 0")
+	assert.True(t, containsFold([]byte("x</Pre>y"), needle), "match in middle")
+	assert.True(t, containsFold([]byte("x</PRE>"), needle), "match at last window")
+	assert.False(t, containsFold([]byte("x</em>y"), needle), "no match")
+	assert.False(t, containsFold([]byte("</pr"), needle), "needle longer than line")
+	assert.False(t, containsFold([]byte(""), needle), "empty line")
+}
+
 func TestContainerMarkerScanners(t *testing.T) {
 	assert.Equal(t, 2, blockquoteMarker([]byte("> x")))
 	assert.Equal(t, 1, blockquoteMarker([]byte(">x")), "marker with no following space")
@@ -255,4 +266,213 @@ func TestHTMLType1Start(t *testing.T) {
 	assert.False(t, htmlType1Start([]byte("<prefix>")), "name is a prefix of a longer tag")
 	assert.False(t, htmlType1Start([]byte("<div>")))
 	assert.False(t, htmlType1Start([]byte("<pr")), "shorter than any name")
+}
+
+// TestHTMLType6Tags_ZeroByteValue guards the map's per-entry memory layout:
+// map[string]bool wastes 1 byte per value (× ~63 entries); struct{} wastes 0.
+// An alloc test cannot distinguish the two because the Go compiler's
+// m[string(b)] optimization applies to both value types equally.
+func TestHTMLType6Tags_ZeroByteValue(t *testing.T) {
+	vt := reflect.TypeOf(htmlType6Tags).Elem()
+	if vt.Size() != 0 {
+		t.Fatalf("htmlType6Tags value type %s has size %d bytes, want 0 (use map[string]struct{})", vt, vt.Size())
+	}
+}
+
+// TestHTMLType6Tags_CommonMarkComplete verifies that htmlType6Tags contains the
+// complete CommonMark spec type-6 block tag list. The full enumeration here
+// prevents silent omissions: the map has three independent copies in the
+// codebase and any copy can drift without a full-list gate.
+func TestHTMLType6Tags_CommonMarkComplete(t *testing.T) {
+	// Full CommonMark 0.31.2 type-6 block tag set.
+	want := []string{
+		"address", "article", "aside", "base", "basefont", "blockquote",
+		"body", "caption", "center", "col", "colgroup", "dd", "details",
+		"dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption",
+		"figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3",
+		"h4", "h5", "h6", "head", "header", "hr", "html", "iframe",
+		"legend", "li", "link", "main", "menu", "menuitem", "meta", "nav",
+		"noframes", "ol", "optgroup", "option", "p", "param", "search",
+		"section", "summary", "table", "tbody", "td", "tfoot", "th",
+		"thead", "title", "tr", "track", "ul",
+	}
+	for _, tag := range want {
+		if _, ok := htmlType6Tags[tag]; !ok {
+			t.Errorf("htmlType6Tags missing CommonMark type-6 tag %q", tag)
+		}
+	}
+}
+
+// TestScanHTMLTag pins the dispatch between open and closing tags.
+func TestScanHTMLTag(t *testing.T) {
+	n, ok := scanHTMLTag([]byte("<img>"))
+	assert.True(t, ok)
+	assert.Equal(t, 5, n)
+
+	n, ok = scanHTMLTag([]byte("</div>"))
+	assert.True(t, ok)
+	assert.Equal(t, 6, n)
+
+	// Does not start with '<'.
+	_, ok = scanHTMLTag([]byte("img>"))
+	assert.False(t, ok)
+
+	// Fewer than 3 bytes.
+	_, ok = scanHTMLTag([]byte("<a"))
+	assert.False(t, ok)
+}
+
+// TestScanClosingTag pins the closing-tag scanner.
+func TestScanClosingTag(t *testing.T) {
+	s := []byte("</div>")
+	n, ok := scanClosingTag(s, 2)
+	assert.True(t, ok)
+	assert.Equal(t, 6, n)
+
+	// Optional whitespace before '>'.
+	n, ok = scanClosingTag([]byte("</div >"), 2)
+	assert.True(t, ok)
+	assert.Equal(t, 7, n)
+
+	// Missing '>'.
+	_, ok = scanClosingTag([]byte("</div"), 2)
+	assert.False(t, ok)
+
+	// Name starts with a digit.
+	_, ok = scanClosingTag([]byte("</1tag>"), 2)
+	assert.False(t, ok)
+}
+
+// TestScanOpenTag pins the open-tag scanner: tag name, attributes, self-close.
+func TestScanOpenTag(t *testing.T) {
+	n, ok := scanOpenTag([]byte("<img>"), 1)
+	assert.True(t, ok)
+	assert.Equal(t, 5, n)
+
+	n, ok = scanOpenTag([]byte("<br/>"), 1)
+	assert.True(t, ok)
+	assert.Equal(t, 5, n)
+
+	n, ok = scanOpenTag([]byte("<br />"), 1)
+	assert.True(t, ok)
+	assert.Equal(t, 6, n)
+
+	n, ok = scanOpenTag([]byte(`<img src="x">`), 1)
+	assert.True(t, ok)
+	assert.Equal(t, 13, n)
+
+	// '=' with no value.
+	_, ok = scanOpenTag([]byte("<img src=>"), 1)
+	assert.False(t, ok)
+
+	// No closing '>'.
+	_, ok = scanOpenTag([]byte("<img"), 1)
+	assert.False(t, ok)
+}
+
+// TestScanTagName pins the tag-name scanner.
+func TestScanTagName(t *testing.T) {
+	i, ok := scanTagName([]byte("img>"), 0)
+	assert.True(t, ok)
+	assert.Equal(t, 3, i)
+
+	// Hyphens allowed inside a name.
+	i, ok = scanTagName([]byte("a-b>"), 0)
+	assert.True(t, ok)
+	assert.Equal(t, 3, i)
+
+	// Digit at start → reject.
+	_, ok = scanTagName([]byte("1tag"), 0)
+	assert.False(t, ok)
+
+	// Empty input.
+	_, ok = scanTagName([]byte(""), 0)
+	assert.False(t, ok)
+
+	// Name runs to end of input (no terminator byte).
+	i, ok = scanTagName([]byte("img"), 0)
+	assert.True(t, ok)
+	assert.Equal(t, 3, i)
+}
+
+// TestScanAttribute pins the attribute scanner.
+func TestScanAttribute(t *testing.T) {
+	// Valueless attribute.
+	i, ok := scanAttribute([]byte(" disabled>"), 0)
+	assert.True(t, ok)
+	assert.Equal(t, 9, i)
+
+	// Unquoted value.
+	i, ok = scanAttribute([]byte(" src=x>"), 0)
+	assert.True(t, ok)
+	assert.Equal(t, 6, i)
+
+	// Double-quoted value.
+	i, ok = scanAttribute([]byte(` src="x">`), 0)
+	assert.True(t, ok)
+	assert.Equal(t, 8, i)
+
+	// '=' with no value.
+	_, ok = scanAttribute([]byte(" src=>"), 0)
+	assert.False(t, ok)
+
+	// No leading whitespace → reject.
+	_, ok = scanAttribute([]byte("src=x>"), 0)
+	assert.False(t, ok)
+}
+
+// TestScanAttrValue pins the attribute-value scanner.
+func TestScanAttrValue(t *testing.T) {
+	// Unquoted value (stops at '>').
+	i, ok := scanAttrValue([]byte("value>"), 0)
+	assert.True(t, ok)
+	assert.Equal(t, 5, i)
+
+	// Single-quoted.
+	i, ok = scanAttrValue([]byte("'value'"), 0)
+	assert.True(t, ok)
+	assert.Equal(t, 7, i)
+
+	// Double-quoted.
+	i, ok = scanAttrValue([]byte(`"value"`), 0)
+	assert.True(t, ok)
+	assert.Equal(t, 7, i)
+
+	// Unclosed single quote.
+	_, ok = scanAttrValue([]byte("'value"), 0)
+	assert.False(t, ok)
+
+	// Empty unquoted value (stop byte at position 0).
+	_, ok = scanAttrValue([]byte(">"), 0)
+	assert.False(t, ok)
+}
+
+// TestSkipHTMLWS pins the whitespace-skipper.
+func TestSkipHTMLWS(t *testing.T) {
+	assert.Equal(t, 2, skipHTMLWS([]byte("  x"), 0))
+	assert.Equal(t, 1, skipHTMLWS([]byte("\tx"), 0))
+	assert.Equal(t, 2, skipHTMLWS([]byte(" \tx"), 0))
+	assert.Equal(t, 0, skipHTMLWS([]byte("x"), 0))
+	assert.Equal(t, 2, skipHTMLWS([]byte("  "), 2))
+}
+
+// TestIsUnquotedStop pins which bytes end an unquoted attribute value.
+func TestIsUnquotedStop(t *testing.T) {
+	for _, b := range []byte{' ', '\t', '"', '\'', '=', '<', '>', '`'} {
+		assert.Truef(t, isUnquotedStop(b), "expected stop for 0x%02x", b)
+	}
+	for _, b := range []byte{'a', '0', '-', '_', '/'} {
+		assert.Falsef(t, isUnquotedStop(b), "expected non-stop for 0x%02x", b)
+	}
+}
+
+// TestEqualFoldASCII pins the case-insensitive ASCII byte comparison.
+// b is always lowercase; a may be any case. Callers always pass same-length
+// slices.
+func TestEqualFoldASCII(t *testing.T) {
+	assert.True(t, equalFoldASCII([]byte("pre"), []byte("pre")))
+	assert.True(t, equalFoldASCII([]byte("PRE"), []byte("pre")))
+	assert.True(t, equalFoldASCII([]byte("ScRiPt"), []byte("script")))
+	assert.False(t, equalFoldASCII([]byte("pre"), []byte("div")))
+	assert.False(t, equalFoldASCII([]byte("foo"), []byte("bar")))
 }

@@ -4,8 +4,9 @@ package propernames
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -21,6 +22,22 @@ func init() {
 
 // Rule reports occurrences of configured proper names that do not match
 // their canonical casing (e.g. "Javascript" when "JavaScript" is configured).
+//
+// The nameEntry form of Names is precomputed once by ApplySettings into
+// the plain entries/entriesReady fields below, rather than lazily
+// memoised behind a mutex/atomic pointer on first Check (the pattern
+// MDS063's cachedBannedSet uses): internal/rule.CloneInstance produces
+// a worker's copy of a rule via a raw, unsynchronized field-by-field
+// copy (reflect.Value.Set), which races the target/source's own field
+// writes if anything can still be writing them concurrently. A
+// lazily-built cache guarded by a mutex or atomic.Pointer is exactly
+// such a field — go test -race catches CloneInstance's copy racing a
+// concurrent Check's first cache build every time. Building entries
+// once, synchronously, inside ApplySettings — which always finishes
+// before any Check or CloneInstance touches the instance — avoids the
+// hazard entirely: entries/entriesReady become plain, write-once,
+// read-only-after-setup fields, exactly as safe for CloneInstance to
+// shallow-copy as Names itself.
 type Rule struct {
 	// Names is the list of proper names with their canonical casing.
 	// The names list appends across config layers so kind layers extend
@@ -31,6 +48,13 @@ type Rule struct {
 	CheckCode bool
 	// CheckHTML enables checking inside raw HTML and HTML blocks.
 	CheckHTML bool
+
+	// entries and entriesReady are set together, once, by ApplySettings.
+	// A Rule built directly (bypassing ApplySettings, as most unit
+	// tests do) leaves entriesReady false; effectiveEntries falls back
+	// to building entries fresh on every call in that case.
+	entries      []nameEntry
+	entriesReady bool
 }
 
 // ID implements rule.Rule.
@@ -38,6 +62,12 @@ func (r *Rule) ID() string { return "MDS050" }
 
 // Name implements rule.Rule.
 func (r *Rule) Name() string { return "proper-names" }
+
+// WordlistTarget implements rule.WordlistConsumer: resolved `lists:`
+// entries union into this rule's "names" setting.
+func (r *Rule) WordlistTarget() string { return "names" }
+
+var _ rule.WordlistConsumer = (*Rule)(nil)
 
 // Category implements rule.Rule.
 func (r *Rule) Category() string { return "prose" }
@@ -66,11 +96,15 @@ func asciiToLower(b []byte) []byte {
 	return out
 }
 
-// wrongMatch holds one wrong-cased occurrence.
+// wrongMatch holds one wrong-cased occurrence. name is ordered first:
+// it is the struct's only pointer-bearing field, and grouping pointer
+// fields first keeps the GC's per-word ptrdata scan region to one word
+// instead of spanning through the trailing scalars
+// (docs/development/high-performance-go.md#struct-layout).
 type wrongMatch struct {
+	name   string
 	start  int // byte offset in f.Source
 	length int
-	name   string
 }
 
 // nameEntry holds the precomputed byte representations of one configured name.
@@ -79,6 +113,17 @@ type nameEntry struct {
 	canonical []byte // original spelling, e.g. []byte("JavaScript")
 	lower     []byte // ASCII-lowercased, e.g. []byte("javascript")
 	str       string // canonical as string, used in diagnostics
+}
+
+// effectiveEntries returns the nameEntry form of r.Names: the
+// precomputed entries field when ApplySettings has run, or a freshly
+// built one otherwise (a directly-constructed *Rule, as most unit
+// tests use).
+func (r *Rule) effectiveEntries() []nameEntry {
+	if r.entriesReady {
+		return r.entries
+	}
+	return r.buildNameEntries()
 }
 
 // buildNameEntries precomputes nameEntry values for all configured names.
@@ -181,9 +226,11 @@ func scanRawHTMLSegments(entries []nameEntry, v *ast.RawHTML, f *lint.File, acc 
 }
 
 // collectMatches walks the AST and gathers all wrong-cased matches.
-// nameEntry values are precomputed once here and reused across all segments.
+// nameEntry values are precomputed once per rule instance
+// (effectiveEntries) and reused across all segments and all files
+// that instance checks.
 func (r *Rule) collectMatches(f *lint.File) []wrongMatch {
-	entries := r.buildNameEntries()
+	entries := r.effectiveEntries()
 	if len(entries) == 0 {
 		return nil
 	}
@@ -233,11 +280,15 @@ func (r *Rule) collectMatches(f *lint.File) []wrongMatch {
 // at each offset. Both Check and Fix call this so they agree on which
 // occurrences constitute a single diagnostic/replacement.
 func normalizeMatches(matches []wrongMatch) []wrongMatch {
-	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].start != matches[j].start {
-			return matches[i].start < matches[j].start
+	// slices.SortFunc sorts the concrete wrongMatch values directly,
+	// unlike sort.Slice, which drives reflect.Swapper under the hood —
+	// see docs/development/high-performance-go.md's "reflect in hot
+	// paths" anti-pattern.
+	slices.SortFunc(matches, func(a, b wrongMatch) int {
+		if a.start != b.start {
+			return cmp.Compare(a.start, b.start)
 		}
-		return matches[i].length > matches[j].length
+		return cmp.Compare(b.length, a.length)
 	})
 	out := matches[:0]
 	prev := 0
@@ -251,9 +302,87 @@ func normalizeMatches(matches []wrongMatch) []wrongMatch {
 	return out
 }
 
-// Check implements rule.Rule.
+// collectMatchesInline gathers wrong-cased matches on the parse-skipped path
+// (f.AST nil) for the default configuration, where neither code spans, code
+// blocks, nor HTML is scanned. It walks the shared run-grouped inline parse
+// (lint.InlineBlocks) and applies the same Text / AutoLink switch collectMatches
+// applies on the tree, mapping each run-local segment offset back to the
+// document with the run base. CodeSpan and RawHTML subtrees are skipped (their
+// content is only scanned under check-code / check-html, which take the
+// re-parse path in Check), and code / HTML blocks carry no inline markup so
+// they never appear in the runs — so this reproduces the AST walk's match set
+// for the no-code, no-HTML case.
+func (r *Rule) collectMatchesInline(f *lint.File) []wrongMatch {
+	entries := r.effectiveEntries()
+	if len(entries) == 0 {
+		return nil
+	}
+	var all []wrongMatch
+	for _, blk := range lint.InlineBlocks(f) {
+		base := blk.Offset
+		_ = ast.Walk(blk.Node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+			if !entering {
+				return ast.WalkContinue, nil
+			}
+			switch v := n.(type) {
+			case *ast.AutoLink, *ast.CodeSpan, *ast.RawHTML:
+				// AutoLink URLs are never scanned; CodeSpan / RawHTML content is
+				// only scanned under check-code / check-html, which Check routes
+				// to the re-parse path. Skip their subtrees, matching the AST
+				// walk's WalkSkipChildren for these nodes when the toggles are off.
+				_ = v
+				return ast.WalkSkipChildren, nil
+			case *ast.Text:
+				all = scanTextSegmentBase(entries, v.Segment, f, base, all)
+			}
+			return ast.WalkContinue, nil
+		})
+	}
+	return all
+}
+
+// scanTextSegmentBase scans one run-local text segment at document position
+// base+seg.Start, appending matches to acc.
+func scanTextSegmentBase(entries []nameEntry, seg text.Segment, f *lint.File, base int, acc []wrongMatch) []wrongMatch {
+	abs := base + seg.Start
+	return append(acc, scanBytes(entries, f.Source[abs:base+seg.Stop], abs, f.Source)...)
+}
+
+// reparsed returns an AST-bearing File over the same source bytes as f, for the
+// check-code / check-html path on a parse-skipped File. collectMatches reads
+// only AST, Source, and Path, and every wrongMatch offset indexes Source — so a
+// File parsed from f.Source yields matches whose offsets are valid in the
+// original f's identical Source, which Check uses for the diagnostic positions.
+// On a parse error (f.Source already parsed once upstream, so this is not
+// expected) it returns f unchanged, leaving the nil-AST path to yield nothing.
+func reparsed(f *lint.File) *lint.File {
+	rf, _ := lint.NewFile(f.Path, f.Source) // never errors on already-parsed source
+	return rf
+}
+
+// Check implements rule.Rule. On the parse-skipped path (f.AST nil) the
+// default configuration gathers its match set from the shared run-grouped
+// inline parse (collectMatchesInline), byte-identical to the AST walk over
+// prose. When check-code or check-html is enabled the rule must also scan
+// code-block, code-span, and HTML content, whose exact byte offsets follow
+// goldmark's tab-aware indent stripping; rather than re-derive that offset
+// math from the Layer 0 line scan, the rule re-parses the document once and
+// reuses the AST collectMatches, so the opt-in path is byte-identical by
+// construction. MDS050 now resolves to Layer 0 (a nil-AST-safe B-prose-only
+// rule), so when it is enabled and the engine skips the shared parse this
+// branch is reached in production; the one-shot reparse keeps it
+// byte-identical to the shared-AST path (TestCheck_NilASTMatchesAST covers
+// the check-code and check-html cases).
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
-	matches := normalizeMatches(r.collectMatches(f))
+	var matches []wrongMatch
+	switch {
+	case f != nil && f.AST == nil && (r.CheckCode || r.CheckHTML):
+		matches = normalizeMatches(r.collectMatches(reparsed(f)))
+	case f != nil && f.AST == nil:
+		matches = normalizeMatches(r.collectMatchesInline(f))
+	default:
+		matches = normalizeMatches(r.collectMatches(f))
+	}
 	if len(matches) == 0 {
 		return nil
 	}
@@ -309,6 +438,12 @@ func (r *Rule) ApplySettings(s map[string]any) error {
 				return fmt.Errorf("proper-names: names must be a list of strings, got %T", v)
 			}
 			r.Names = names
+			// Rebuild entries immediately, in lockstep with r.Names, so
+			// a later key failing this same ApplySettings call (map
+			// iteration order is unspecified) can never leave entries
+			// stale relative to the Names this call already committed.
+			r.entries = r.buildNameEntries()
+			r.entriesReady = true
 		case "check-code":
 			b, ok := v.(bool)
 			if !ok {

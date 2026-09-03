@@ -2,8 +2,10 @@ package noinlinehtml
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/jeduden/mdsmith/pkg/goldmark/ast"
@@ -11,6 +13,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
 	rulesettings "github.com/jeduden/mdsmith/internal/rules/settings"
+	"github.com/jeduden/mdsmith/internal/setutil"
 )
 
 func init() {
@@ -41,6 +44,12 @@ func (r *Rule) ID() string { return "MDS041" }
 
 // Name implements rule.Rule.
 func (r *Rule) Name() string { return "no-inline-html" }
+
+// WordlistTarget implements rule.WordlistConsumer: resolved `lists:`
+// entries union into this rule's "allow" setting.
+func (r *Rule) WordlistTarget() string { return "allow" }
+
+var _ rule.WordlistConsumer = (*Rule)(nil)
 
 // Category implements rule.Rule.
 func (r *Rule) Category() string { return "structural" }
@@ -83,8 +92,90 @@ func (r *Rule) ApplySettings(settings map[string]any) error {
 // stateless, so it is expressed as CheckNode and the engine can fold
 // this rule into one shared AST walk; a direct call still works via
 // rule.WalkNodes.
+//
+// On the parse-skipped path (f.AST nil) the rule serves both HTML shapes
+// from the Layer 0 projections: inline RawHTML from the shared run-grouped
+// inline parse (lint.InlineBlocks, which excludes HTML-block lines from its
+// runs), and HTML blocks from the Layer 0 BlockHTML spans. Together these
+// reconstruct the same diagnostics the AST walk produces for an HTMLBlock
+// and a RawHTML node, byte-identical by construction.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
+	if f != nil && f.AST == nil {
+		return r.checkFromLayers(f)
+	}
 	return rule.WalkNodes(r, f)
+}
+
+// InlineCapable implements rule.InlineChecker: Check serves the nil-AST path
+// from the Layer 0 inline parse (lint.InlineBlocks) and block scan.
+func (r *Rule) InlineCapable() bool { return true }
+
+var _ rule.InlineChecker = (*Rule)(nil)
+
+// checkFromLayers reconstructs the AST path's HTML diagnostics on the nil-AST
+// File. The AST walk visits HTML blocks and inline RawHTML interleaved in
+// document order, so the two Layer 0 sources — BlockHTML spans and the inline
+// runs' RawHTML — are gathered with their byte offsets and emitted sorted by
+// offset, reproducing that single document-order stream exactly (matching even
+// the rule's pre-engine-sort Check output, not just the engine's sorted view).
+func (r *Rule) checkFromLayers(f *lint.File) []lint.Diagnostic {
+	allowed := r.cachedAllowSet(f)
+	type located struct {
+		offset int
+		diag   lint.Diagnostic
+	}
+	var found []located
+	for _, span := range lint.Layer0(f).BlockSpans {
+		if span.Kind != lint.BlockHTML {
+			continue
+		}
+		if d, off, ok := r.checkHTMLBlockSpan(f, allowed, span); ok {
+			found = append(found, located{offset: off, diag: d})
+		}
+	}
+	lint.WalkInlineNodes(f, func(n ast.Node, base int) {
+		node, ok := n.(*ast.RawHTML)
+		if !ok || node.Segments.Len() == 0 {
+			return
+		}
+		seg := node.Segments.At(0)
+		raw := rawHTMLBytes(node, f.Source[base:])
+		if d, ok := r.checkRaw(f, allowed, raw, base+seg.Start); ok {
+			found = append(found, located{offset: base + seg.Start, diag: d})
+		}
+	})
+	if len(found) == 0 {
+		return nil
+	}
+	// slices.SortStableFunc sorts the concrete located values directly,
+	// unlike sort.SliceStable, which drives reflect.Swapper under the
+	// hood — see docs/development/high-performance-go.md's "reflect
+	// in hot paths" anti-pattern.
+	slices.SortStableFunc(found, func(a, b located) int {
+		return cmp.Compare(a.offset, b.offset)
+	})
+	diags := make([]lint.Diagnostic, len(found))
+	for i, l := range found {
+		diags[i] = l.diag
+	}
+	return diags
+}
+
+// checkHTMLBlockSpan reproduces the AST path's HTMLBlock branch from a Layer 0
+// BlockHTML span: the span's first line is the block's first content line
+// (matching node.Lines().At(0)), and the diagnostic anchors at the first `<`
+// on it, exactly as the AST branch does. It also returns that anchor offset so
+// the caller can order block and inline HTML findings by document position.
+func (r *Rule) checkHTMLBlockSpan(
+	f *lint.File, allowed map[string]struct{}, span lint.BlockSpan,
+) (lint.Diagnostic, int, bool) {
+	raw := f.Lines[span.Start-1]
+	offset := f.LineStartOffset(span.Start - 1)
+	if i := bytes.IndexByte(raw, '<'); i >= 0 {
+		offset += i
+	}
+	d, ok := r.checkRaw(f, allowed, raw, offset)
+	return d, offset, ok
 }
 
 // CheckNode implements rule.NodeChecker.
@@ -122,7 +213,7 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 
 // checkRaw inspects raw HTML bytes and returns a diagnostic if the HTML
 // should be flagged. offset is the byte position of the HTML in f.Source.
-func (r *Rule) checkRaw(f *lint.File, allowed map[string]bool, raw []byte, offset int) (lint.Diagnostic, bool) {
+func (r *Rule) checkRaw(f *lint.File, allowed map[string]struct{}, raw []byte, offset int) (lint.Diagnostic, bool) {
 	tag := extractTag(raw)
 	switch {
 	case tag == "":
@@ -136,17 +227,18 @@ func (r *Rule) checkRaw(f *lint.File, allowed map[string]bool, raw []byte, offse
 	case isClosingTag(raw):
 		// Closing tags produce no extra diagnostic
 		return lint.Diagnostic{}, false
-	case allowed[tag]:
-		return lint.Diagnostic{}, false
 	default:
+		if setutil.Contains(allowed, tag) {
+			return lint.Diagnostic{}, false
+		}
 		return r.diag(f, offset, "<"+tag+">"), true
 	}
 }
 
-func (r *Rule) allowSet() map[string]bool {
-	m := make(map[string]bool, len(r.Allow))
+func (r *Rule) allowSet() map[string]struct{} {
+	m := make(map[string]struct{}, len(r.Allow))
 	for _, t := range r.Allow {
-		m[strings.ToLower(t)] = true
+		m[strings.ToLower(t)] = struct{}{}
 	}
 	return m
 }
@@ -157,9 +249,9 @@ func (r *Rule) allowSet() map[string]bool {
 // the LSP's concurrent reader pattern, where the same rule
 // instance is shared across goroutines (config defaults set
 // cfg.Settings=nil, which makes ConfigureRule a no-op).
-func (r *Rule) cachedAllowSet(f *lint.File) map[string]bool {
+func (r *Rule) cachedAllowSet(f *lint.File) map[string]struct{} {
 	v := f.Memo("MDS041.allowSet", func() any { return r.allowSet() })
-	return v.(map[string]bool)
+	return v.(map[string]struct{})
 }
 
 func (r *Rule) diag(f *lint.File, offset int, display string) lint.Diagnostic {

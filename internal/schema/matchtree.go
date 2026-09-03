@@ -70,21 +70,17 @@ type MatchTree struct {
 // preamble). A repeating scope produces one ScopeMatch per
 // occurrence, all sharing the same Scope pointer so the projector
 // can group consecutive occurrences into an array.
+// Fields are ordered pointer-containing (pointer/struct-with-strings/
+// map/slice) first, then scalar (bool) last, per
+// docs/development/high-performance-go.md "Struct layout" — Go's GC
+// ptrdata spans through the last pointer-containing field, so a bool
+// between two pointer fields would force that span to cover it too.
+// ScopeMatch is built once per matched schema section for every file
+// validated against a proto.md/kind schema.
 type ScopeMatch struct {
 	// Scope is the schema scope this match satisfied. Nil only for
 	// the synthetic MatchTree.Root.
 	Scope *Scope
-
-	// Preamble reports whether this is the `heading: null`
-	// no-heading section (content before the first child heading).
-	Preamble bool
-
-	// Unlisted reports whether this match is a synthetic one for a
-	// heading no declared scope claimed, added only under a
-	// schema-level `projection: blocks`. Scope is nil for these; the
-	// projector keys them by the slug of Heading.Text and adds a
-	// `heading` text field. Plan 246.
-	Unlisted bool
 
 	// Heading is the document heading that matched. Zero-valued for
 	// the preamble and the synthetic root.
@@ -102,19 +98,30 @@ type ScopeMatch struct {
 	// Content are the matched content entries in declared order.
 	Content []ContentMatch
 
-	// ProjectsBlocks reports whether this match's whole body should be
-	// projected as a `blocks` list — set when the scope (or, by
-	// default, the schema) declares `projection: blocks`. The
-	// projector keys on this rather than len(Body) so an empty section
-	// still emits `blocks: []` for a stable shape. Plan 246.
-	ProjectsBlocks bool
-
 	// Body holds the section's whole body in document order — every
 	// top-level block node in the scope's line range, deeper headings
 	// included so the block walker can nest them as `section` blocks.
 	// Meaningful only when ProjectsBlocks is true; nil (empty body)
 	// otherwise. Plan 246.
 	Body []ast.Node
+
+	// Preamble reports whether this is the `heading: null`
+	// no-heading section (content before the first child heading).
+	Preamble bool
+
+	// Unlisted reports whether this match is a synthetic one for a
+	// heading no declared scope claimed, added only under a
+	// schema-level `projection: blocks`. Scope is nil for these; the
+	// projector keys them by the slug of Heading.Text and adds a
+	// `heading` text field. Plan 246.
+	Unlisted bool
+
+	// ProjectsBlocks reports whether this match's whole body should be
+	// projected as a `blocks` list — set when the scope (or, by
+	// default, the schema) declares `projection: blocks`. The
+	// projector keys on this rather than len(Body) so an empty section
+	// still emits `blocks: []` for a stable shape. Plan 246.
+	ProjectsBlocks bool
 }
 
 // ContentMatch pairs a schema ContentEntry with the AST node that
@@ -149,7 +156,7 @@ func BuildMatchTree(f *lint.File, sch *Schema, docFM map[string]any) *MatchTree 
 		blocks = topLevelBlocks(f, parseWithTableExt(f.Source))
 	}
 
-	claimed := make(map[int]bool)
+	claimed := make(map[int]struct{})
 	buildScopeMatches(
 		f, sch.Sections, heads, rootLevel, 1, len(f.Lines)+1,
 		claimed, blocks, docFM, blocksDefault, mt.Root,
@@ -173,10 +180,10 @@ func BuildMatchTree(f *lint.File, sch *Schema, docFM map[string]any) *MatchTree 
 // each unclaimed root heading's body reaches every section. Plan 246.
 func collectUnlistedBlockMatches(
 	heads []DocHeading, rootLevel, docEnd int,
-	claimed map[int]bool, blocks []contentBlock, parent *ScopeMatch,
+	claimed map[int]struct{}, blocks []contentBlock, parent *ScopeMatch,
 ) {
 	for i, dh := range heads {
-		if claimed[i] || dh.Level != rootLevel {
+		if IsClaimed(claimed, i) || dh.Level != rootLevel {
 			continue
 		}
 		end := contentScopeEndLine(heads, i, dh.Level, docEnd)
@@ -212,7 +219,7 @@ func anyScopeProjectsBlocks(scopes []Scope) bool {
 func buildScopeMatches(
 	f *lint.File, scopes []Scope, heads []DocHeading,
 	expectedLevel, parentStart, parentEnd int,
-	claimed map[int]bool, blocks []contentBlock,
+	claimed map[int]struct{}, blocks []contentBlock,
 	docFM map[string]any, blocksDefault bool, parent *ScopeMatch,
 ) {
 	for i := range scopes {
@@ -231,7 +238,7 @@ func buildScopeMatches(
 			scopes, i, heads, expectedLevel, parentStart, parentEnd, claimed, docFM,
 		) {
 			dh := heads[matched]
-			claimed[matched] = true
+			claimed[matched] = struct{}{}
 			end := contentScopeEndLine(heads, matched, dh.Level, parentEnd)
 			sm := &ScopeMatch{
 				Scope:    sc,

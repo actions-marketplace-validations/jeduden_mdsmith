@@ -11,12 +11,12 @@ use of LLMs as linters.
 
 ### mdsmith
 
-Go binary with zero runtime deps. It ships 67 rules,
-[MDS001][mds001] through [MDS068][mds068] (MDS060 is
+Go binary with zero runtime deps. It ships 69 rules,
+[MDS001][mds001] through [MDS070][mds070] (MDS060 is
 unused). They cover structure, readability, cross-file
 links, and generated content.
 
-26 of the 67 rules are opt-in (off by default), among them
+26 of the 69 rules are opt-in (off by default), among them
 conciseness-scoring ([MDS029][mds029]); the rest run by
 default.
 
@@ -43,13 +43,13 @@ via [markdownlint-github][].
 - Official [VS Code extension][mdl-vscode] and
   [GitHub Action][mdl-action]
 - Custom rules via npm packages
-- Mature ecosystem with Prettier compatibility presets
+- Mature tooling with Prettier compatibility presets
 - ~5.9k GitHub stars (library)
 
 ### [remark-lint][]
 
 Node.js. ~70 rules distributed as individual npm packages.
-Part of the [unified][]/[remark][] AST pipeline ecosystem.
+Part of the [unified][]/[remark][] AST pipeline.
 
 - Architecture: parse to mdast AST, lint, serialize
 - Three maintained presets (consistent, recommended, style)
@@ -151,7 +151,7 @@ gates.
 | Aspect        | gomarklint             | mdsmith                          |
 | ------------- | ---------------------- | -------------------------------- |
 | Distribution  | static Go binary       | static Go binary                 |
-| Rule set      | 23, kebab-case IDs     | 67, `MDSxxx` IDs                 |
+| Rule set      | 23, kebab-case IDs     | 69, `MDSxxx` IDs                 |
 | Autofix       | no                     | `mdsmith fix`, multi-pass        |
 | LSP / editor  | no (VS Code planned)   | LSP for any editor               |
 | Config        | `.gomarklint.json`     | `.mdsmith.yml`                   |
@@ -506,16 +506,16 @@ See the [migration log](./auth-migration-log.md).
 
 What each tool **does** with the same bytes:
 
-| Layer                                     | mdsmith                                                 | mdbase                                                    |
-| ----------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------- |
-| YAML front matter                         | reads it; can validate shape via CUE schema             | reads it; validates against `_types/task.md`              |
-| Body content (prose, headings)            | lints line length, headings, prose, links               | not in scope                                              |
-| Cross-file link                           | flags broken `auth-migration-log.md` (MDS027)           | flags broken link (L4) and rewrites it on rename (L5)     |
-| `status: in-progress`                     | available to `mdsmith list query`                       | filterable in Bases queries; appears in backlink graphs   |
-| `due: 2026-06-01`                         | available to query                                      | filterable with date arithmetic (`due <= today() + "7d"`) |
-| `mdsmith fix` runs                        | reformats tables, regenerates TOC/catalog               | n/a                                                       |
-| `mdbase rename` runs                      | n/a                                                     | moves the file and rewrites every incoming link           |
-| Body readability, structure, token budget | yes (MDS023 ARI, MDS024 sentences, MDS028 token budget) | no                                                        |
+| Layer                                     | mdsmith                                                                                                                                                                  | mdbase                                                    |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| YAML front matter                         | reads it; can validate shape via CUE schema                                                                                                                              | reads it; validates against `_types/task.md`              |
+| Body content (prose, headings)            | lints line length, headings, prose, links                                                                                                                                | not in scope                                              |
+| Cross-file link                           | flags broken `./auth-migration-log.md` (MDS027); `mdsmith list backlinks` queries the link graph in reverse                                                              | flags broken link (L4) and rewrites it on rename (L5)     |
+| `status: in-progress`                     | available to `mdsmith list query`                                                                                                                                        | filterable in Bases queries; appears in backlink graphs   |
+| `due: 2026-06-01`                         | available to query                                                                                                                                                       | filterable with date arithmetic (`due <= today() + "7d"`) |
+| `mdsmith fix` runs                        | reformats tables, regenerates TOC/catalog                                                                                                                                | n/a                                                       |
+| Rename                                    | renames a heading (rewriting every workspace anchor link) or a link-ref label within one file; no file moves — after a `git mv`, MDS027 flags every broken incoming link | moves the file and rewrites every incoming link           |
+| Body readability, structure, token budget | yes (MDS023 ARI, MDS024 sentences, MDS028 token budget)                                                                                                                  | no                                                        |
 
 The **shared** layer is the YAML front matter.
 Both tools read `status`, `priority`, `due` as
@@ -524,11 +524,19 @@ out of the box via `_types/`. mdsmith does the
 same when a CUE schema is wired up via MDS020;
 without one, it treats them as plain YAML.
 
-The **current surface difference** sits in the
-body and the link graph. mdsmith ships prose,
-structure, and generated-content rules today.
-mdbase ships rename refactoring, the link graph,
-and richer queries today. Either surface is a
+The **current surface difference** has narrowed
+on the link layer. mdsmith now renames a heading
+with every workspace anchor link rewritten, or a
+link-reference label within its own file
+(`mdsmith rename`). It lists a file's incoming
+Markdown links with `mdsmith list backlinks`, and
+its wider dependency edges — includes, catalogs,
+builds, and links — with `mdsmith deps`, outgoing
+by default or incoming with `--incoming`. mdbase
+alone still ships the file-move rename, typed
+CRUD, watch mode, and the optional SQLite index.
+mdsmith alone still ships the prose, structure,
+and generated-content rules. Either surface is a
 snapshot, not a charter — see the deep-dive for
 evolutionary candidates either way.
 
@@ -629,7 +637,7 @@ R Markdown constructs the others flatten away.
 | ----------------------- | ------------ | -------------------- | -------------------- | ------------ |
 | Language                | Go           | Rust                 | Rust                 | Rust         |
 | Rule IDs                | own `MDSxxx` | markdownlint `MDxxx` | markdownlint `MDxxx` | own          |
-| Rule count              | 67           | 71                   | ~41                  | unenumerated |
+| Rule count              | 69           | 71                   | ~41                  | unenumerated |
 | Autofix / format        | `fix`        | `--fix`, `fmt`       | no                   | `format`     |
 | LSP / editor            | yes (LSP)    | yes (LSP)            | no                   | yes (LSP)    |
 | Config format           | YAML         | TOML                 | TOML                 | TOML         |
@@ -665,7 +673,7 @@ lack determinism.
 | ------------------ | --------------------- | ------------------------ | ------------ | --------------- | ---- | --------------------- | ----------------- |
 | Autofix CLI        | `fix`                 | `--write`                | `--fix`      | `--fix` / `fmt` | no   | `format`              | yes (AST rewrite) |
 | Table alignment    | [MDS025][mds025]      | yes                      | no           | MD055/56/58     | no   | yes                   | via plugin        |
-| Prose wrapping     | no                    | [`proseWrap`][prosewrap] | no           | no              | no   | no                    | no                |
+| Prose wrapping     | opt-in (reflow)       | [`proseWrap`][prosewrap] | no           | no              | no   | no                    | no                |
 | Embedded code fmt  | no                    | JS/TS/CSS/JSON           | no           | no              | no   | delegates to external | no                |
 | Multi-pass fix     | yes                   | single pass              | single pass  | single pass     | no   | single pass           | single pass       |
 | Generated sections | catalog, include, toc | no                       | no           | no              | no   | no                    | no                |
@@ -678,9 +686,11 @@ line per paragraph), or `preserve` (leave as-is, the
 default). remark-lint has no prose-wrap setting, but it
 serializes through its AST when fixing, so paragraphs
 can be incidentally rewrapped to match its stringify
-defaults. The others — mdsmith, markdownlint, rumdl,
-mado, panache — diagnose long lines but preserve the
-existing breaks.
+defaults. mdsmith adds an opt-in reflow fix
+(`line-length.reflow`). It rewraps prose to the width
+you set, and leaves breaks alone otherwise.
+markdownlint, rumdl, mado, and panache flag long
+lines but keep the existing breaks.
 
 Prettier is the strongest pure formatter. rumdl and
 panache bring native autofix to the Rust side; mado is
@@ -752,24 +762,27 @@ nested heading list.
 
 Go-based tools (mdsmith, Vale) have zero runtime
 dependencies. Node.js tools require a runtime but benefit
-from the npm ecosystem. LLM-based linting requires network
+from the npm registry. LLM-based linting requires network
 access and is non-deterministic.
 
 ## Benchmarks
 
-Default mdsmith is substantially faster than
-markdownlint-cli2 on its own Markdown. With the
-mdsmith-only rules disabled (`mdsmith-parity`), it lands
-close to rumdl. See the [benchmark doc][bench] for the
-current ratios.
+Default mdsmith is more than an order of magnitude faster
+than markdownlint-cli2 on its own Markdown. With the
+mdsmith-only rules disabled (`mdsmith-parity`), it runs at
+mado's speed: the two tie on the repo corpus, and parity
+trails mado only narrowly on the longer neutral corpus. See
+the [benchmark doc][bench] for the current ratios.
 
-mado and rumdl lead the per-file race. mdsmith trails
-them today because it also walks the cross-file graph,
-scores readability, and validates generated sections.
+Among the Rust linters, mado leads the per-file race.
+Default mdsmith does more per file: it walks the
+cross-file graph, scores readability, and validates
+generated sections. Even so, it comes in ahead of rumdl
+and panache on both corpora.
 
-Pick mado or rumdl for raw markdownlint throughput.
-Pick panache for Quarto or R Markdown. Pick mdsmith for
-the cross-file and self-maintaining-section layer.
+Pick mado for raw markdownlint throughput. Pick panache
+for Quarto or R Markdown. Pick mdsmith for the cross-file
+and self-maintaining-section layer.
 
 See the [benchmark doc][bench] for the full method, both
 corpora, every tool's command, the result tables, and
@@ -782,11 +795,11 @@ token budgets, or generated content sections. Its single
 binary makes CI setup simple.
 
 **markdownlint** is the safe default for teams already in the
-Node.js ecosystem. Widest community adoption, most editor
+Node.js world. Widest community adoption, most editor
 integrations, battle-tested rule set.
 
 **remark-lint** suits projects deep in the unified/remark
-ecosystem (MDX, Gatsby, Next.js). Its AST pipeline enables
+stack (MDX, Gatsby, Next.js). Its AST pipeline enables
 custom transformations beyond linting.
 
 **Prettier** is a formatter, not a linter. Use it alongside a
@@ -962,7 +975,7 @@ contributor. It also walks the repo file tree.
 Adversarial input has caused OOMs, YAML
 billion-laughs expansion, ANSI escape injection,
 symlink escapes, and path traversal in the wider
-linter ecosystem.
+linter space.
 
 mdsmith ran a
 [10-finding adversarial review][mdsmith-sec]. It
@@ -1020,7 +1033,7 @@ if you need a stable rule set across upgrades.
 [mds025]: ../../internal/rules/MDS025-table-format/README.md
 [mds027]: ../../internal/rules/MDS027-cross-file-reference-integrity/README.md
 [mds067]: ../../internal/rules/MDS067-callout-type/README.md
-[mds068]: ../../internal/rules/MDS068-link-style/README.md
+[mds070]: ../../internal/rules/MDS070-same-file-anchor/README.md
 [mds028]: ../../internal/rules/MDS028-token-budget/README.md
 [mds029]: ../../internal/rules/MDS029-conciseness-scoring/README.md
 [mds035]: ../../internal/rules/MDS035-toc-directive/README.md

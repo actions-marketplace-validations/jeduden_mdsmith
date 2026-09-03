@@ -4,7 +4,8 @@ package nospaceincodespans
 
 import (
 	"bytes"
-	"sort"
+	"cmp"
+	"slices"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -46,8 +47,23 @@ const (
 // expressed as CheckNode and the engine can fold this rule into one
 // shared AST walk; a direct call still works via rule.WalkNodes.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
+	if f != nil && f.AST == nil {
+		var diags []lint.Diagnostic
+		lint.WalkInlineNodes(f, func(n ast.Node, base int) {
+			if cs, ok := n.(*ast.CodeSpan); ok {
+				diags = append(diags, r.checkCodeSpan(cs, f, base)...)
+			}
+		})
+		return diags
+	}
 	return rule.WalkNodes(r, f)
 }
+
+// InlineCapable implements rule.InlineChecker: Check serves the nil-AST path
+// from lint.WalkInlineNodes (which reads lint.InlineBlocks).
+func (r *Rule) InlineCapable() bool { return true }
+
+var _ rule.InlineChecker = (*Rule)(nil)
 
 // CheckNode implements rule.NodeChecker.
 func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnostic {
@@ -58,15 +74,25 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 	if !ok {
 		return nil
 	}
+	return r.checkCodeSpan(cs, f, 0)
+}
+
+// checkCodeSpan runs the leading/trailing-whitespace check on one code span.
+// base maps the span's run-local segment offsets onto f.Source: zero on the
+// AST path, the run's start offset on the nil-AST path. The CommonMark
+// single-space-trim bytes, opening-backtick offset, and line/column are read
+// at base-shifted positions so the diagnostic stays byte-identical between
+// the two paths.
+func (r *Rule) checkCodeSpan(cs *ast.CodeSpan, f *lint.File, base int) []lint.Diagnostic {
 	first, last, ok2 := spanBounds(cs)
 	if !ok2 || last == first {
 		return nil
 	}
-	seg := f.Source[first:last]
+	seg := f.Source[base+first : base+last]
 	if !isASCIIWhitespace(seg[0]) && !isASCIIWhitespace(seg[len(seg)-1]) {
 		return nil
 	}
-	btStart := openingBacktickOffset(cs, f.Source)
+	btStart := base + openingBacktickOffset(cs, f.Source[base:])
 	line := f.LineOfOffset(btStart)
 	if inGeneratedSection(f, line) {
 		return nil
@@ -159,7 +185,13 @@ func (r *Rule) Fix(f *lint.File) []byte {
 		return out
 	}
 
-	sort.Slice(cuts, func(i, j int) bool { return cuts[i].start < cuts[j].start })
+	// slices.SortFunc sorts the concrete cut values directly, unlike
+	// sort.Slice, which drives reflect.Swapper under the hood — see
+	// docs/development/high-performance-go.md's "reflect in hot
+	// paths" anti-pattern.
+	slices.SortFunc(cuts, func(a, b cut) int {
+		return cmp.Compare(a.start, b.start)
+	})
 	var out bytes.Buffer
 	prev := 0
 	for _, c := range cuts {

@@ -10,7 +10,6 @@ package export
 import (
 	"bytes"
 	"sort"
-	"strings"
 
 	"github.com/jeduden/mdsmith/internal/archetype/gensection"
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -244,18 +243,18 @@ func inGeneratedRange(line int, ranges []lint.LineRange) bool {
 // because such PIs sit inside a pair's body range and are skipped
 // here.
 func stripDirectives(f *lint.File, directives []directiveStrip) []byte {
-	stripLines := map[int]bool{}
-	bodyLines := map[int]bool{}
+	stripLines := map[int]struct{}{}
+	bodyLines := map[int]struct{}{}
 
 	for _, d := range directives {
 		pairs, _ := gensection.FindMarkerPairs(f, d.name, d.ruleID, d.ruleName)
 		for _, p := range pairs {
 			for line := p.StartLine; line < p.ContentFrom; line++ {
-				stripLines[line] = true
+				stripLines[line] = struct{}{}
 			}
-			stripLines[p.EndLine] = true
+			stripLines[p.EndLine] = struct{}{}
 			for line := p.ContentFrom; line <= p.ContentTo; line++ {
-				bodyLines[line] = true
+				bodyLines[line] = struct{}{}
 			}
 		}
 	}
@@ -276,7 +275,7 @@ func stripDirectives(f *lint.File, directives []directiveStrip) []byte {
 			continue
 		}
 		for line := startLine; line <= endLine; line++ {
-			stripLines[line] = true
+			stripLines[line] = struct{}{}
 		}
 	}
 
@@ -316,20 +315,20 @@ func piLineRange(pi *piparser.ProcessingInstruction, f *lint.File) (int, int) {
 	return start, f.LineOfOffset(pi.ClosureLine.Start)
 }
 
-func overlapsAny(from, to int, set map[int]bool) bool {
+func overlapsAny(from, to int, set map[int]struct{}) bool {
 	for line := from; line <= to; line++ {
-		if set[line] {
+		if _, ok := set[line]; ok {
 			return true
 		}
 	}
 	return false
 }
 
-func emitLines(srcLines [][]byte, strip map[int]bool) []byte {
+func emitLines(srcLines [][]byte, strip map[int]struct{}) []byte {
 	var b bytes.Buffer
 	for i, line := range srcLines {
 		lineNum := i + 1
-		if strip[lineNum] {
+		if _, ok := strip[lineNum]; ok {
 			continue
 		}
 		b.Write(line)
@@ -353,15 +352,19 @@ func normalizeBlankLines(src []byte, codeBlockLines map[int]struct{}) []byte {
 	if len(src) == 0 {
 		return src
 	}
-	rawLines := strings.Split(string(src), "\n")
-	// strings.Split on a non-empty input always returns at least one
+	// bytes.Split on src directly (not strings.Split(string(src), ...))
+	// avoids allocating a full copy of the file just to drive the
+	// split; the resulting sub-slices share src's backing array
+	// (docs/development/high-performance-go.md "Stay in []byte").
+	rawLines := bytes.Split(src, []byte("\n"))
+	// bytes.Split on a non-empty input always returns at least one
 	// element, so the guard reduces to a check on the final element.
-	if rawLines[len(rawLines)-1] == "" {
+	if len(rawLines[len(rawLines)-1]) == 0 {
 		rawLines = rawLines[:len(rawLines)-1]
 	}
 
 	type srcLine struct {
-		text   string
+		text   []byte
 		inCode bool
 	}
 	lines := make([]srcLine, len(rawLines))
@@ -371,7 +374,7 @@ func normalizeBlankLines(src []byte, codeBlockLines map[int]struct{}) []byte {
 	}
 
 	isBlank := func(l srcLine) bool {
-		return !l.inCode && strings.TrimSpace(l.text) == ""
+		return !l.inCode && len(bytes.TrimSpace(l.text)) == 0
 	}
 
 	for len(lines) > 0 && isBlank(lines[0]) {
@@ -381,12 +384,14 @@ func normalizeBlankLines(src []byte, codeBlockLines map[int]struct{}) []byte {
 		lines = lines[:len(lines)-1]
 	}
 
-	var out []string
+	// Pre-sized to len(lines): a blank-line run collapses to one entry,
+	// so the final count never exceeds the input line count.
+	out := make([][]byte, 0, len(lines))
 	blank := false
 	for _, l := range lines {
 		if isBlank(l) {
 			if !blank {
-				out = append(out, "")
+				out = append(out, nil)
 			}
 			blank = true
 			continue
@@ -397,6 +402,7 @@ func normalizeBlankLines(src []byte, codeBlockLines map[int]struct{}) []byte {
 	if len(out) == 0 {
 		return nil
 	}
-	result := strings.Join(out, "\n") + "\n"
-	return []byte(result)
+	result := bytes.Join(out, []byte("\n"))
+	result = append(result, '\n')
+	return result
 }

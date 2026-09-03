@@ -28,6 +28,12 @@ func (r *Rule) ID() string { return "MDS018" }
 // Name implements rule.Rule.
 func (r *Rule) Name() string { return "no-emphasis-as-heading" }
 
+// WordlistTarget implements rule.WordlistConsumer: resolved `lists:`
+// entries union into this rule's "placeholders" setting.
+func (r *Rule) WordlistTarget() string { return "placeholders" }
+
+var _ rule.WordlistConsumer = (*Rule)(nil)
+
 // Category implements rule.Rule.
 func (r *Rule) Category() string { return "heading" }
 
@@ -37,7 +43,54 @@ func (r *Rule) Category() string { return "heading" }
 // this rule into one shared AST walk; a direct call still works via
 // rule.WalkNodes.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
+	// On the parse-skipped path (f.AST nil) the AST walk surfaces no
+	// nodes, so serve from the shared run-grouped inline parse, which the
+	// corpus equivalence harness pins byte-identical to the
+	// lone-emphasis-child result this rule reads from the tree.
+	if f.AST == nil {
+		return r.checkFromInline(f)
+	}
 	return rule.WalkNodes(r, f)
+}
+
+// InlineCapable implements rule.InlineChecker: Check serves the nil-AST
+// path from lint.WholeParagraphEmphasis, which reads the shared run-grouped
+// inline parse (lint.InlineBlocks) for list-free documents and falls back to
+// a single whole-document parse when the file contains a list (whose
+// looseness the flat Layer 0 model cannot resolve).
+func (r *Rule) InlineCapable() bool { return true }
+
+var _ rule.InlineChecker = (*Rule)(nil)
+
+// checkFromInline reports one diagnostic per lone-emphasis paragraph the
+// shared inline parse finds, applying the same placeholder suppression the
+// AST path applies. A lone-emphasis paragraph never starts with `|`, so it
+// can never be a GFM table; the AST path's table guard is therefore vacuous
+// here and needs no counterpart.
+func (r *Rule) checkFromInline(f *lint.File) []lint.Diagnostic {
+	paras := lint.WholeParagraphEmphasis(f)
+	if len(paras) == 0 {
+		return nil
+	}
+	diags := make([]lint.Diagnostic, 0, len(paras))
+	for _, p := range paras {
+		if segmentsContainPlaceholder(p.TextSegments, r.Placeholders) {
+			continue
+		}
+		diags = append(diags, lint.Diagnostic{
+			File:     f.Path,
+			Line:     p.Line,
+			Column:   1,
+			RuleID:   r.ID(),
+			RuleName: r.Name(),
+			Severity: lint.Warning,
+			Message:  "emphasis used instead of a heading",
+		})
+	}
+	if len(diags) == 0 {
+		return nil
+	}
+	return diags
 }
 
 // CheckNode implements rule.NodeChecker.
@@ -83,6 +136,26 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 		Severity: lint.Warning,
 		Message:  "emphasis used instead of a heading",
 	}}
+}
+
+// segmentsContainPlaceholder mirrors emphasisContainsPlaceholder for the
+// parse-skipped path: it accumulates the emphasis's Text segments in order
+// and tests placeholders.ContainsBodyToken on each growing prefix, stopping
+// at the first match — the identical incremental semantics the AST walk
+// applies as it visits each Text child. No placeholder tokens means no
+// suppression, matching the AST helper's empty-token early return.
+func segmentsContainPlaceholder(segs, toks []string) bool {
+	if len(toks) == 0 {
+		return false
+	}
+	var sb strings.Builder
+	for _, seg := range segs {
+		sb.WriteString(seg)
+		if placeholders.ContainsBodyToken(sb.String(), toks) {
+			return true
+		}
+	}
+	return false
 }
 
 func emphasisContainsPlaceholder(n ast.Node, src []byte, toks []string) bool {

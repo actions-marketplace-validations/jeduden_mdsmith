@@ -29,11 +29,18 @@ func (r *Rule) Name() string { return "heading-style" }
 // Category implements rule.Rule.
 func (r *Rule) Category() string { return "heading" }
 
-// Check implements rule.Rule. The per-heading logic is pure and
-// stateless, so it is expressed as CheckNode and the engine can fold
-// this rule into one shared AST walk; a direct call still works via
-// rule.WalkNodes.
+// Check implements rule.Rule. The per-heading logic depends only on a
+// heading's style (ATX vs setext) and, for the setext target, its level
+// — both readable from the heading's own source line, never the inline
+// tree — so the rule is a rule.BlockChecker: on a parsed File it folds
+// into the engine's shared AST walk (rule.WalkNodes), and on a parse-
+// skipped File (f.AST nil) it reads the Layer 0 block scan instead
+// (rule.WalkBlocks). Both resolve the same per-heading verdict, so the
+// diagnostics are identical.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
+	if f != nil && f.AST == nil {
+		return rule.WalkBlocks(r, f)
+	}
 	return rule.WalkNodes(r, f)
 }
 
@@ -46,37 +53,81 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 	if !ok {
 		return nil
 	}
+	return r.verdict(f, isATXHeading(heading, f.Source), heading.Level, headingLine(heading, f))
+}
 
+// CheckBlock implements rule.BlockChecker. span.Start is the heading line
+// (headingLine on the AST path); the style and ATX level are read from
+// that line's bytes to match the AST path's isATXHeading and
+// heading.Level exactly, so the verdict is byte-identical.
+func (r *Rule) CheckBlock(span lint.BlockSpan, f *lint.File) []lint.Diagnostic {
+	isATX := span.Kind == lint.BlockATXHeading
+	level := 0
+	if isATX {
+		level = atxLevelFromLine(f.Lines[span.Start-1])
+	}
+	return r.verdict(f, isATX, level, span.Start)
+}
+
+// blockKinds is the static block-kind interest CheckBlock declares via
+// rule.BlockChecker; package-level so BlockKinds returns it without
+// allocating. ATX and setext headings both map from ast.KindHeading.
+var blockKinds = []lint.BlockKind{lint.BlockATXHeading, lint.BlockSetextHeading}
+
+// BlockKinds implements rule.BlockChecker: CheckBlock reacts to both
+// heading shapes.
+func (r *Rule) BlockKinds() []lint.BlockKind { return blockKinds }
+
+var _ rule.BlockChecker = (*Rule)(nil)
+
+// verdict is the shared per-heading check both the AST (CheckNode) and
+// Layer 0 (CheckBlock) paths drive: isATX is the heading's style, level
+// its ATX level (only read for the setext target), and line its 1-based
+// heading line.
+func (r *Rule) verdict(f *lint.File, isATX bool, level, line int) []lint.Diagnostic {
 	style := r.Style
 	if style == "" {
 		style = "atx"
 	}
-	isATX := isATXHeading(heading, f.Source)
-
 	if style == "atx" && !isATX {
-		return []lint.Diagnostic{{
-			File:     f.Path,
-			Line:     headingLine(heading, f),
-			Column:   1,
-			RuleID:   r.ID(),
-			RuleName: r.Name(),
-			Severity: lint.Warning,
-			Message:  "heading style should be atx",
-		}}
+		return r.diag(f, line, "heading style should be atx")
 	}
 	// setext only supports levels 1 and 2; levels 3-6 must use atx.
-	if style == "setext" && isATX && heading.Level <= 2 {
-		return []lint.Diagnostic{{
-			File:     f.Path,
-			Line:     headingLine(heading, f),
-			Column:   1,
-			RuleID:   r.ID(),
-			RuleName: r.Name(),
-			Severity: lint.Warning,
-			Message:  "heading style should be setext",
-		}}
+	if style == "setext" && isATX && level <= 2 {
+		return r.diag(f, line, "heading style should be setext")
 	}
 	return nil
+}
+
+// diag builds the single-element diagnostic slice both paths emit.
+func (r *Rule) diag(f *lint.File, line int, msg string) []lint.Diagnostic {
+	return []lint.Diagnostic{{
+		File:     f.Path,
+		Line:     line,
+		Column:   1,
+		RuleID:   r.ID(),
+		RuleName: r.Name(),
+		Severity: lint.Warning,
+		Message:  msg,
+	}}
+}
+
+// atxLevelFromLine returns the ATX heading level (number of leading `#`,
+// 1–6) of a line the Layer 0 scanner classified BlockATXHeading. Up to
+// three leading spaces are skipped first, matching goldmark's ATX parse;
+// the span kind guarantees a valid 1–6 run, so no validity check is
+// needed here.
+func atxLevelFromLine(line []byte) int {
+	i := 0
+	for i < len(line) && i < 3 && line[i] == ' ' {
+		i++
+	}
+	level := 0
+	for i < len(line) && line[i] == '#' {
+		level++
+		i++
+	}
+	return level
 }
 
 type replacement struct {
@@ -198,13 +249,22 @@ func firstTextSegment(n ast.Node) text.Segment {
 }
 
 // lineStartsWithHash returns true if the line containing the byte at offset
-// starts with '#'.
+// is an ATX heading, i.e. begins with '#' after up to three leading spaces.
+// CommonMark lets an ATX heading be indented one to three spaces (four or
+// more would open an indented code block), so the leading-space skip must
+// match the Layer 0 scanner's isATXHeadingLine. Without it the AST path
+// misclassifies an indented ATX heading (e.g. "   # H") as setext, so the
+// parsed and parse-skipped paths emit different MDS002 verdicts.
 func lineStartsWithHash(source []byte, offset int) bool {
 	lineStart := offset
 	for lineStart > 0 && source[lineStart-1] != '\n' {
 		lineStart--
 	}
-	return lineStart < len(source) && source[lineStart] == '#'
+	i := lineStart
+	for i < len(source) && i-lineStart < 3 && source[i] == ' ' {
+		i++
+	}
+	return i < len(source) && source[i] == '#'
 }
 
 func headingLine(heading *ast.Heading, f *lint.File) int {

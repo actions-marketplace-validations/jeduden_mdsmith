@@ -462,9 +462,11 @@ func listItemValue(line string) (string, bool) {
 // Returns "" when none precedes the item.
 func enclosingListKey(lines [][]byte, line int) string {
 	for i := line - 2; i >= 0; i-- {
-		m := piArgRE.FindStringSubmatch(string(lines[i]))
-		if len(m) >= 3 && strings.TrimSpace(m[2]) == "" {
-			return m[1]
+		// FindSubmatch accepts []byte directly, avoiding a string allocation
+		// per scanned line when the caller passes bytes.
+		m := piArgRE.FindSubmatch(lines[i])
+		if len(m) >= 3 && len(m[2]) == 0 {
+			return string(m[1])
 		}
 		// A populated `key: value` line or another list item does not
 		// open a list block for our item; keep scanning past list items
@@ -485,6 +487,7 @@ var piArgRE = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$`
 var piListItemRE = regexp.MustCompile(`^\s*-\s+(.*?)\s*$`)
 
 // isGlobPattern reports whether p contains doublestar glob metacharacters.
+// no test by design: trivial one-liner with no branch.
 func isGlobPattern(p string) bool { return strings.ContainsAny(p, "*?[{") }
 
 // headingOnLine returns the heading whose first source line equals

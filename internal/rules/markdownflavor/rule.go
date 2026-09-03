@@ -11,9 +11,10 @@ package markdownflavor
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
+	"slices"
 	"sort"
-	"strings"
 
 	"github.com/jeduden/mdsmith/pkg/goldmark/ast"
 
@@ -98,6 +99,15 @@ func (r *Rule) DefaultSettings() map[string]any {
 // Check implements rule.Rule. It runs flavor.Detect with an accept
 // predicate that admits only features the configured flavor rejects,
 // then maps each resulting Finding into one engine diagnostic.
+//
+// On the parse-skipped path (f.AST nil) the two AST-walking detectors inside
+// flavor.Detect — bare URLs and GitHub alerts — surface nothing, so the rule
+// supplies their findings from the Layer 0 projections instead: bare URLs from
+// the shared run-grouped inline parse (lint.InlineBlocks) and alert
+// blockquotes from the Layer 0 BlockQuote spans. The dual-parser features
+// detect from the source body and need no AST either way. The union is sorted
+// by byte offset, matching flavor.Detect's own ordering, so the diagnostics
+// are byte-identical to the parsed path.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	if !r.Flavor.IsValid() {
 		return nil
@@ -107,6 +117,9 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	}
 	doc := &markdown.Document{Body: f.Source, AST: f.AST}
 	findings := flavor.Detect(doc, unsupported)
+	if f.AST == nil {
+		findings = r.appendLayerFindings(f, unsupported, findings)
+	}
 	if len(findings) == 0 {
 		return nil
 	}
@@ -124,6 +137,82 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 		})
 	}
 	return diags
+}
+
+// appendLayerFindings adds the bare-URL and GitHub-alert findings the AST-less
+// flavor.Detect could not produce, then re-sorts the union by byte offset to
+// match flavor.Detect's document-order output. base is the only path-specific
+// input: bare URLs come from each inline run's re-parse (mapped back with the
+// run base), alerts from the Layer 0 BlockQuote spans' first marker line. Each
+// detector runs only when the configured flavor rejects its feature, mirroring
+// flavor.Detect's accept gating.
+func (r *Rule) appendLayerFindings(
+	f *lint.File, accept func(flavor.Feature) bool, findings []flavor.Finding,
+) []flavor.Finding {
+	if accept(flavor.FeatureBareURLAutolinks) {
+		for _, blk := range lint.InlineBlocks(f) {
+			findings = append(findings,
+				flavor.BareURLFindingsInTree(f.Source, blk.Node, blk.Offset)...)
+		}
+	}
+	if accept(flavor.FeatureGitHubAlerts) {
+		findings = append(findings, alertFindingsFromSpans(f)...)
+	}
+	sortFindingsByStart(findings)
+	return findings
+}
+
+// sortFindingsByStart orders findings by byte offset in place.
+// slices.SortStableFunc sorts the concrete flavor.Finding values
+// directly, unlike sort.SliceStable, which drives reflect.Swapper
+// under the hood — see docs/development/high-performance-go.md's
+// "reflect in hot paths" anti-pattern.
+func sortFindingsByStart(findings []flavor.Finding) {
+	slices.SortStableFunc(findings, func(a, b flavor.Finding) int {
+		return cmp.Compare(a.Start, b.Start)
+	})
+}
+
+// alertFindingsFromSpans returns one GitHub-alert finding per Layer 0
+// BlockQuote span whose first paragraph opens with a GFM alert marker
+// (`> [!TOKEN]`). It is the parse-skipped counterpart to
+// flavor.detectGitHubAlerts, which anchors on the blockquote's first paragraph
+// first line — not its first physical line. A blockquote can open with one or
+// more blank `>` lines before that paragraph, so the scan skips leading
+// blank-content quote lines and tests the first non-blank one, matching the AST
+// detector's anchor (the marker line, column 1). A blockquote always carries a
+// `>`, so the parse-skip gate keeps such files on the parse path in production;
+// the audit drives this branch directly.
+func alertFindingsFromSpans(f *lint.File) []flavor.Finding {
+	var out []flavor.Finding
+	for _, span := range lint.Layer0(f).BlockSpans {
+		if span.Kind != lint.BlockQuote {
+			continue
+		}
+		ln, ok := firstQuoteParagraphLine(f, span)
+		if !ok {
+			continue
+		}
+		if flavor.IsAlertMarkerLine(f.Lines[ln-1]) {
+			out = append(out, flavor.AlertFinding(f.Source, f.LineStartOffset(ln-1)))
+		}
+	}
+	return out
+}
+
+// firstQuoteParagraphLine returns the 1-based line of the first paragraph line
+// inside a Layer 0 BlockQuote span: the first line in the span whose content,
+// after the `>` markers are stripped, is non-blank. Leading blank quote lines
+// (`>` with nothing after it) do not open a paragraph, so they are skipped —
+// mirroring where goldmark records the blockquote's first paragraph. Returns
+// false when the span carries no non-blank quoted line.
+func firstQuoteParagraphLine(f *lint.File, span lint.BlockSpan) (int, bool) {
+	for ln := span.Start; ln <= span.End; ln++ {
+		if len(bytes.TrimSpace(flavor.StripBlockquoteMarkers(f.Lines[ln-1]))) > 0 {
+			return ln, true
+		}
+	}
+	return 0, false
 }
 
 // Fix implements rule.FixableRule. It first removes the [!TOKEN]
@@ -152,13 +241,15 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	return r.fixByteRangeFeatures(current)
 }
 
-// fixGitHubAlerts strips [!TOKEN] alert markers from blockquotes,
-// re-adding "> " on lazy-continuation lines so the blockquote stays
-// well-formed after the marker line goes away. If the marker is the
-// only line in the blockquote, the whole blockquote is removed.
-func (r *Rule) fixGitHubAlerts(f *lint.File) []byte {
-	skip := map[int]bool{}
-	addPrefix := map[int]bool{} // lazy-continuation lines that lose blockquote context
+// buildAlertSkipMaps walks the AST of f and returns two zero-byte-value
+// sets: skip holds the 1-based line numbers of GitHub Alert marker lines
+// that should be dropped, and addPrefix holds the line numbers of lazy-
+// continuation lines that need a "> " prefix re-added after the marker
+// is removed. Using map[int]struct{} rather than map[int]bool follows the
+// high-performance Go guideline "map[K]struct{} for sets — zero-byte value type."
+func buildAlertSkipMaps(f *lint.File) (skip, addPrefix map[int]struct{}) {
+	skip = map[int]struct{}{}
+	addPrefix = map[int]struct{}{} // lazy-continuation lines that lose blockquote context
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -180,41 +271,76 @@ func (r *Rule) fixGitHubAlerts(f *lint.File) []byte {
 		para := bq.FirstChild().(*ast.Paragraph)
 		lines := para.Lines()
 		seg := lines.At(0)
-		markerLine, _ := flavor.LineCol(f.Source, seg.Start)
-		skip[markerLine] = true
+		// f.LineOfOffset is f's memoized, binary-search line index —
+		// flavor.LineCol recomputes with a fresh bytes.Count/LastIndexByte
+		// scan of source[:offset] on every call, so calling it once per
+		// continuation line below made this loop O(n) per line (O(n^2)
+		// over a long alert paragraph) instead of O(log n). Both share the
+		// same "newlines strictly before offset" line-1 contract, so the
+		// swap is exact, not approximate.
+		markerLine := f.LineOfOffset(seg.Start)
+		skip[markerLine] = struct{}{}
 
 		// Remaining lines of the first paragraph may use lazy continuation
 		// (no "> " prefix in the raw source). After removing the marker they
 		// would no longer be inside a blockquote, so re-add the prefix.
 		for i := 1; i < lines.Len(); i++ {
 			contSeg := lines.At(i)
-			contLine, _ := flavor.LineCol(f.Source, contSeg.Start)
-			raw := strings.TrimLeft(string(f.Lines[contLine-1]), " \t")
-			if !strings.HasPrefix(raw, ">") {
-				addPrefix[contLine] = true
+			contLine := f.LineOfOffset(contSeg.Start)
+			// bytes.TrimLeft + a first-byte check replace the earlier
+			// strings.TrimLeft(string(...), ...) + strings.HasPrefix,
+			// which copied every paragraph line in this loop just to
+			// test its first non-blank byte.
+			raw := bytes.TrimLeft(f.Lines[contLine-1], " \t")
+			if len(raw) == 0 || raw[0] != '>' {
+				addPrefix[contLine] = struct{}{}
 			}
 		}
 		return ast.WalkContinue, nil
 	})
+	return
+}
+
+// fixGitHubAlerts strips [!TOKEN] alert markers from blockquotes,
+// re-adding "> " on lazy-continuation lines so the blockquote stays
+// well-formed after the marker line goes away. If the marker is the
+// only line in the blockquote, the whole blockquote is removed.
+func (r *Rule) fixGitHubAlerts(f *lint.File) []byte {
+	skip, addPrefix := buildAlertSkipMaps(f)
 
 	if len(skip) == 0 {
 		return f.Source
 	}
 
-	var out []string
+	// A single buffer grown to len(f.Source) — usually an overestimate
+	// since marker lines are dropped, though a heavily lazy-continuation
+	// alert (many 2-byte "> " insertions from addPrefix) can still make
+	// buf re-grow once — replaces the earlier []string+strings.Join,
+	// which cost one string() copy per surviving line plus the join's
+	// own allocation. Mirrors blockquotewhitespace's Fix, the sibling
+	// rule that already made this switch.
+	var buf bytes.Buffer
+	buf.Grow(len(f.Source))
+	wroteLine := false
 	for i, line := range f.Lines {
 		lineNum := i + 1
-		if skip[lineNum] {
+		if _, ok := skip[lineNum]; ok {
 			continue
 		}
-		s := string(line)
-		if addPrefix[lineNum] {
-			trimmed := strings.TrimLeft(s, " \t")
-			s = s[:len(s)-len(trimmed)] + "> " + trimmed
+		if wroteLine {
+			buf.WriteByte('\n')
 		}
-		out = append(out, s)
+		wroteLine = true
+		if _, ok := addPrefix[lineNum]; ok {
+			trimmed := bytes.TrimLeft(line, " \t")
+			buf.Write(line[:len(line)-len(trimmed)])
+			buf.WriteString("> ")
+			buf.Write(trimmed)
+		} else {
+			buf.Write(line)
+		}
 	}
-	return []byte(strings.Join(out, "\n"))
+	return buf.Bytes()
 }
 
 var (

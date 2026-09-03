@@ -53,9 +53,11 @@ func Merge(defaults, loaded *Config) *Config {
 		Kinds:                  copyKinds(loaded.Kinds),
 		KindAssignment:         copyKindAssignment(loaded.KindAssignment),
 		Build:                  copyBuildConfig(loaded.Build),
+		ForeignRegions:         copyForeignRegions(loaded.ForeignRegions),
 		Convention:             loaded.Convention,
 		Conventions:            copyUserConventions(loaded.Conventions),
 		ConventionPreset:       copyConventionPreset(loaded.ConventionPreset),
+		Wordlists:              copyWordlists(loaded.Wordlists),
 	}
 }
 
@@ -106,10 +108,29 @@ func copyConfig(cfg *Config) *Config {
 		Kinds:                  copyKinds(cfg.Kinds),
 		KindAssignment:         copyKindAssignment(cfg.KindAssignment),
 		Build:                  copyBuildConfig(cfg.Build),
+		ForeignRegions:         copyForeignRegions(cfg.ForeignRegions),
 		Convention:             cfg.Convention,
 		Conventions:            copyUserConventions(cfg.Conventions),
 		ConventionPreset:       copyConventionPreset(cfg.ConventionPreset),
+		Wordlists:              copyWordlists(cfg.Wordlists),
 	}
+}
+
+// copyWordlists returns a deep copy of a user-defined word-lists map.
+// Returns nil when the input is nil.
+func copyWordlists(m map[string]UserWordlist) map[string]UserWordlist {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]UserWordlist, len(m))
+	for k, v := range m {
+		out[k] = UserWordlist{
+			Extends:    v.Extends,
+			Entries:    copyStrings(v.Entries),
+			SourcePath: v.SourcePath,
+		}
+	}
+	return out
 }
 
 // copyUserConventions returns a deep copy of a user-defined
@@ -238,6 +259,18 @@ func copyKindAssignment(entries []KindAssignmentEntry) []KindAssignmentEntry {
 	return result
 }
 
+// copyForeignRegions returns a copy of a foreign-region marker-pair
+// slice. Returns nil if the input is nil. Each ForeignRegion is a pure
+// value (two strings), so a shallow slice copy fully isolates it.
+func copyForeignRegions(regions []ForeignRegion) []ForeignRegion {
+	if regions == nil {
+		return nil
+	}
+	out := make([]ForeignRegion, len(regions))
+	copy(out, regions)
+	return out
+}
+
 // copyStrings returns a copy of a string slice. Returns nil if the input is nil.
 func copyStrings(s []string) []string {
 	if s == nil {
@@ -293,13 +326,13 @@ func mergeCategories(base, override map[string]bool) map[string]bool {
 // caller has no FM info — such entries simply won't match.
 func EffectiveKinds(cfg *Config, filePath string, fmKinds []string, fmFields map[string]any) []string {
 	if cfg == nil {
-		seen := make(map[string]bool, len(fmKinds))
+		seen := make(map[string]struct{}, len(fmKinds))
 		out := make([]string, 0, len(fmKinds))
 		for _, k := range fmKinds {
-			if seen[k] {
+			if _, ok := seen[k]; ok {
 				continue
 			}
-			seen[k] = true
+			seen[k] = struct{}{}
 			out = append(out, k)
 		}
 		return out
@@ -312,12 +345,12 @@ func EffectiveKinds(cfg *Config, filePath string, fmKinds []string, fmFields map
 // they come first. kind-assignment matches are appended in config order.
 // Duplicate names are dropped after their first occurrence.
 func resolveEffectiveKinds(cfg *Config, filePath string, fmKinds []string, fmFields map[string]any) []string {
-	seen := make(map[string]bool)
+	seen := make(map[string]struct{})
 	var result []string
 
 	add := func(name string) {
-		if !seen[name] {
-			seen[name] = true
+		if _, ok := seen[name]; !ok {
+			seen[name] = struct{}{}
 			result = append(result, name)
 		}
 	}
@@ -326,7 +359,7 @@ func resolveEffectiveKinds(cfg *Config, filePath string, fmKinds []string, fmFie
 		add(k)
 	}
 	for _, entry := range cfg.KindAssignment {
-		if matched, _ := matchKindAssignmentEntry(entry, filePath, fmFields); matched {
+		if kindAssignmentEntryMatches(entry, filePath, fmFields) {
 			for _, k := range entry.Kinds {
 				add(k)
 			}
@@ -475,6 +508,11 @@ func effectiveRules(cfg *Config, filePath string, kinds []string) map[string]Rul
 			}
 		}
 	}
+	// Final pass: expand each rule's `lists:` (word-list references)
+	// into its target list setting and strip the key, so rules never
+	// see it. Runs after the whole layer chain so every layer's
+	// `lists:` (append-merged) is included.
+	expandWordlists(result, cfg.Wordlists)
 	return result
 }
 

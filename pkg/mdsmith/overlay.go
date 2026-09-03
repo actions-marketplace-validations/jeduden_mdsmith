@@ -3,6 +3,7 @@ package mdsmith
 import (
 	"bytes"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -10,6 +11,9 @@ import (
 	"sync"
 
 	"github.com/bmatcuk/doublestar/v4"
+
+	"github.com/jeduden/mdsmith/internal/bytelimit"
+	"github.com/jeduden/mdsmith/internal/lint"
 )
 
 // OverlayWorkspace reads from the host filesystem rooted at Root, but
@@ -29,9 +33,11 @@ import (
 // OverlayWorkspace is safe for concurrent use. Reads take a read lock;
 // Set and Delete take a write lock.
 type OverlayWorkspace struct {
-	root    string
-	mu      sync.RWMutex
-	overlay map[string][]byte
+	root     string
+	mu       sync.RWMutex
+	overlay  map[string][]byte
+	diskOnce sync.Once
+	diskFS   fs.FS
 }
 
 // NewOverlayWorkspace returns an OverlayWorkspace rooted at root with no
@@ -47,9 +53,11 @@ func cleanKey(p string) string {
 }
 
 // ReadFile returns the overlaid bytes for p when a buffer shadows it,
-// otherwise it reads from disk resolved against Root (an absolute path
-// is read unchanged), mirroring OSWorkspace so the on-disk fall-through
-// and the FS view name the same file for one uri.
+// otherwise it falls through to disk. The disk fall-through reads through
+// the cached, RESOLVE_BENEATH-contained disk FS (ensureDiskFS) directly,
+// not through FS(), so a symlink escaping Root is refused the same way
+// FS() refuses it without paying FS()'s per-call overlay-map clone (see
+// FS's doc comment) — a miss should stay O(1), not O(len(overlay)).
 func (w *OverlayWorkspace) ReadFile(p string) ([]byte, error) {
 	key := cleanKey(p)
 	w.mu.RLock()
@@ -58,17 +66,35 @@ func (w *OverlayWorkspace) ReadFile(p string) ([]byte, error) {
 	if ok {
 		return bytes.Clone(data), nil
 	}
-	return os.ReadFile(w.diskPath(p)) //nolint:gosec // path is caller-controlled; this is the native disk seam
+	if w.root == "" || filepath.IsAbs(p) {
+		return os.ReadFile(p) //nolint:gosec // path is caller-controlled; this is the native disk seam
+	}
+	return fs.ReadFile(w.ensureDiskFS(), key)
 }
 
-// diskPath maps a workspace-relative path to an absolute on-disk path
-// rooted at Root, matching OSWorkspace.resolve. Absolute paths and an
-// empty Root pass through unchanged.
-func (w *OverlayWorkspace) diskPath(p string) string {
-	if w.root == "" || filepath.IsAbs(p) {
-		return p
+// readFileLimited is ReadFile's bounded counterpart: an overlaid buffer
+// over max is rejected with a "file too large" error (the buffer is
+// already resident — Set copies open-editor bytes the LSP already
+// holds — so this is a size-cap check, not a read reduction), and the
+// disk fall-through is capped via bytelimit so an oversized on-disk file
+// is never fully read into memory. frontMatterFor uses this so
+// resolving a file's kind never pulls an arbitrarily large document
+// fully resident just to read its leading front-matter block.
+func (w *OverlayWorkspace) readFileLimited(p string, max int64) ([]byte, error) {
+	key := cleanKey(p)
+	w.mu.RLock()
+	data, ok := w.overlay[key]
+	w.mu.RUnlock()
+	if ok {
+		if max > 0 && max != math.MaxInt64 && int64(len(data)) > max {
+			return nil, bytelimit.FileTooLargeError(int64(len(data)), max)
+		}
+		return bytes.Clone(data), nil
 	}
-	return filepath.Join(w.root, filepath.FromSlash(p))
+	if w.root == "" || filepath.IsAbs(p) {
+		return bytelimit.ReadFileLimited(p, max)
+	}
+	return bytelimit.ReadFSFileLimited(w.ensureDiskFS(), key, max)
 }
 
 // Glob expands a doublestar pattern against the on-disk tree rooted at
@@ -90,17 +116,29 @@ func (w *OverlayWorkspace) Glob(pattern string) ([]string, error) {
 // lands on the next Check. The snapshot copies only the open-buffer map,
 // not the corpus.
 func (w *OverlayWorkspace) FS() fs.FS {
+	disk := w.ensureDiskFS()
 	w.mu.RLock()
 	snap := make(map[string][]byte, len(w.overlay))
 	for k, v := range w.overlay {
 		snap[k] = bytes.Clone(v)
 	}
 	w.mu.RUnlock()
-	root := w.root
-	if root == "" {
-		root = "."
-	}
-	return &overlayFS{disk: os.DirFS(root), overlay: snap}
+	return &overlayFS{disk: disk, overlay: snap}
+}
+
+// ensureDiskFS lazily builds the RESOLVE_BENEATH-contained disk view once
+// and caches it for the OverlayWorkspace's lifetime. FS() wraps it in an
+// overlay snapshot for shadowing; ReadFile's disk fall-through reads it
+// directly so a cache miss does not pay FS()'s per-call overlay-map clone.
+func (w *OverlayWorkspace) ensureDiskFS() fs.FS {
+	w.diskOnce.Do(func() {
+		root := w.root
+		if root == "" {
+			root = "."
+		}
+		w.diskFS = lint.OpenRootFS(root)
+	})
+	return w.diskFS
 }
 
 // Set stores data (cloned) as the overlay for p, shadowing disk on the
@@ -149,5 +187,5 @@ func (o *overlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 }
 
 func (o *overlayFS) Glob(pattern string) ([]string, error) {
-	return doublestar.Glob(o.disk, pattern)
+	return doublestar.Glob(o.disk, pattern, doublestar.WithFailOnIOErrors())
 }

@@ -86,6 +86,8 @@ cmd/mdsmith              internal/lsp
                               entrypoint)
               └─> internal/engine
               └─> internal/{rule, fix,
+                            checker,
+                            rulelayer,
                             config, output,
                             lint, linkgraph,
                             index,
@@ -273,8 +275,8 @@ caught and the reasons we reject them:
   attracts unrelated code.
 - **A rule package importing another rule
   package.** Rules share helpers via
-  `internal/mdtext` or
-  `internal/rules/astutil`; reaching
+  `internal/mdtext`, `internal/rules/astutil`,
+  or `internal/rules/listscan`; reaching
   sideways into a sibling rule binds
   release cycles that should stay
   independent.

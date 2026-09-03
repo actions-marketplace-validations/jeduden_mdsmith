@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeduden/mdsmith/cue/cuelite"
 	"github.com/jeduden/mdsmith/internal/lint"
 
 	"github.com/stretchr/testify/assert"
@@ -366,4 +367,70 @@ func TestPrecedingHeadingLine(t *testing.T) {
 	assert.Equal(t, 1, precedingHeadingLine(heads, 1))
 	assert.Equal(t, 7, precedingHeadingLine(heads, 3))
 	assert.Equal(t, 0, precedingHeadingLine(nil, 5))
+}
+
+// TestLevelMismatchSchemaDiag_HeadingLevelFormat pins the "h%d" format used
+// in the Actual and Expected fields so that a refactor replacing fmt.Sprintf
+// with strconv doesn't silently change the wire format.
+func TestLevelMismatchSchemaDiag_HeadingLevelFormat(t *testing.T) {
+	sch := &Schema{RootLevel: 2}
+	d := levelMismatchSchemaDiag("Introduction", 2, 3, sch)
+	assert.Equal(t, "Introduction", d.Field)
+	assert.Equal(t, "h2", d.Expected, "expected heading level must be formatted as h<n>")
+	assert.Equal(t, "h3", d.Actual, "actual heading level must be formatted as h<n>")
+}
+
+// TestDedupedCUEErrorDiags_DuplicateKeyCollapses covers
+// dedupedCUEErrorDiags's dedup branch (seen[key] already present):
+// two cueErrs entries that render to the identical field/actual/
+// expected must collapse to one diagnostic, not two. Uses a real
+// *cuelite.PathError from an actual CUE validation failure,
+// duplicated in the input slice, rather than a synthetic error —
+// PathError's constructor is unexported outside cue/cuelite.
+func TestDedupedCUEErrorDiags_DuplicateKeyCollapses(t *testing.T) {
+	sch := &Schema{
+		Source:      "kind t",
+		Frontmatter: map[string]string{"id": `int`},
+	}
+	f, err := lint.NewFileFromSource("doc.md", []byte("# T\n"), true)
+	require.NoError(t, err)
+	docFM := map[string]any{"id": "not-an-int"}
+
+	compiled := CachedCompile(nil, sch.FrontmatterCUE())
+	require.NoError(t, compiled.Err())
+	merged := compiled.Value.CompileMap(docFM)
+	verr := merged.Validate()
+	require.Error(t, verr)
+	cueErrs := cuelite.Errors(verr)
+	require.NotEmpty(t, cueErrs)
+
+	dup := []*cuelite.PathError{cueErrs[0], cueErrs[0]}
+	keyLines := docFrontmatterKeyLines(f)
+	diags := dedupedCUEErrorDiags(f, sch, docFM, dup, keyLines, makeDiagForTest)
+	assert.Len(t, diags, 1, "two identical cueErrs entries must collapse to one diagnostic")
+}
+
+// TestIsClaimed covers both branches of IsClaimed: a present idx
+// reports true; an absent idx reports false.
+func TestIsClaimed(t *testing.T) {
+	claimed := map[int]struct{}{3: {}}
+	assert.True(t, IsClaimed(claimed, 3), "present idx must be claimed")
+	assert.False(t, IsClaimed(claimed, 7), "absent idx must not be claimed")
+}
+
+func TestIsClaimed_Nil(t *testing.T) {
+	assert.False(t, IsClaimed(nil, 0))
+}
+
+func TestIsClaimed_Empty(t *testing.T) {
+	assert.False(t, IsClaimed(map[int]struct{}{}, 0))
+}
+
+// TestIsClaimedAcceptsStructSet pins IsClaimed's "claimed" parameter to
+// map[int]struct{}, not map[int]bool. The struct{} value drops per-entry
+// map overhead versus bool. See
+// docs/development/high-performance-go.md "map[K]struct{} for sets".
+func TestIsClaimedAcceptsStructSet(t *testing.T) {
+	accept := func(func(map[int]struct{}, int) bool) {}
+	accept(IsClaimed)
 }

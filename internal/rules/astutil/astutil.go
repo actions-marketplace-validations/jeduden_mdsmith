@@ -2,6 +2,8 @@ package astutil
 
 import (
 	"bytes"
+	"cmp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -37,10 +39,18 @@ type SectionHeading struct {
 // ""). [CollectSectionParagraphsWithText] sets it so per-heading
 // SectionBody sweeps hit the cache for every paragraph,
 // regardless of whether the extracted text is empty.
+//
+// Node and Text are declared before Line/HasText: buildSectionParagraphs
+// allocates one SectionParagraph per document paragraph, so this is
+// among the highest-frequency struct constructions in the rule set
+// (MDS023, MDS024). Node (an interface) and Text (a string) are the
+// struct's only pointer-bearing fields; declaring the plain-int Line
+// field ahead of them would force the GC's per-word ptrdata scan to
+// cover Line's word too. See sectionparagraph_layout_test.go.
 type SectionParagraph struct {
-	Line    int
 	Node    ast.Node
 	Text    string
+	Line    int
 	HasText bool
 }
 
@@ -68,7 +78,19 @@ func (p SectionParagraph) ExtractText(source []byte) string {
 // CollectSectionHeadings returns every heading in the document
 // ordered by source line. Used by content rules (MDS057, MDS058)
 // that need to walk heading-bounded sections.
+//
+// Memoized per File via lint.File.MemoFile, mirroring
+// CollectSectionParagraphs: MDS057 and MDS058 both enabled would
+// otherwise re-walk the same AST for the same result.
 func CollectSectionHeadings(f *lint.File) []SectionHeading {
+	return f.MemoFile("astutil.sectionHeadings", buildSectionHeadings).([]SectionHeading)
+}
+
+// buildSectionHeadings is the MemoFile-style builder for the
+// section-headings memo. Defined at package scope so the value passed
+// to MemoFile is a plain function pointer, matching
+// buildSectionParagraphs.
+func buildSectionHeadings(f *lint.File) any {
 	var out []SectionHeading
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -84,10 +106,76 @@ func CollectSectionHeadings(f *lint.File) []SectionHeading {
 		})
 		return ast.WalkSkipChildren, nil
 	})
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Line < out[j].Line
+	sortSectionHeadings(out)
+	return out
+}
+
+// HeadingNodesMemoKey is CollectHeadingNodes's MemoFile key. Exported
+// (rather than inlined at each use) so the shared-walk regression test
+// in sharedheadingwalk_bench_test.go — which lives in the external
+// astutil_test package because it exercises concrete rule packages
+// (headingincrement, noduplicateheadings) that import astutil — can
+// pre-seed the same cache entry without duplicating the string.
+const HeadingNodesMemoKey = "astutil.headingNodes"
+
+// CollectHeadingNodes returns every *ast.Heading node in the document,
+// in source order. Unlike CollectSectionHeadings (which only exposes
+// Level and Line), this keeps the node itself so a caller can extract
+// heading text via HeadingText.
+//
+// Memoized per File via lint.File.MemoFile: MDS003 (heading-increment)
+// and MDS005 (no-duplicate-headings) both previously ran their own
+// full ast.Walk to collect the same headings; sharing one walk here
+// means the second rule to run pays a cache hit instead of re-walking
+// the tree (docs/development/high-performance-go.md, "memoize
+// per-input computations").
+func CollectHeadingNodes(f *lint.File) []*ast.Heading {
+	return f.MemoFile(HeadingNodesMemoKey, buildHeadingNodes).([]*ast.Heading)
+}
+
+// buildHeadingNodes is the MemoFile-style builder for the heading-nodes
+// memo. Defined at package scope so the value passed to MemoFile is a
+// plain function pointer, matching buildSectionHeadings.
+func buildHeadingNodes(f *lint.File) any {
+	// Sized on the first heading rather than up front, so a document
+	// with none keeps returning nil at zero allocations — the project's
+	// "Return nil, not []T{}" convention, and the shape a pre-sized
+	// slice would otherwise break.
+	//
+	// The root's child count is a capacity hint, not a bound: the walk
+	// descends into blockquotes and list items, so nested headings can
+	// still push past it and regrow. It is simply the cheapest estimate
+	// that scales with document length, and it removes the ~log2(n)
+	// regrowth steps this once-per-file memo would otherwise pay on
+	// every file. See
+	// docs/development/high-performance-go.md#allocations.
+	var out []*ast.Heading
+	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		h, ok := n.(*ast.Heading)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		if out == nil {
+			out = make([]*ast.Heading, 0, f.AST.ChildCount())
+		}
+		out = append(out, h)
+		return ast.WalkSkipChildren, nil
 	})
 	return out
+}
+
+// sortSectionHeadings orders headings by source line in place.
+// slices.SortFunc sorts the concrete SectionHeading values directly,
+// unlike sort.Slice, which drives reflect.Swapper under the hood —
+// see docs/development/high-performance-go.md's "reflect in hot
+// paths" anti-pattern.
+func sortSectionHeadings(headings []SectionHeading) {
+	slices.SortFunc(headings, func(a, b SectionHeading) int {
+		return cmp.Compare(a.Line, b.Line)
+	})
 }
 
 // CollectSectionParagraphs returns every non-table paragraph with its
@@ -95,6 +183,13 @@ func CollectSectionHeadings(f *lint.File) []SectionHeading {
 // parses pipe-delimited tables as paragraphs when the table
 // extension is absent; those are filtered so cell text does not
 // pollute section bodies.
+//
+// The result is in ascending Line order — an artifact of the
+// depth-first AST walk order combined with lint's parser config,
+// which installs no extension (e.g. footnotes) that relocates nodes
+// out of document order. SectionBodies depends on this ordering for
+// its forward-only cursor; do not pass it a hand-built or
+// externally-sorted slice.
 //
 // Memoized per File via lint.File.MemoFile (the *File-passing
 // variant of Memo): the AST walk is shared across the prose rules
@@ -125,6 +220,9 @@ func CollectSectionParagraphs(f *lint.File) []SectionParagraph {
 // capturing `f`), avoiding the per-call closure allocation a
 // `func() any { … }` literal would force.
 func buildSectionParagraphs(f *lint.File) any {
+	// Same shape as buildHeadingNodes: sized on the first paragraph so
+	// a document with none stays nil at zero allocations, with the
+	// root's child count as the capacity hint.
 	var out []SectionParagraph
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -136,6 +234,9 @@ func buildSectionParagraphs(f *lint.File) any {
 		}
 		if IsTable(p, f) {
 			return ast.WalkContinue, nil
+		}
+		if out == nil {
+			out = make([]SectionParagraph, 0, f.AST.ChildCount())
 		}
 		out = append(out, SectionParagraph{
 			Line: ParagraphLine(p, f),
@@ -203,15 +304,86 @@ func SectionEnd(headings []SectionHeading, i, totalLines int) int {
 // matcher. The source byte slice is required because
 // SectionParagraph's text is materialised lazily through
 // [SectionParagraph.ExtractText] (plan 196); callers pass f.Source.
+//
+// paragraphs must be sorted ascending by Line, as
+// [CollectSectionParagraphs] returns them (document order). Callers
+// that loop once per heading (MDS057, MDS058) each call this over the
+// same paragraph slice with a monotonically non-decreasing start, so a
+// binary search bounds the matching range in O(log len(paragraphs))
+// instead of a full O(len(paragraphs)) scan per call — turning the
+// per-file cost from O(headings * paragraphs) into
+// O(headings * log paragraphs).
 func SectionBody(paragraphs []SectionParagraph, source []byte, start, end int) string {
-	var parts []string
-	for _, p := range paragraphs {
-		if p.Line < start || p.Line >= end {
-			continue
-		}
+	lo := sort.Search(len(paragraphs), func(i int) bool { return paragraphs[i].Line >= start })
+	hi := sort.Search(len(paragraphs), func(i int) bool { return paragraphs[i].Line >= end })
+	if lo >= hi {
+		return ""
+	}
+	parts := make([]string, 0, hi-lo)
+	for _, p := range paragraphs[lo:hi] {
 		parts = append(parts, p.ExtractText(source))
 	}
 	return strings.Join(parts, " ")
+}
+
+// SectionBodies returns SectionBody's result for every heading in
+// headings, in order — the concatenated plain text of the paragraphs
+// each heading's [start, SectionEnd(...)) range covers.
+//
+// Calling SectionBody once per heading rescans the full paragraphs
+// slice from index 0 every time: O(headings × paragraphs). Since
+// headings are in document order, each start line is non-decreasing
+// across the loop, so a single cursor into paragraphs can advance
+// forward-only and never revisit a paragraph it has already passed —
+// O(headings + paragraphs) for the skip-ahead work, with the
+// per-heading collection cost bounded by that heading's own section
+// size (unavoidable: nested headings' bodies legitimately repeat
+// their descendants' paragraphs). See
+// docs/development/high-performance-go.md "Skip work you don't need".
+//
+// Trade-off: unlike the per-heading loop it replaces, every returned
+// body string stays live for the whole call instead of becoming
+// garbage as soon as its heading is processed. On a deeply nested
+// document this raises peak live memory roughly to
+// heading-depth × prose-size rather than max-section-size. Both
+// current callers (MDS057, MDS058) are opt-in rules.
+//
+// The per-heading `parts` buffer is hoisted out of the loop and
+// reused via `parts[:0]` rather than re-declared per heading — a
+// per-heading `var parts []string` would regrow from nil every
+// iteration (see docs/development/high-performance-go.md "Reuse
+// loop-local buffers"), which measured as more allocations overall
+// than the per-heading SectionBody loop this function replaces.
+//
+// Precondition: both headings and paragraphs must already be in
+// ascending Line order — [CollectSectionHeadings] sorts its result
+// explicitly, and [CollectSectionParagraphs] documents the same
+// guarantee. Unlike SectionBody, which tolerates an unordered slice
+// (it scans every entry unconditionally), the forward-only cursor
+// here relies on both orderings: an out-of-order heading would leave
+// `lo` already advanced past paragraphs a later heading needs, and
+// an out-of-order paragraph past a heading's end would be silently
+// skipped. Either produces a silently truncated body, not a panic.
+func SectionBodies(headings []SectionHeading, paragraphs []SectionParagraph, source []byte, totalLines int) []string {
+	if len(headings) == 0 {
+		return nil
+	}
+	bodies := make([]string, len(headings))
+	lo := 0
+	var parts []string
+	for i := range headings {
+		start := headings[i].Line
+		end := SectionEnd(headings, i, totalLines)
+		for lo < len(paragraphs) && paragraphs[lo].Line < start {
+			lo++
+		}
+		parts = parts[:0]
+		for j := lo; j < len(paragraphs) && paragraphs[j].Line < end; j++ {
+			parts = append(parts, paragraphs[j].ExtractText(source))
+		}
+		bodies[i] = strings.Join(parts, " ")
+	}
+	return bodies
 }
 
 // HeadingLine returns the 1-based source line of a heading node.
@@ -301,4 +473,97 @@ func ExtractText(n ast.Node, source []byte, buf *bytes.Buffer) {
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
 		ExtractText(c, source, buf)
 	}
+}
+
+// HeadingTextCached is HeadingText memoized per (f, heading) via
+// lint.File.HeadingTextCache. Several default rules read a heading's
+// text this way — no-trailing-punctuation and no-duplicate-headings
+// for every heading; heading-increment and first-line-heading too, on
+// a subset gated by their own rule-specific conditions — so more than
+// one can independently call HeadingText for the same heading within
+// one Check pass over f; caching lets only the first caller pay for
+// the child walk and buf.String() conversion. Cached under base 0,
+// matching HeadingTextBase(h, src, 0)'s documented equivalence to
+// HeadingText(h, src) — see HeadingTextBaseCached.
+func HeadingTextCached(f *lint.File, heading *ast.Heading) string {
+	return f.HeadingTextCache(heading, 0, func() string { return HeadingText(heading, f.Source) })
+}
+
+// HeadingTextBaseCached is HeadingTextBase memoized per (f, heading,
+// base); see HeadingTextCached. base is part of the cache key (not
+// just captured by the compute closure), so a heading queried at two
+// different bases — which HeadingText/HeadingTextBase would
+// themselves disagree on — gets two independent cache entries rather
+// than the second caller silently reading the first caller's answer.
+func HeadingTextBaseCached(f *lint.File, heading *ast.Heading, base int) string {
+	return f.HeadingTextCache(heading, base, func() string { return HeadingTextBase(heading, f.Source, base) })
+}
+
+// HeadingTextBase returns the plain-text content of a heading whose
+// inline children carry run-local segment offsets, as on the parse-skipped
+// path (lint.InlineBlocks re-parses each run in isolation). base is the
+// run's start byte offset in source; it is added to every Text segment's
+// bounds so the slices index the original document. With base == 0 the
+// result is identical to HeadingText, which the AST path uses.
+func HeadingTextBase(heading *ast.Heading, source []byte, base int) string {
+	buf := headingTextPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer func() {
+		if buf.Cap() <= headingTextMaxPooledCap {
+			headingTextPool.Put(buf)
+		}
+	}()
+	for c := heading.FirstChild(); c != nil; c = c.NextSibling() {
+		extractTextBase(c, source, base, buf)
+	}
+	return buf.String()
+}
+
+// extractTextBase is ExtractText with a base offset added to each Text
+// segment's bounds, so it reads run-local segments off the document source.
+func extractTextBase(n ast.Node, source []byte, base int, buf *bytes.Buffer) {
+	if t, ok := n.(*ast.Text); ok {
+		buf.Write(source[base+t.Segment.Start : base+t.Segment.Stop])
+		return
+	}
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		extractTextBase(c, source, base, buf)
+	}
+}
+
+// CountLeadingSpaces returns the number of leading space characters
+// (ASCII 0x20 only) in line.
+func CountLeadingSpaces(line []byte) int {
+	return len(line) - len(bytes.TrimLeft(line, " "))
+}
+
+// IsBlank reports whether line contains only space and tab characters.
+func IsBlank(line []byte) bool {
+	return len(bytes.TrimLeft(line, " \t")) == 0
+}
+
+// HeadingLineBase returns the 1-based source line of a heading whose inline
+// children carry run-local segment offsets (the parse-skipped path). base is
+// the run's start byte offset in f.Source. It mirrors HeadingLine exactly with
+// every offset shifted by base: prefer heading.Lines().At(0) (setext), else the
+// first descendant Text segment, else the constant 1 — so an empty heading with
+// no Lines and no Text resolves to line 1 on both paths, not the run's line.
+func HeadingLineBase(heading *ast.Heading, f *lint.File, base int) int {
+	lines := heading.Lines()
+	if lines.Len() > 0 {
+		return f.LineOfOffset(base + lines.At(0).Start)
+	}
+	line := 1
+	_ = ast.Walk(heading, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering || n == heading {
+			return ast.WalkContinue, nil
+		}
+		t, ok := n.(*ast.Text)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		line = f.LineOfOffset(base + t.Segment.Start)
+		return ast.WalkStop, nil
+	})
+	return line
 }

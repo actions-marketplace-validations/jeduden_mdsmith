@@ -196,3 +196,75 @@ func TestCheck_TableShapedSingleEmphasisLine_NotFlagged(t *testing.T) {
 	diags := r.Check(f)
 	require.Empty(t, diags, "table-shaped emphasis line must not be flagged")
 }
+
+// TestInlineCapable_NoEmphasisAsHeading covers the InlineCapable method.
+func TestInlineCapable_NoEmphasisAsHeading(t *testing.T) {
+	r := &Rule{}
+	assert.True(t, r.InlineCapable())
+}
+
+// TestSegmentsContainPlaceholder_Match covers the return-true branch when a
+// segment accumulates to a known placeholder body token.
+func TestSegmentsContainPlaceholder_Match(t *testing.T) {
+	// "placeholder-section" matches strings.TrimSpace(text) == "..."
+	got := segmentsContainPlaceholder([]string{"..."}, []string{"placeholder-section"})
+	assert.True(t, got, "segmentsContainPlaceholder must return true for placeholder-section token")
+}
+
+// TestCheckFromInline_PlaceholderSuppressesAll covers the continue (line 69)
+// and the len(diags)==0 early-return (line 81-83): a lone-emphasis paragraph
+// whose content matches a placeholder token must produce zero diagnostics on
+// the nil-AST path.
+func TestCheckFromInline_PlaceholderSuppressesAll(t *testing.T) {
+	// "..." with "placeholder-section" configured must be suppressed.
+	src := []byte("*...*\n")
+	lineFile := lint.NewFileLines("test.md", src)
+	r := &Rule{Placeholders: []string{"placeholder-section"}}
+	diags := r.Check(lineFile)
+	assert.Empty(t, diags, "placeholder-suppressed inline emphasis must yield no diagnostics")
+}
+
+// TestCheck_NilASTEquivalence pins the parse-skipped path (f.AST nil,
+// served from the Layer 1 whole-paragraph-emphasis index) byte-identical
+// to the AST path across emphasis-as-heading shapes, including the
+// placeholder suppression.
+func TestCheck_NilASTEquivalence(t *testing.T) {
+	cases := []struct {
+		name         string
+		src          string
+		placeholders []string
+	}{
+		{"bold-heading", "**Bold text**\n", nil},
+		{"italic-heading", "*Italic text*\n", nil},
+		{"underscore-heading", "_Italic_\n", nil},
+		{"inline-emphasis-ok", "Some **bold** text here.\n", nil},
+		{"plain-ok", "just plain text\n", nil},
+		{"two-paragraphs", "*one*\n\nplain\n\n**two**\n", nil},
+		{"emphasis-then-text", "*emphasis* and more\n", nil},
+		{"leading-spaces", "   *emphasis*\n", nil},
+		{"multiline-emphasis", "*emphasis\ncontinued*\n", nil},
+		{"placeholder-question", "*?*\n", []string{"?"}},
+		{"placeholder-ellipsis", "*...*\n", []string{"..."}},
+		{"placeholder-no-match", "*real heading*\n", []string{"?"}},
+		{"blockquote-emph", "> *just emphasis*\n", nil},
+		{"wrapped-emph-quote", "> *just\n> emph*\n", nil},
+		{"multi-bq-emph", "> *a*\n>\n> *b*\n", nil},
+		{"list-emph-not-flagged", "- *x*\n", nil},
+		{"emph-then-html-block", "*emph*\n<div>x</div>\n", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			astFile, err := lint.NewFile("test.md", []byte(tc.src))
+			require.NoError(t, err)
+			lineFile := lint.NewFileLines("test.md", []byte(tc.src))
+			r1 := &Rule{Placeholders: tc.placeholders}
+			r2 := &Rule{Placeholders: tc.placeholders}
+			assert.Equal(t, r1.Check(astFile), r2.Check(lineFile),
+				"nil-AST diagnostics diverge from AST path")
+		})
+	}
+}
+
+func TestWordlistTarget(t *testing.T) {
+	assert.Equal(t, "placeholders", (&Rule{}).WordlistTarget())
+}

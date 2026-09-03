@@ -288,11 +288,11 @@ func TestComposeAcronyms_BothRestricted_UnionsScope(t *testing.T) {
 // `out.Filename != s.Filename` false branch: two schemas declaring
 // the same non-empty filename pattern must NOT error.
 func TestCompose_FilenameIdenticalNotConflict(t *testing.T) {
-	a := &Schema{Filename: "[0-9]*.md"}
-	b := &Schema{Filename: "[0-9]*.md"}
+	a := &Schema{Filename: []string{"[0-9]*.md"}}
+	b := &Schema{Filename: []string{"[0-9]*.md"}}
 	out, err := Compose(a, b)
 	require.NoError(t, err)
-	assert.Equal(t, "[0-9]*.md", out.Filename)
+	assert.Equal(t, []string{"[0-9]*.md"}, out.Filename)
 }
 
 // TestCompose_MergeScopeRulesOneSideEmpty covers the
@@ -323,16 +323,28 @@ func TestCanMergeByHeading_PreambleDirect(t *testing.T) {
 // TestCompose_FilenameFirstNonEmpty picks the first non-empty
 // filename pattern; conflicting patterns are an error.
 func TestCompose_FilenameFirstNonEmpty(t *testing.T) {
-	a := &Schema{Filename: ""}
-	b := &Schema{Filename: "[0-9]*.md"}
+	a := &Schema{Filename: nil}
+	b := &Schema{Filename: []string{"[0-9]*.md"}}
 	out, err := Compose(a, b)
 	require.NoError(t, err)
-	assert.Equal(t, "[0-9]*.md", out.Filename)
+	assert.Equal(t, []string{"[0-9]*.md"}, out.Filename)
 }
 
 func TestCompose_FilenameConflictErrors(t *testing.T) {
-	a := &Schema{Filename: "AAA*.md"}
-	b := &Schema{Filename: "BBB*.md"}
+	a := &Schema{Filename: []string{"AAA*.md"}}
+	b := &Schema{Filename: []string{"BBB*.md"}}
+	_, err := Compose(a, b)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "filename")
+}
+
+// TestCompose_FilenameListConflictOnOrder confirms two lists with the
+// same globs in a different order are treated as conflicting: the
+// composed constraint is order-significant in its diagnostic wording,
+// so identical semantics still require identical spelling.
+func TestCompose_FilenameListConflictOnDiffered(t *testing.T) {
+	a := &Schema{Filename: []string{"a-*.md", "b.md"}}
+	b := &Schema{Filename: []string{"a-*.md"}}
 	_, err := Compose(a, b)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "filename")
@@ -1000,4 +1012,37 @@ func TestCompose_ProjectionOrderingSymmetry(t *testing.T) {
 		&Schema{RootLevel: 2, BlockParagraphs: ProjectionInline})
 	require.Error(t, err, "the guard fires when the second input carries it")
 	assert.Contains(t, err.Error(), "without a schema-level")
+}
+
+// TestBoundsLabel pins the cardinality string format produced by boundsLabel
+// so a strconv refactor doesn't silently alter the error-message wire format.
+func TestBoundsLabel(t *testing.T) {
+	assert.Equal(t, "5..unbounded", boundsLabel(5, 0), "zero max means unbounded")
+	assert.Equal(t, "0..unbounded", boundsLabel(0, 0), "zero min and max also unbounded")
+	assert.Equal(t, "1..3", boundsLabel(1, 3))
+	assert.Equal(t, "0..1", boundsLabel(0, 1))
+}
+
+// TestUnionStrings_Dedup verifies that unionStrings returns the ordered union
+// of two slices with duplicates eliminated.
+func TestUnionStrings_Dedup(t *testing.T) {
+	// disjoint inputs
+	got := unionStrings([]string{"a", "b"}, []string{"c", "d"})
+	assert.Equal(t, []string{"a", "b", "c", "d"}, got)
+
+	// overlapping inputs: duplicates must appear only once, in first-seen order
+	got = unionStrings([]string{"a", "b", "c"}, []string{"b", "d", "a"})
+	assert.Equal(t, []string{"a", "b", "c", "d"}, got)
+
+	// both empty → nil (project convention: no-result returns nil, not []T{})
+	got = unionStrings(nil, nil)
+	assert.Nil(t, got)
+
+	// one empty
+	got = unionStrings([]string{"x"}, nil)
+	assert.Equal(t, []string{"x"}, got)
+
+	// all duplicates → single element
+	got = unionStrings([]string{"z", "z"}, []string{"z"})
+	assert.Equal(t, []string{"z"}, got)
 }

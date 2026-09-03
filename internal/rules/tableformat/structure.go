@@ -14,8 +14,9 @@ package tableformat
 
 import (
 	"bytes"
-	"sort"
-	"strconv"
+	"cmp"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -57,17 +58,22 @@ func (t tableBlock) end() int   { return t.rows[len(t.rows)-1].lineNum }
 func structureDiagnostics(f *lint.File, style, ruleID, ruleName string) []lint.Diagnostic {
 	skip := structureSkipFunc(f)
 	tables := findStructureTables(f.Lines, skip)
-	diags := make([]lint.Diagnostic, 0, len(tables))
+	//nolint:prealloc // most tables are well-formed; nil stays nil instead of an allocated empty slice
+	var diags []lint.Diagnostic
 	for _, t := range tables {
 		diags = append(diags, checkPipeStyle(f, t, style, ruleID, ruleName)...)
 		diags = append(diags, checkColumnCount(f, t, ruleID, ruleName)...)
 		diags = append(diags, checkSurroundingBlanks(f, t, ruleID, ruleName)...)
 	}
-	sort.SliceStable(diags, func(i, j int) bool {
-		if diags[i].Line != diags[j].Line {
-			return diags[i].Line < diags[j].Line
+	// slices.SortStableFunc sorts the concrete lint.Diagnostic values
+	// directly, unlike sort.SliceStable, which drives reflect.Swapper
+	// under the hood — see docs/development/high-performance-go.md's
+	// "reflect in hot paths" anti-pattern.
+	slices.SortStableFunc(diags, func(a, b lint.Diagnostic) int {
+		if a.Line != b.Line {
+			return cmp.Compare(a.Line, b.Line)
 		}
-		return diags[i].Column < diags[j].Column
+		return cmp.Compare(a.Column, b.Column)
 	})
 	return diags
 }
@@ -211,7 +217,7 @@ func checkColumnCount(f *lint.File, t tableBlock, ruleID, ruleName string) []lin
 			continue
 		}
 		diags = append(diags, structureDiag(f, row.lineNum, 1, ruleID, ruleName,
-			"table column count; expected "+strconv.Itoa(want)+", got "+strconv.Itoa(row.cells)))
+			fmt.Sprintf("table column count; expected %d, got %d", want, row.cells)))
 	}
 	if len(diags) == 0 {
 		return nil
@@ -328,8 +334,10 @@ func findStructureTables(lines [][]byte, skip func(int) bool) []tableBlock {
 		}
 
 		t := tableBlock{prefix: prefix}
-		t.rows = append(t.rows, parseRow(lines[hdrNum-1], hdrNum, prefix))
-		t.rows = append(t.rows, parseRow(lines[sepNum-1], sepNum, prefix))
+		t.rows = append(t.rows,
+			parseRow(lines[hdrNum-1], hdrNum, prefix),
+			parseRow(lines[sepNum-1], sepNum, prefix),
+		)
 
 		next := sepNum + 1
 		for next <= len(lines) {

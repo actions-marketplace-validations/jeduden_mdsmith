@@ -33,6 +33,14 @@ func (r *Rule) ID() string { return "MDS058" }
 // Name implements rule.Rule.
 func (r *Rule) Name() string { return "required-mentions" }
 
+// WordlistTarget implements rule.WordlistConsumer: resolved `lists:`
+// entries union into this rule's "mentions" setting. The entries are
+// required (each section must mention them), not forbidden — the
+// word-list mechanism is neutral about how a rule reads its list.
+func (r *Rule) WordlistTarget() string { return "mentions" }
+
+var _ rule.WordlistConsumer = (*Rule)(nil)
+
 // Category implements rule.Rule.
 func (r *Rule) Category() string { return "prose" }
 
@@ -59,10 +67,11 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 		totalLines--
 	}
 
+	bodies := astutil.SectionBodies(headings, paragraphs, f.Source, totalLines)
+
 	var diags []lint.Diagnostic
 	for i, h := range headings {
-		end := astutil.SectionEnd(headings, i, totalLines)
-		body := astutil.SectionBody(paragraphs, f.Source, h.Line, end)
+		body := bodies[i]
 		for _, m := range r.Mentions {
 			if m == "" {
 				continue

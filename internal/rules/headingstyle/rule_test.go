@@ -5,8 +5,57 @@ import (
 
 	"github.com/jeduden/mdsmith/internal/lint"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestCheck_NilASTMatchesAST pins the Layer-0 migration: Check on a
+// nil-AST File (the parse-skip path, via CheckBlock over the block scan)
+// must produce byte-identical diagnostics to the AST path. Running both
+// style targets exercises the atx branch, the setext branch, and
+// atxLevelFromLine (levels 1-6) on the block path.
+func TestCheck_NilASTMatchesAST(t *testing.T) {
+	srcs := [][]byte{
+		[]byte("# ATX heading\n\nText\n"),
+		[]byte("Setext\n======\n\nText\n"),
+		[]byte("## Level two\n\n### Level three\n\nText\n"),
+		[]byte("# A\n\nSub heading\n-----------\n\nText\n"),
+		[]byte("###### Deep six\n\nText\n"),
+		[]byte("intro\n\nSetext two\n----------\n"),
+		// ATX headings indented 1–3 spaces: CommonMark still parses these as
+		// ATX. Both paths must agree (regression for the corpus divergence
+		// the code-file equivalence sweep found).
+		[]byte("# Title\n\n   # Indented\n"),
+		[]byte("   # Indented one\n\nText\n"),
+		[]byte("  ## Indented two\n\nText\n"),
+		[]byte(" ### Indented three\n\nText\n"),
+	}
+	for _, style := range []string{"atx", "setext"} {
+		for _, src := range srcs {
+			astFile, err := lint.NewFile("f.md", src)
+			require.NoError(t, err)
+			astDiags := (&Rule{Style: style}).Check(astFile)
+			l0Diags := (&Rule{Style: style}).Check(lint.NewFileLines("f.md", src))
+			assert.Equal(t, astDiags, l0Diags,
+				"nil-AST must match AST for style=%s src=%q", style, string(src))
+		}
+	}
+}
+
+// TestAtxLevelFromLine covers the leading-`#` count the Layer-0 path
+// reads, including the up-to-three leading spaces goldmark allows before
+// an ATX heading.
+func TestAtxLevelFromLine(t *testing.T) {
+	cases := map[string]int{
+		"# one":           1,
+		"## two":          2,
+		"###### six":      6,
+		"   ### indented": 3,
+	}
+	for line, want := range cases {
+		assert.Equal(t, want, atxLevelFromLine([]byte(line)), "line %q", line)
+	}
+}
 
 func TestCheck_ATXStyle_NoViolation(t *testing.T) {
 	src := []byte("# Heading 1\n\n## Heading 2\n\n### Heading 3\n")
@@ -82,6 +131,23 @@ func TestFix_ATXToSetext(t *testing.T) {
 	r := &Rule{Style: "setext"}
 	result := r.Fix(f)
 	expected := "Heading 1\n=========\n\nSome text\n"
+	if string(result) != expected {
+		t.Errorf("expected %q, got %q", expected, string(result))
+	}
+}
+
+// TestFix_IndentedATXToSetext pins the Fix output for a 1–3 space indented ATX
+// heading converted to setext style. The round-1 lineStartsWithHash fix made
+// Fix rewrite these headings (previously a no-op); this test locks in the
+// intended output so future changes cannot silently alter it.
+func TestFix_IndentedATXToSetext(t *testing.T) {
+	src := []byte("   # Indented H1\n\nSome text\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	r := &Rule{Style: "setext"}
+	result := r.Fix(f)
+	// The indent is dropped; the heading becomes a plain setext heading.
+	expected := "Indented H1\n===========\n\nSome text\n"
 	if string(result) != expected {
 		t.Errorf("expected %q, got %q", expected, string(result))
 	}

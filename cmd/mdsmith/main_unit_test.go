@@ -12,7 +12,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 
 	"github.com/jeduden/mdsmith/internal/bytelimit"
 	"github.com/jeduden/mdsmith/internal/config"
@@ -20,7 +19,6 @@ import (
 	fixpkg "github.com/jeduden/mdsmith/internal/fix"
 	"github.com/jeduden/mdsmith/internal/lint"
 	vlog "github.com/jeduden/mdsmith/internal/log"
-	"github.com/jeduden/mdsmith/internal/query"
 	ruledocs "github.com/jeduden/mdsmith/internal/rules"
 )
 
@@ -567,6 +565,63 @@ func TestReportFixResult_DryRunJSONOutput(t *testing.T) {
 	assert.Equal(t, "f.md", records[0]["path"])
 }
 
+func TestReportFixResult_DryRunSARIFOutput(t *testing.T) {
+	opts := fixCLIOpts{dryRun: true, format: "sarif"}
+	result := &fixpkg.Result{
+		FilesChecked: 1,
+		WouldFix:     1,
+		WouldFixFiles: []fixpkg.WouldFixFile{
+			{Path: "f.md", Count: 1, Rules: []fixpkg.RuleFixCount{{RuleID: "MDS001", Count: 1}}},
+		},
+		Diagnostics: []lint.Diagnostic{
+			{
+				File: "f.md", Line: 5, RuleID: "MDS002", RuleName: "no-fix-rule",
+				Severity: lint.Warning, Message: "unfixable",
+			},
+		},
+	}
+	var code int
+	var stdout string
+	stderr := captureStderr(func() {
+		stdout = captureStdout(func() {
+			code = reportFixResult(opts, result, &vlog.Logger{})
+		})
+	})
+	assert.Equal(t, 1, code, "unfixable diagnostics → exit 1")
+	assert.Empty(t, stdout, "SARIF must go to stderr, not stdout")
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(stderr)), &doc),
+		"dry-run SARIF output must be valid JSON")
+	assert.Equal(t, "2.1.0", doc["version"])
+	runs := doc["runs"].([]any)
+	results := runs[0].(map[string]any)["results"].([]any)
+	assert.Len(t, results, 1, "only unfixable diagnostics appear in dry-run SARIF")
+}
+
+func TestReportFixResult_DryRunSARIFQuietSuppressesOutput(t *testing.T) {
+	opts := fixCLIOpts{dryRun: true, format: "sarif", quiet: true}
+	result := &fixpkg.Result{
+		WouldFix: 1,
+		WouldFixFiles: []fixpkg.WouldFixFile{
+			{Path: "f.md", Count: 1},
+		},
+		Diagnostics: []lint.Diagnostic{
+			{File: "f.md", Line: 1, RuleID: "MDS001", RuleName: "r", Severity: lint.Error, Message: "m"},
+		},
+	}
+	var code int
+	var stdout string
+	stderr := captureStderr(func() {
+		stdout = captureStdout(func() {
+			code = reportFixResult(opts, result, &vlog.Logger{})
+		})
+	})
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.NotContains(t, stderr, "{", "--quiet must suppress dry-run SARIF on stderr too")
+}
+
 func TestReportFixResult_DryRunJSONQuietSuppressesOutput(t *testing.T) {
 	opts := fixCLIOpts{dryRun: true, format: "json", quiet: true}
 	result := &fixpkg.Result{
@@ -585,6 +640,51 @@ func TestReportFixResult_DryRunJSONQuietSuppressesOutput(t *testing.T) {
 	assert.Equal(t, 0, code)
 	assert.Empty(t, stdout)
 	assert.NotContains(t, stderr, "{", "--quiet must suppress dry-run JSON on stderr too")
+}
+
+func TestReportCheckResult_SARIFEmittedWhenNoDiagnostics(t *testing.T) {
+	// SARIF must always be emitted so github/codeql-action/upload-sarif
+	// receives a valid document (not an empty file) on a clean codebase.
+	opts := checkCLIOpts{format: "sarif"}
+	result := &engine.Result{FilesChecked: 3}
+	var code int
+	var stdout string
+	stderr := captureStderr(func() {
+		stdout = captureStdout(func() {
+			code = reportCheckResult(result, opts, &vlog.Logger{})
+		})
+	})
+	assert.Equal(t, 0, code)
+	assert.Empty(t, stdout, "SARIF must go to stderr")
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(stderr)), &doc),
+		"must emit valid SARIF even with zero diagnostics")
+	assert.Equal(t, "2.1.0", doc["version"])
+	runs := doc["runs"].([]any)
+	results := runs[0].(map[string]any)["results"].([]any)
+	assert.Empty(t, results, "zero diagnostics → empty results array")
+}
+
+func TestReportFixResult_SARIFEmittedWhenNoDiagnostics(t *testing.T) {
+	// Same invariant as check: fix -f sarif must produce a valid SARIF
+	// document even when fixing resolved all issues (Diagnostics empty).
+	opts := fixCLIOpts{format: "sarif"}
+	result := &fixpkg.Result{FilesChecked: 2, Modified: []string{"f.md"}}
+	var code int
+	var stdout string
+	stderr := captureStderr(func() {
+		stdout = captureStdout(func() {
+			code = reportFixResult(opts, result, &vlog.Logger{})
+		})
+	})
+	assert.Equal(t, 0, code)
+	assert.Empty(t, stdout)
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(stderr)), &doc),
+		"must emit valid SARIF even after all issues are fixed")
+	assert.Equal(t, "2.1.0", doc["version"])
 }
 
 func TestReportFixResult_DiagnosticsReturnsCode1(t *testing.T) {
@@ -710,6 +810,157 @@ func TestFixDiscovered_BadMaxInputSize_ExitsTwo(t *testing.T) {
 	assert.Contains(t, stderr, "max-input-size")
 }
 
+// gitBoundary marks dir as a repo root for config.Discover (see
+// internal/config/load.go), so a test with no .mdsmith.yml of its own
+// stops its upward config search at dir instead of walking to the
+// filesystem root and, in principle, picking up an unrelated ancestor
+// config.
+func gitBoundary(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+}
+
+// --- runCheck ---
+//
+// runCheck is the "check" subcommand entry dispatched from dispatch() in
+// main.go; go.md/audit-checklist.md name a CLI subcommand entry as a
+// public surface, so a missing dedicated test here is a blocker, not tax.
+// These exercise the three branches it routes to (flag error, stdin,
+// explicit files, config-discovered files) in-process, mirroring the
+// TestRunInit_* pattern in init_unit_test.go rather than relying solely
+// on the binary-spawn e2e tests in e2e_coverage_test.go.
+
+func TestRunCheck_UnknownFlag_ExitsTwo(t *testing.T) {
+	var code int
+	stderr := captureStderr(func() {
+		code = runCheck([]string{"--definitely-not-a-flag"})
+	})
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "unknown flag")
+}
+
+func TestRunCheck_Stdin_ChecksSource(t *testing.T) {
+	dir := t.TempDir()
+	gitBoundary(t, dir)
+	t.Chdir(dir)
+
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer r.Close() //nolint:errcheck // best-effort close on read-only pipe end
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+	go func() {
+		// Trailing spaces trigger a diagnostic, so a passing exit code
+		// alone can't mask a routing bug that skips reading stdin.
+		_, _ = w.WriteString("# Title\n\nHello   \n")
+		_ = w.Close()
+	}()
+
+	var code int
+	stderr := captureStderr(func() {
+		code = runCheck([]string{"-"})
+	})
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, "<stdin>")
+}
+
+func TestRunCheck_Files_ExitsOneOnDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	gitBoundary(t, dir)
+	t.Chdir(dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dirty.md"),
+		[]byte("# Title\n\nHello   \n"), 0o644))
+
+	var code int
+	stderr := captureStderr(func() {
+		code = runCheck([]string{"dirty.md"})
+	})
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, "dirty.md")
+}
+
+func TestRunCheck_Discovered_ChecksConfiguredFiles(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"),
+		[]byte("files: [\"**/*.md\"]\n"), 0o644))
+	// Trailing spaces trigger a diagnostic, so a passing exit code alone
+	// can't mask a discovery bug that silently finds zero files.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.md"),
+		[]byte("# Title\n\nHello   \n"), 0o644))
+	t.Chdir(dir)
+
+	var code int
+	stderr := captureStderr(func() {
+		code = runCheck(nil)
+	})
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, "test.md")
+}
+
+// --- runFix ---
+//
+// runFix is the "fix" subcommand entry, the same public-surface tier as
+// runCheck above. These cover the stdin-rejection branch and the two
+// file-resolution branches (explicit files, config-discovered files) that
+// runCheck's tests exercise, plus the disk write that runCheck has no
+// equivalent of.
+
+func TestRunFix_UnknownFlag_ExitsTwo(t *testing.T) {
+	var code int
+	stderr := captureStderr(func() {
+		code = runFix([]string{"--definitely-not-a-flag"})
+	})
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "unknown flag")
+}
+
+func TestRunFix_StdinArg_ExitsTwo(t *testing.T) {
+	var code int
+	stderr := captureStderr(func() {
+		code = runFix([]string{"-"})
+	})
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "cannot fix stdin in place")
+}
+
+func TestRunFix_Files_FixesGivenFile(t *testing.T) {
+	dir := t.TempDir()
+	gitBoundary(t, dir)
+	t.Chdir(dir)
+	path := filepath.Join(dir, "fixme.md")
+	require.NoError(t, os.WriteFile(path, []byte("# Title\n\nHello   \n"), 0o644))
+
+	var code int
+	captureStderr(func() {
+		code = runFix([]string{"fixme.md"})
+	})
+	assert.Equal(t, 0, code)
+
+	fixed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "# Title\n\nHello\n", string(fixed))
+}
+
+func TestRunFix_Discovered_FixesConfiguredFiles(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"),
+		[]byte("files: [\"**/*.md\"]\n"), 0o644))
+	path := filepath.Join(dir, "fixme.md")
+	require.NoError(t, os.WriteFile(path, []byte("# Title\n\nHello   \n"), 0o644))
+	t.Chdir(dir)
+
+	var code int
+	captureStderr(func() {
+		code = runFix(nil)
+	})
+	assert.Equal(t, 0, code)
+
+	fixed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "# Title\n\nHello\n", string(fixed))
+}
+
 // --- printErrors ---
 
 func TestPrintErrors_Empty_NoOutput(t *testing.T) {
@@ -732,106 +983,6 @@ func TestPrintErrors_MultipleErrors(t *testing.T) {
 	})
 	assert.Contains(t, got, "err one")
 	assert.Contains(t, got, "err two")
-}
-
-// --- readFrontMatterRaw ---
-
-func TestReadFrontMatterRaw_WithFrontMatter(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.md")
-	require.NoError(t, os.WriteFile(path, []byte("---\ntitle: hello\nauthor: alice\n---\n# H\n\nBody.\n"), 0644))
-
-	fm, err := readFrontMatterRaw(path, 0)
-	require.NoError(t, err)
-	require.NotNil(t, fm)
-	assert.Equal(t, "hello", fm["title"])
-	assert.Equal(t, "alice", fm["author"])
-}
-
-func TestReadFrontMatterRaw_NoFrontMatter_ReturnsNil(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.md")
-	require.NoError(t, os.WriteFile(path, []byte("# Just a heading\n\nContent.\n"), 0644))
-
-	fm, err := readFrontMatterRaw(path, 0)
-	require.NoError(t, err)
-	assert.Nil(t, fm)
-}
-
-func TestReadFrontMatterRaw_EmptyFrontMatter_ReturnsEmptyMap(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.md")
-	require.NoError(t, os.WriteFile(path, []byte("---\n---\n# H\n"), 0644))
-
-	fm, err := readFrontMatterRaw(path, 0)
-	require.NoError(t, err)
-	assert.NotNil(t, fm)
-	assert.Empty(t, fm)
-}
-
-func TestReadFrontMatterRaw_NumericValues_Preserved(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.md")
-	require.NoError(t, os.WriteFile(path, []byte("---\ncount: 42\n---\n# H\n"), 0644))
-
-	fm, err := readFrontMatterRaw(path, 0)
-	require.NoError(t, err)
-	assert.Equal(t, 42, fm["count"])
-}
-
-func TestReadFrontMatterRaw_FileNotFound_Error(t *testing.T) {
-	_, err := readFrontMatterRaw("/no/such/file.md", 0)
-	assert.Error(t, err)
-}
-
-func TestReadFrontMatterRaw_YAMLAlias_Error(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.md")
-	require.NoError(t, os.WriteFile(path, []byte("---\na: &anchor val\nb: *anchor\n---\n# H\n"), 0644))
-
-	_, err := readFrontMatterRaw(path, 0)
-	assert.Error(t, err)
-}
-
-// --- parseQueryFlags ---
-
-func TestParseQueryFlags_Defaults(t *testing.T) {
-	opts, args, err := parseQueryFlags([]string{"expr", "file.md"})
-	require.NoError(t, err)
-	assert.False(t, opts.nul)
-	assert.False(t, opts.verbose)
-	assert.Empty(t, opts.configPath)
-	assert.Equal(t, []string{"expr", "file.md"}, args)
-}
-
-func TestParseQueryFlags_NullLongFlag(t *testing.T) {
-	opts, _, err := parseQueryFlags([]string{"--null", "expr"})
-	require.NoError(t, err)
-	assert.True(t, opts.nul)
-}
-
-func TestParseQueryFlags_NullShortFlag(t *testing.T) {
-	opts, _, err := parseQueryFlags([]string{"-0", "expr"})
-	require.NoError(t, err)
-	assert.True(t, opts.nul)
-}
-
-func TestParseQueryFlags_VerboseFlag(t *testing.T) {
-	opts, _, err := parseQueryFlags([]string{"-v", "expr"})
-	require.NoError(t, err)
-	assert.True(t, opts.verbose)
-}
-
-func TestParseQueryFlags_ConfigFlag(t *testing.T) {
-	opts, _, err := parseQueryFlags([]string{"-c", "/path/cfg.yml", "expr"})
-	require.NoError(t, err)
-	assert.Equal(t, "/path/cfg.yml", opts.configPath)
-}
-
-func TestParseQueryFlags_MaxInputSizeFlag(t *testing.T) {
-	opts, _, err := parseQueryFlags([]string{"--max-input-size", "1MB", "expr"})
-	require.NoError(t, err)
-	assert.Equal(t, "1MB", opts.maxInputSize)
 }
 
 // --- parseCheckFlags ---
@@ -897,119 +1048,6 @@ func TestParseCheckFlags_HelpReturnsZero(t *testing.T) {
 	assert.Contains(t, stderr, "Usage: mdsmith check")
 }
 
-// --- queryFiles ---
-
-func TestQueryFiles_MatchingFile_ReturnsOneAndWritesPath(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.md")
-	require.NoError(t, os.WriteFile(path, []byte("---\nstatus: done\n---\n# H\n\nContent here.\n"), 0644))
-
-	matcher, err := query.Compile(`status: "done"`)
-	require.NoError(t, err)
-
-	out := captureStdout(func() {
-		count := queryFiles(matcher, []string{path}, "\n", false, 0)
-		assert.Equal(t, 1, count)
-	})
-	assert.Contains(t, out, path)
-}
-
-func TestQueryFiles_NonMatchingFile_ReturnsZero(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.md")
-	require.NoError(t, os.WriteFile(path, []byte("---\nstatus: draft\n---\n# H\n\nContent here.\n"), 0644))
-
-	matcher, err := query.Compile(`status: "done"`)
-	require.NoError(t, err)
-
-	out := captureStdout(func() {
-		count := queryFiles(matcher, []string{path}, "\n", false, 0)
-		assert.Equal(t, 0, count)
-	})
-	assert.Empty(t, out)
-}
-
-func TestQueryFiles_NullDelimiter(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.md")
-	require.NoError(t, os.WriteFile(path, []byte("---\nstatus: done\n---\n# H\n\nContent here.\n"), 0644))
-
-	matcher, err := query.Compile(`status: "done"`)
-	require.NoError(t, err)
-
-	out := captureStdout(func() {
-		queryFiles(matcher, []string{path}, "\x00", false, 0)
-	})
-	assert.True(t, strings.HasSuffix(out, "\x00"))
-}
-
-func TestQueryFiles_VerboseLogsNoFrontMatter(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.md")
-	require.NoError(t, os.WriteFile(path, []byte("# Just a heading\n"), 0644))
-
-	matcher, err := query.Compile(`status: "done"`)
-	require.NoError(t, err)
-
-	var errOut string
-	captureStdout(func() {
-		errOut = captureStderr(func() {
-			count := queryFiles(matcher, []string{path}, "\n", true, 0)
-			assert.Equal(t, 0, count)
-		})
-	})
-	assert.Contains(t, errOut, "no front matter")
-}
-
-func TestQueryFiles_VerboseLogsNonMatch(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.md")
-	require.NoError(t, os.WriteFile(path, []byte("---\nstatus: draft\n---\n# H\n\nContent here.\n"), 0644))
-
-	matcher, err := query.Compile(`status: "done"`)
-	require.NoError(t, err)
-
-	var errOut string
-	captureStdout(func() {
-		errOut = captureStderr(func() {
-			queryFiles(matcher, []string{path}, "\n", true, 0)
-		})
-	})
-	assert.Contains(t, errOut, "expression not satisfied")
-}
-
-func TestQueryFiles_FileReadError_SkipsFile(t *testing.T) {
-	matcher, err := query.Compile(`status: "done"`)
-	require.NoError(t, err)
-
-	out := captureStdout(func() {
-		count := queryFiles(matcher, []string{"/no/such/file.md"}, "\n", false, 0)
-		assert.Equal(t, 0, count)
-	})
-	assert.Empty(t, out)
-}
-
-func TestQueryFiles_MultipleFiles(t *testing.T) {
-	dir := t.TempDir()
-	p1 := filepath.Join(dir, "a.md")
-	p2 := filepath.Join(dir, "b.md")
-	p3 := filepath.Join(dir, "c.md")
-	require.NoError(t, os.WriteFile(p1, []byte("---\nstatus: done\n---\n# H\n\nContent.\n"), 0644))
-	require.NoError(t, os.WriteFile(p2, []byte("---\nstatus: done\n---\n# H\n\nContent.\n"), 0644))
-	require.NoError(t, os.WriteFile(p3, []byte("---\nstatus: draft\n---\n# H\n\nContent.\n"), 0644))
-
-	matcher, err := query.Compile(`status: "done"`)
-	require.NoError(t, err)
-
-	out := captureStdout(func() {
-		count := queryFiles(matcher, []string{p1, p2, p3}, "\n", false, 0)
-		assert.Equal(t, 2, count)
-	})
-	assert.Contains(t, out, p1)
-	assert.Contains(t, out, p2)
-	assert.NotContains(t, out, p3)
-}
-
 // --- loadConfigRaw ---
 
 func TestLoadConfigRaw_ExplicitPath_LoadsConfig(t *testing.T) {
@@ -1041,48 +1079,6 @@ func TestLoadConfigRaw_EmptyPath_ReturnsNonNilConfig(t *testing.T) {
 	cfg, _, err := loadConfigRaw("")
 	require.NoError(t, err)
 	assert.NotNil(t, cfg)
-}
-
-// --- runInit ---
-
-func TestRunInit_ExtraArgs_ExitsTwo(t *testing.T) {
-	captureStderr(func() {
-		code := runInit([]string{"extra"})
-		assert.Equal(t, 2, code)
-	})
-}
-
-func TestRunInit_CreatesConfigFile(t *testing.T) {
-	dir := t.TempDir()
-	oldWd, err := os.Getwd()
-	require.NoError(t, err)
-	defer func() { _ = os.Chdir(oldWd) }()
-	require.NoError(t, os.Chdir(dir))
-
-	captureStderr(func() {
-		code := runInit(nil)
-		assert.Equal(t, 0, code)
-	})
-
-	data, err := os.ReadFile(filepath.Join(dir, ".mdsmith.yml"))
-	require.NoError(t, err)
-	// Verify it's parseable YAML
-	var out map[string]any
-	require.NoError(t, yaml.Unmarshal(data, &out))
-}
-
-func TestRunInit_AlreadyExists_ExitsTwo(t *testing.T) {
-	dir := t.TempDir()
-	oldWd, err := os.Getwd()
-	require.NoError(t, err)
-	defer func() { _ = os.Chdir(oldWd) }()
-	require.NoError(t, os.Chdir(dir))
-	require.NoError(t, os.WriteFile(".mdsmith.yml", []byte("rules: {}\n"), 0644))
-
-	captureStderr(func() {
-		code := runInit(nil)
-		assert.Equal(t, 2, code)
-	})
 }
 
 // --- runHelp ---
@@ -1503,76 +1499,6 @@ func TestDiscoverConfigPath_EmptyNoConfigFallsBack(t *testing.T) {
 	assert.Equal(t, filepath.Join(dir, ".mdsmith.yml"), got)
 }
 
-// --- init config generation ---
-
-func TestDefaultConfigBytes(t *testing.T) {
-	data, err := defaultConfigBytes()
-	require.NoError(t, err)
-
-	s := string(data)
-	assert.Contains(t, s, "rules:")
-	assert.Contains(t, s, "front-matter: true")
-	assert.Contains(t, s, "line-length")
-}
-
-func TestInitConfigBytes_EmptyFlagUsesDefaults(t *testing.T) {
-	var buf bytes.Buffer
-	data, source, err := initConfigBytes("", &buf)
-	require.NoError(t, err)
-
-	assert.Empty(t, source)
-	assert.Contains(t, string(data), "rules:")
-	assert.Empty(t, buf.String(), "defaults conversion emits no notes")
-}
-
-func TestInitConfigBytes_ConvertsNamedConfig(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".markdownlint.json")
-	require.NoError(t, os.WriteFile(path,
-		[]byte(`{"MD013": {"line_length": 120}, "MD024": {"siblings_only": true}}`), 0o644))
-
-	var buf bytes.Buffer
-	data, source, err := initConfigBytes(path, &buf)
-	require.NoError(t, err)
-
-	assert.Equal(t, path, source)
-	assert.Contains(t, string(data), "max: 120")
-	assert.Contains(t, buf.String(), "siblings_only",
-		"untranslated options are echoed as notes")
-}
-
-func TestConvertedConfigBytes_AutoDiscovers(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".markdownlint.yaml"),
-		[]byte("MD041: false\n"), 0o644))
-	t.Chdir(dir)
-
-	var buf bytes.Buffer
-	data, source, err := convertedConfigBytes("auto", &buf)
-	require.NoError(t, err)
-
-	assert.Equal(t, ".markdownlint.yaml", source)
-	assert.Contains(t, string(data), "first-line-heading: false")
-}
-
-func TestConvertedConfigBytes_MissingFile(t *testing.T) {
-	var buf bytes.Buffer
-	_, _, err := convertedConfigBytes(filepath.Join(t.TempDir(), "nope.json"), &buf)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nope.json")
-}
-
-func TestConvertedConfigBytes_ParseError(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".markdownlintrc")
-	require.NoError(t, os.WriteFile(path, []byte(`{"MD013" true}`), 0o644))
-
-	var buf bytes.Buffer
-	_, _, err := convertedConfigBytes(path, &buf)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), ".markdownlintrc")
-}
-
 // failAfterWriter accepts the first n writes, then fails. Drives the
 // buffered report paths' final-flush error branches: content shorter
 // than the buffer only reaches the underlying writer at Flush.
@@ -1615,6 +1541,16 @@ func TestReportFixResultTo_DryRunJSONWriteErrorFlushes(t *testing.T) {
 	assert.Equal(t, 2, code)
 }
 
+func TestReportFixResultTo_DryRunSARIFWriteErrorReturns2(t *testing.T) {
+	// Drive lines 369-370 in fix.go: enough diagnostics to overflow the
+	// 64 KiB buffer during SARIF JSON encoding so formatDiagnosticsTo
+	// returns non-zero and the early-return branch is taken.
+	opts := fixCLIOpts{dryRun: true, format: "sarif"}
+	result := &fixpkg.Result{FilesChecked: 1, Diagnostics: manyDiagnostics(2000)}
+	code := reportFixResultTo(opts, result, &vlog.Logger{}, &alwaysErrorWriter{})
+	assert.Equal(t, 2, code)
+}
+
 func TestReportCheckResultTo_LargeDiagWriteErrorReturns2(t *testing.T) {
 	// Enough diagnostics to overflow the 64 KiB stderr buffer, so the
 	// formatter itself observes the write failure mid-stream and the
@@ -1630,4 +1566,39 @@ func TestReportFixResultTo_LargeDiagWriteErrorReturns2(t *testing.T) {
 	result := &fixpkg.Result{FilesChecked: 1, Diagnostics: manyDiagnostics(2000)}
 	code := reportFixResultTo(opts, result, &vlog.Logger{}, &alwaysErrorWriter{})
 	assert.Equal(t, 2, code)
+}
+
+func TestNonMarkdownSkipWarner_TextEmitsAndDedupes(t *testing.T) {
+	var buf bytes.Buffer
+	warn := nonMarkdownSkipWarner(&buf, "text", false)
+	require.NotNil(t, warn, "text, non-quiet should produce an active warner")
+
+	warn(".gitattributes")
+	warn(".gitattributes") // duplicate: must not warn twice
+	warn("Makefile")
+
+	out := buf.String()
+	assert.Equal(t, 1, strings.Count(out, `skipping ".gitattributes"`),
+		"a repeated path must warn only once")
+	assert.Contains(t, out, `skipping "Makefile"`)
+	// The recognized extensions are surfaced so a user with a
+	// near-miss name (e.g. notes.mdown) understands why it was skipped.
+	assert.Contains(t, out, ".md, .markdown")
+}
+
+func TestNonMarkdownSkipWarner_SuppressedForQuietAndNonText(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		format string
+		quiet  bool
+	}{
+		{"quiet", "text", true},
+		{"json", "json", false},
+		{"sarif", "sarif", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Nil(t, nonMarkdownSkipWarner(io.Discard, tc.format, tc.quiet),
+				"warner must be disabled to avoid non-error output / corrupting structured formats")
+		})
+	}
 }

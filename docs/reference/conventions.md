@@ -37,13 +37,17 @@ config key, sibling to `rules:`, `kinds:`, and
 `overrides:`. An unknown name is a config error.
 
 Built-in values: `portable`, `github`, `obsidian`,
-`parity`, `plain`, `no-llm-tells`. The key is
+`plain`, `no-llm-tells`, `slidev`, and the four
+`<linter>-parity` conventions below. The key is
 optional; omit it for no convention.
 
 You may also set `flavor:` inside `markdown-flavor`
 alongside `convention:`. If both are set, they must
-agree — a convention that requires `commonmark`
-rejects `flavor: gfm` at config load.
+agree — a convention that pins a flavor (e.g.
+`portable` requires `commonmark`) rejects a
+conflicting `flavor:` at config load. Conventions
+that pin no flavor (`slidev`, `no-llm-tells`) do not
+enforce this check.
 
 ## Built-in conventions
 
@@ -112,46 +116,71 @@ plus `allow-comments: false` on `no-inline-html` so
 HTML comments do not leak through as literal
 `<!-- ... -->` text.
 
-A truly plaintext-faithful convention needs three
-more rules. One forbids `*` and `_` runs. One
-requires indented code blocks. One inverts
-`no-bare-urls` so bare URLs are preferred over
-Markdown links. Those rules don't exist yet. When
-they ship, the `plain` convention gains them and
-diverges from `portable`.
+Three additional rules (forbid `*`/`_` runs,
+require indented code blocks, prefer bare URLs) do
+not exist yet. When they ship, `plain` gains them
+and diverges from `portable`.
 
-### `parity`
+### `<linter>-parity`
 
-Markdown checked the way the
-markdownlint-compatible tools (mado, rumdl) check
-it: `flavor: gfm` plus every mdsmith-only rule
-turned off, leaving the structural style class
-those tools also run. Use it for a like-for-like
-comparison, or as a fast markdownlint gate before
-you adopt the cross-file and generated-section
-layer. The disabled-rule list is generated from the
-convention, so it never drifts — see the
-[benchmark doc][parity-list]. Unlike the other
-built-ins, `parity` leaves `markdown-flavor`
-(MDS034) opt-in.
+Four conventions match a peer linter's default rule
+set, for benchmarks or a fast peer-equivalent gate.
+Each picks `flavor: gfm` and leaves MDS034 opt-in.
 
+| Convention            | Peer         | Rules |
+| --------------------- | ------------ | ----- |
+| `gomarklint-parity`   | gomarklint   | 20    |
+| `mado-parity`         | mado         | 27    |
+| `rumdl-parity`        | rumdl        | 41    |
+| `markdownlint-parity` | markdownlint | 41    |
+
+Each enables the opt-in rules its peer runs and
+disables the defaults it skips. Only full covers
+count: a partial peer mapping does not run the
+heavier mdsmith rule. The CI-checked sets come from
+the [coverage matrix][coverage]. All disable MDS027
+(the peers' `link-fragments` cover same-file anchors
+only), so `gomarklint-parity` and `mado-parity` are
+parse-skip-safe. [Rule tables are generated.][parity-list]
+
+[coverage]: ../research/markdownlint-coverage/README.md
 [parity-list]: ../research/benchmarks/README.md
 
 ### `no-llm-tells`
 
 Flags mechanical LLM-prose tells in CI. MDS056
-blocks vocabulary and phrasal tells; MDS055 blocks
-banned sentence openers; MDS023 and MDS024 tighten
-readability budgets. Lists are sourced from
-[`slop-patterns.md`][slop]; a drift-checker test
-keeps the two in sync.
+blocks a curated vocabulary of LLM tell words and
+phrases; MDS055 blocks the banned sentence openers;
+MDS023 and MDS024 tighten readability budgets. The
+lists are sourced from [`slop-patterns.md`][slop]; a
+drift-checker test keeps them in sync.
 
-Pins no flavor and does not enable `markdown-flavor`
-(MDS034). The `contains` and `starts` lists merge by
-**append**: a project's own entries join the
-convention's list instead of replacing it.
+Pins no flavor; it does not enable `markdown-flavor`
+(MDS034). The curated words ship as inline
+`contains:`/`starts:` presets, which append, so a
+project's terms join rather than replace them.
 
 [slop]: ../../.claude/skills/docs-author/slop-patterns.md
+
+### `slidev`
+
+Disables eight default-on rules that produce false
+positives on [Slidev](https://sli.dev) files, and
+enables `slide-structure` (MDS073) to validate
+per-slide layouts, slots, fields, and keys. Slidev
+uses `---` as a slide separator (parsed as a setext
+underline); headings restart per slide. Pins no flavor.
+
+| Rule                                          | Why disabled                               |
+| --------------------------------------------- | ------------------------------------------ |
+| `heading-style` (MDS002)                      | `---` separator parsed as setext underline |
+| `heading-increment` (MDS003)                  | Each slide restarts at H1                  |
+| `first-line-heading` (MDS004)                 | Front matter before first heading          |
+| `no-duplicate-headings` (MDS005)              | Same title on multiple slides              |
+| `blank-line-around-headings` (MDS013)         | Layout blocks interfere                    |
+| `no-trailing-punctuation-in-heading` (MDS017) | Stylistic slide titles                     |
+| `no-emphasis-as-heading` (MDS018)             | Bold used for slide emphasis               |
+| `empty-section-body` (MDS030)                 | Layout-only slides have no body            |
 
 ## How presets layer with user config
 
@@ -168,19 +197,13 @@ oldest → newest, is:
    effective list
 5. `overrides[i]` — each matching override entry
 
-Each layer deep-merges onto the previous one.
-Scalars at a leaf are replaced by the later layer;
-maps recurse key by key; lists replace by default.
-A convention preset provides the floor; your
-explicit `rules:` block overrides on top.
-
-The `default` and `user` layers come from the same
-`cfg.Rules` map. mdsmith splits them around the
-convention so a convention can enable a rule that
-is opt-in by default (e.g. `convention: portable`
-turns on MDS034). Without the split, the default's
-`Enabled: false` would override the convention's
-`Enabled: true`.
+Each layer deep-merges: scalar leaves replace, maps
+recurse key by key, lists replace by default. The
+convention provides the floor; your `rules:` block
+overrides on top. mdsmith splits `default` and
+`user` around the convention so a convention can
+enable an opt-in rule without being overridden by
+the default's `Enabled: false`.
 
 For example, the `github` convention sets
 `no-inline-html.allow: [details, summary]`. To
@@ -194,27 +217,18 @@ rules:
     allow: [sub, sup]
 ```
 
-Lists default to replace, so the effective
-allowlist becomes `[sub, sup]`. To keep the
-preset's entries, list them explicitly:
-`allow: [details, summary, sub, sup]`.
+Lists default to replace, so the effective allowlist becomes `[sub,
+sup]`. To keep the preset's entries, explicitly list all of them:
+`allow: [details, summary, sub, sup]`. The `lists:` key is separate
+and always appends — see [word-list files](wordlist-files.md).
 
 ## Disabling MDS034
 
-A convention applies its rule presets at config
-load time. Disabling `markdown-flavor` itself does
-not disable the rules a convention turned on.
-
-```yaml
-convention: portable
-rules:
-  markdown-flavor: false
-```
-
-A bool-only `markdown-flavor: false` entry toggles
-`enabled` without erasing the preset's settings. The
-rule stays configured but its `Check()` is gated
-off. The other rules in the preset are untouched.
+Convention presets apply at config load. A bool-only
+`markdown-flavor: false` entry in `rules:` toggles
+`enabled` without erasing preset settings — the rule
+is gated off but the other convention rules are
+untouched.
 
 ## User-defined conventions
 
@@ -263,31 +277,27 @@ convention "our-team" rule "no-inline-html": no-inline-html: unknown setting "al
 ### Reserved names
 
 The built-in names `portable`, `github`,
-`obsidian`, `parity`, `plain`, and `no-llm-tells`
-are reserved. Defining a `conventions.portable`
-entry is a config error. This keeps the built-in
-names stable across docs and tutorials.
+`obsidian`, `plain`, `no-llm-tells`, `slidev`, and
+the four `<linter>-parity` conventions are reserved.
+Defining a `conventions.portable` entry is a config
+error. This keeps the built-in names stable across
+docs and tutorials.
 
-### Resolution order
+### Resolution order and layering
 
 The lookup checks user-defined conventions first,
-then falls back to the built-in table. Collisions with
-reserved names are rejected at load time, so shadowing
-is impossible. When neither table matches, the error
-lists both sets:
+then the built-in table. A collision with a reserved
+name is a config error — shadowing is impossible.
+When neither matches, the error lists both sets:
 
 ```text
-unknown convention "bogus" (valid: github, no-llm-tells, obsidian, our-team, parity, plain, portable)
+unknown convention "bogus" (valid: github, gomarklint-parity, mado-parity, markdownlint-parity, no-llm-tells, obsidian, our-team, plain, portable, rumdl-parity, slidev)
 ```
 
-### Interaction with top-level rules
-
 User-defined conventions apply as a base layer, like
-the built-in conventions. A top-level `rules:` entry
-overrides the convention preset for that rule; the
-rest of the preset remains. `mdsmith kinds resolve
-<file>` labels user-convention layers with a
-`(user)` suffix.
+the built-ins. A top-level `rules:` entry overrides
+the convention preset; `mdsmith kinds resolve <file>`
+labels user-convention layers with a `(user)` suffix.
 
 ## Inspecting an effective convention
 

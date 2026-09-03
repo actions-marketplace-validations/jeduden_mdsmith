@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"regexp"
-	"strconv"
 	"unicode/utf8"
 
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -75,7 +74,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 			diags = append(diags, makeDiag(
 				f,
 				tbl.startLine,
-				"table has too many columns ("+strconv.Itoa(cols)+" > "+strconv.Itoa(maxColumns)+")",
+				fmt.Sprintf("table has too many columns (%d > %d)", cols, maxColumns),
 			))
 		}
 
@@ -83,14 +82,19 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 			diags = append(diags, makeDiag(
 				f,
 				tbl.startLine,
-				"table has too many rows ("+strconv.Itoa(rows)+" > "+strconv.Itoa(maxRows)+")",
+				fmt.Sprintf("table has too many rows (%d > %d)", rows, maxRows),
 			))
 		}
 
 		if words, line, col := tbl.maxCellWords(); words > maxWordsPerCell {
-			msg := "table cell has too many words (" + strconv.Itoa(words) + " > " + strconv.Itoa(maxWordsPerCell) + ")"
+			var msg string
 			if header := tbl.columnHeader(col); header != "" {
-				msg += " in column " + strconv.Quote(header)
+				msg = fmt.Sprintf(
+					"table cell has too many words (%d > %d) in column %q",
+					words, maxWordsPerCell, header,
+				)
+			} else {
+				msg = fmt.Sprintf("table cell has too many words (%d > %d)", words, maxWordsPerCell)
 			}
 			diags = append(diags, makeDiag(
 				f,
@@ -194,9 +198,14 @@ func positiveFloatOrDefault(value, fallback float64) float64 {
 	return value
 }
 
+// table holds one parsed table. rows precedes startLine so the
+// GC's ptrdata scan does not also cover the scalar int — mirroring
+// tablefmt.table, which this local copy otherwise duplicates
+// (docs/development/high-performance-go.md#struct-layout; see
+// layout_test.go).
 type table struct {
-	startLine int
 	rows      []tableRow
+	startLine int
 }
 
 // tableRow holds one parsed source row. cells are sub-slices into
@@ -204,10 +213,12 @@ type table struct {
 // row pays one slice allocation rather than one per cell — the
 // dominant per-Check allocator on table-bearing files (plan 195
 // task 2). Consumers convert to string only when emitting a
-// diagnostic message, never on the hot count/width paths.
+// diagnostic message, never on the hot count/width paths. cells
+// precedes line/isSeparator so the GC's ptrdata scan does not also
+// cover those scalars — mirroring tablefmt.row (see layout_test.go).
 type tableRow struct {
-	line        int
 	cells       [][]byte
+	line        int
 	isSeparator bool
 }
 

@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -8,6 +10,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/jeduden/mdsmith/internal/gitignore"
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rules/tablefmt"
@@ -85,6 +88,98 @@ func TestRule_Name(t *testing.T) {
 	if r.Name() != "catalog" {
 		t.Errorf("expected Name catalog, got %s", r.Name())
 	}
+}
+
+func TestRule_RuleID(t *testing.T) {
+	r := &Rule{}
+	assert.Equal(t, "MDS019", r.RuleID())
+}
+
+func TestRule_RuleName(t *testing.T) {
+	r := &Rule{}
+	assert.Equal(t, "catalog", r.RuleName())
+}
+
+func TestRule_Validate(t *testing.T) {
+	r := &Rule{}
+
+	diags := r.Validate("f.md", 1,
+		map[string]string{"row": "{name}", "glob": "*.md"}, nil)
+	assert.Empty(t, diags, "expected no diagnostics for a valid directive")
+
+	diags = r.Validate("f.md", 1,
+		map[string]string{"row": "{name}", "row-expr": "name"}, nil)
+	expectDiags(t, diags, 1)
+	expectDiagMsg(t, diags, `sets both "row" and "row-expr"; choose one`)
+}
+
+// TestCheck_NoCatalogDirectiveAllocatesNothing pins Check's cost on a
+// file with no <?catalog?> directive at zero allocs. MDS019 is
+// default-enabled, so every host file in a workspace pays this path
+// even when it never uses the directive. Before this test, Check
+// unconditionally ran gensection.FindMarkerPairs three times (once via
+// getEngine().Check, once each in checkCaseMismatches and
+// checkInjection) — the same top-level AST walk repeated for every
+// file, catalog or not. This is the "gate expensive analyzers behind a
+// cheap pre-check" pattern documented in
+// docs/development/high-performance-go.md.
+func TestCheck_NoCatalogDirectiveAllocatesNothing(t *testing.T) {
+	if raceEnabled {
+		t.Skip("alloc gate skipped under -race")
+	}
+	fsys := fstest.MapFS{}
+	src := "# Doc\n\nJust a plain paragraph with no directives.\n"
+	f := newTestFile(t, "doc.md", src, fsys)
+	r := &Rule{}
+
+	diags := r.Check(f)
+	expectDiags(t, diags, 0)
+
+	allocs := testing.AllocsPerRun(200, func() {
+		g, err := lint.NewFile("doc.md", []byte(src))
+		require.NoError(t, err)
+		g.FS = fsys
+		g.RootFS = fsys
+		_ = r.Check(g)
+	})
+	parseAllocs := testing.AllocsPerRun(200, func() {
+		g, err := lint.NewFile("doc.md", []byte(src))
+		require.NoError(t, err)
+		_ = g
+	})
+	assert.Zero(t, allocs-parseAllocs,
+		"Check must not allocate on a file with no catalog directive")
+}
+
+// TestCheck_CatalogDirectiveSharesMarkerPairsAcrossPasses pins the
+// deduplication half of the fix: checkCaseMismatches and
+// checkInjection must not each re-run gensection.FindMarkerPairs when
+// a catalog directive is present. This is a behavioral pin (both hint
+// passes still fire) rather than an alloc-count pin, since the engine
+// itself still performs one FindMarkerPairs call independently.
+func TestCheck_CatalogDirectiveSharesMarkerPairsAcrossPasses(t *testing.T) {
+	fsys := fstest.MapFS{
+		"a.md": &fstest.MapFile{Data: []byte("---\nName: a\n---\n# A\n")},
+	}
+	src := "<?catalog\n" +
+		"glob: \"*.md\"\n" +
+		"row: \"- {Name}\"\n" +
+		"?>\n" +
+		"<?/catalog?>\n"
+	f := newTestFile(t, "host.md", src, fsys)
+	r := newDefaultRule()
+
+	diags := r.Check(f)
+	// The directive is out of date (empty body vs the rendered entry),
+	// so the engine reports one diagnostic; the case-mismatch and
+	// injection passes should not raise any additional noise here.
+	found := false
+	for _, d := range diags {
+		if strings.Contains(d.Message, "out of date") {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected the generated-section diagnostic to still fire")
 }
 
 // =====================================================================
@@ -928,7 +1023,7 @@ row: "- [{title}]({filename})"
 	f2 := newTestFile(t, "index.md", string(result1), mapFS)
 	result2 := r.Fix(f2)
 
-	if string(result1) != string(result2) {
+	if !bytes.Equal(result1, result2) {
 		t.Errorf("Fix is not idempotent.\nFirst:\n%s\nSecond:\n%s", string(result1), string(result2))
 	}
 }
@@ -1931,7 +2026,7 @@ func TestSplitLines(t *testing.T) {
 func TestSplitLines_Empty(t *testing.T) {
 	lines := splitLines([]byte(""))
 	require.Len(t, lines, 1, "expected 1 line for empty input, got %d", len(lines))
-	if string(lines[0]) != "" {
+	if len(lines[0]) != 0 {
 		t.Errorf("expected empty line, got %q", string(lines[0]))
 	}
 }
@@ -1939,10 +2034,10 @@ func TestSplitLines_Empty(t *testing.T) {
 func TestSplitLines_SingleNewline(t *testing.T) {
 	lines := splitLines([]byte("\n"))
 	require.Len(t, lines, 2, "expected 2 lines for single newline, got %d", len(lines))
-	if string(lines[0]) != "" {
+	if len(lines[0]) != 0 {
 		t.Errorf("expected empty first line, got %q", string(lines[0]))
 	}
-	if string(lines[1]) != "" {
+	if len(lines[1]) != 0 {
 		t.Errorf("expected empty second line, got %q", string(lines[1]))
 	}
 }
@@ -1956,7 +2051,7 @@ func TestSplitLines_TrailingNewline(t *testing.T) {
 	if string(lines[1]) != "b" {
 		t.Errorf("line 1: got %q", string(lines[1]))
 	}
-	if string(lines[2]) != "" {
+	if len(lines[2]) != 0 {
 		t.Errorf("line 2: expected empty, got %q", string(lines[2]))
 	}
 }
@@ -3027,6 +3122,15 @@ func TestExtractPlaceholderFields_Duplicates(t *testing.T) {
 func TestExtractPlaceholderFields_NoFields(t *testing.T) {
 	fields := extractPlaceholderFields("plain text")
 	assert.Empty(t, fields)
+}
+
+// TestExtractPlaceholderFields_NoFields_ReturnsNil pins
+// docs/development/high-performance-go.md's "return nil, not []T{}"
+// convention: pre-sizing fields via make([]string, 0, len(all)) would
+// otherwise return a non-nil empty slice when row has no placeholders.
+func TestExtractPlaceholderFields_NoFields_ReturnsNil(t *testing.T) {
+	fields := extractPlaceholderFields("plain text")
+	assert.Nil(t, fields)
 }
 
 func TestCheckFieldCaseMismatches_Exact(t *testing.T) {
@@ -4263,7 +4367,7 @@ func TestScanIncludesForTarget_MaxDepthExceeded(t *testing.T) {
 	fsys := fstest.MapFS{
 		"a.md": &fstest.MapFile{Data: []byte("# A\n")},
 	}
-	visited := map[string]bool{}
+	visited := map[string]struct{}{}
 	result := scanIncludesForTarget(&lint.File{}, fsys, "a.md", "target.md", visited, maxIncludeDepth+1, 1000)
 	assert.False(t, result)
 }
@@ -4271,7 +4375,7 @@ func TestScanIncludesForTarget_MaxDepthExceeded(t *testing.T) {
 func TestScanIncludesForTarget_FileReadError(t *testing.T) {
 	// File does not exist in FS → read error → returns false.
 	fsys := fstest.MapFS{}
-	visited := map[string]bool{}
+	visited := map[string]struct{}{}
 	result := scanIncludesForTarget(&lint.File{}, fsys, "nonexistent.md", "target.md", visited, 0, 1000)
 	assert.False(t, result)
 }
@@ -4281,7 +4385,7 @@ func TestScanIncludesForTarget_NoIncludes(t *testing.T) {
 	fsys := fstest.MapFS{
 		"a.md": &fstest.MapFile{Data: []byte("# A\n\nNo includes here.\n")},
 	}
-	visited := map[string]bool{}
+	visited := map[string]struct{}{}
 	result := scanIncludesForTarget(&lint.File{}, fsys, "a.md", "target.md", visited, 0, 1000)
 	assert.False(t, result)
 }
@@ -4293,7 +4397,7 @@ func TestScanIncludesForTarget_DirectMatch(t *testing.T) {
 			Data: []byte("<?include\nfile: target.md\n?>\nsome content\n<?/include?>"),
 		},
 	}
-	visited := map[string]bool{"a.md": true}
+	visited := map[string]struct{}{"a.md": {}}
 	result := scanIncludesForTarget(&lint.File{}, fsys, "a.md", "target.md", visited, 0, 1000)
 	assert.True(t, result)
 }
@@ -4306,7 +4410,7 @@ func TestScanIncludesForTarget_VisitedCycleSkipped(t *testing.T) {
 		},
 	}
 	// Mark b.md as already visited to prevent recursion.
-	visited := map[string]bool{"a.md": true, "b.md": true}
+	visited := map[string]struct{}{"a.md": {}, "b.md": {}}
 	result := scanIncludesForTarget(&lint.File{}, fsys, "a.md", "target.md", visited, 0, 1000)
 	assert.False(t, result)
 }
@@ -4356,7 +4460,7 @@ func TestScanIncludesForTarget_IndirectMatch(t *testing.T) {
 			Data: []byte("<?include\nfile: target.md\n?>\ncontent\n<?/include?>"),
 		},
 	}
-	visited := map[string]bool{"a.md": true}
+	visited := map[string]struct{}{"a.md": {}}
 	result := scanIncludesForTarget(&lint.File{}, fsys, "a.md", "target.md", visited, 0, 1000)
 	assert.True(t, result)
 }
@@ -4369,6 +4473,23 @@ func TestIsExcluded_EmptyPatternSkipped(t *testing.T) {
 
 	result2 := isExcluded("other/file.md", []string{"", ""})
 	assert.False(t, result2, "only empty patterns → no match")
+}
+
+// isExcluded: a malformed pattern (one that fails doublestar.ValidatePattern)
+// must never report a match, even though doublestar.MatchUnvalidated can
+// diverge from doublestar.Match on some malformed patterns. isExcluded can
+// be reached with an unvalidated pattern via checkInjection /
+// checkCaseMismatches, which bypass the gensection engine's Validate pass.
+func TestIsExcluded_MalformedPatternNeverMatches(t *testing.T) {
+	pattern := "{x[,a}"
+	require.False(t, doublestar.ValidatePattern(pattern),
+		"precondition: pattern must be invalid for this test to be meaningful")
+	require.True(t, doublestar.MatchUnvalidated(pattern, "a"),
+		"precondition: MatchUnvalidated must diverge from Match for this pattern, "+
+			"or this test is not exercising the guard it claims to")
+
+	assert.False(t, isExcluded("a", []string{pattern}),
+		"a malformed exclude pattern must never exclude a file")
 }
 
 // sortValue: ParseCUEPath returns nil → return ""
@@ -4782,4 +4903,55 @@ func TestReadFrontMatter_FlatFastPath(t *testing.T) {
 			assert.Equal(t, tc.want, fm)
 		})
 	}
+}
+
+// TestCatalogFileCountCap pins S004: when a glob matches more than
+// maxCatalogMatches files the rule must emit a diagnostic and leave the
+// generated section unchanged rather than accumulating all matches in memory.
+func TestCatalogFileCountCap(t *testing.T) {
+	// Build a filesystem with maxCatalogMatches+1 files so the cap fires.
+	mapFS := make(fstest.MapFS, maxCatalogMatches+1)
+	for i := range maxCatalogMatches + 1 {
+		name := fmt.Sprintf("docs/file%05d.md", i)
+		mapFS[name] = &fstest.MapFile{Data: []byte("# Doc\n")}
+	}
+
+	// Pre-populate the generated section so we can verify it is left
+	// unchanged when the cap fires.
+	existing := "- [existing](docs/existing.md)\n"
+	src := "<?catalog\nglob: \"docs/*.md\"\n?>\n" + existing + "<?/catalog?>\n"
+
+	f := newTestFile(t, "index.md", src, mapFS)
+	r := newDefaultRule()
+	diags := r.Check(f)
+
+	require.NotEmpty(t, diags, "exceeding maxCatalogMatches must produce a diagnostic")
+	found := false
+	for _, d := range diags {
+		if strings.Contains(d.Message, "too many") || strings.Contains(d.Message, "matches") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "diagnostic must mention the file-count cap; got: %v", diags)
+
+	// Fix must also leave the generated section unchanged when the cap fires.
+	fixed := r.Fix(f)
+	assert.Equal(t, src, string(fixed),
+		"Fix must not modify the generated section when the cap diagnostic fires")
+}
+
+// TestValidateGlob_URLSchemeRejected pins S004: a glob pattern that contains
+// a URL scheme (e.g. "https://") must produce a diagnostic rather than being
+// passed to the filesystem glob resolver, where it would either panic or
+// silently return no matches and hide a misconfiguration.
+func TestValidateGlob_URLSchemeRejected(t *testing.T) {
+	src := "<?catalog\nglob: \"https://evil.example/**/*.md\"\n?>\n<?/catalog?>\n"
+	// f.FS must be non-nil so Check doesn't return early before reaching gensection.
+	f := newTestFile(t, "index.md", src, fstest.MapFS{})
+	r := newDefaultRule()
+	diags := r.Check(f)
+	require.NotEmpty(t, diags, "URL scheme in glob must produce a diagnostic")
+	assert.Contains(t, diags[0].Message, "URL scheme",
+		"diagnostic must mention 'URL scheme'; got: %v", diags[0].Message)
 }

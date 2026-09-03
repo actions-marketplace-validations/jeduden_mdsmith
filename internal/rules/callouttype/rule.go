@@ -15,6 +15,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/jeduden/mdsmith/internal/rules/settings"
+	"github.com/jeduden/mdsmith/internal/setutil"
 )
 
 func init() {
@@ -36,6 +37,12 @@ func (r *Rule) ID() string { return "MDS067" }
 // Name implements rule.Rule.
 func (r *Rule) Name() string { return "callout-type" }
 
+// WordlistTarget implements rule.WordlistConsumer: resolved `lists:`
+// entries union into this rule's "allow" setting.
+func (r *Rule) WordlistTarget() string { return "allow" }
+
+var _ rule.WordlistConsumer = (*Rule)(nil)
+
 // Category implements rule.Rule.
 func (r *Rule) Category() string { return "structural" }
 
@@ -50,34 +57,34 @@ func (r *Rule) EnabledByDefault() bool { return false }
 // vocabulary; the diagnostic message orders names via
 // validTypeOrder below, so map iteration order does not affect
 // output stability.
-var builtInTypes = map[string]bool{
-	"note":      true,
-	"abstract":  true,
-	"summary":   true,
-	"tldr":      true,
-	"info":      true,
-	"todo":      true,
-	"tip":       true,
-	"hint":      true,
-	"important": true,
-	"success":   true,
-	"check":     true,
-	"done":      true,
-	"question":  true,
-	"help":      true,
-	"faq":       true,
-	"warning":   true,
-	"caution":   true,
-	"attention": true,
-	"failure":   true,
-	"fail":      true,
-	"missing":   true,
-	"danger":    true,
-	"error":     true,
-	"bug":       true,
-	"example":   true,
-	"quote":     true,
-	"cite":      true,
+var builtInTypes = map[string]struct{}{
+	"note":      {},
+	"abstract":  {},
+	"summary":   {},
+	"tldr":      {},
+	"info":      {},
+	"todo":      {},
+	"tip":       {},
+	"hint":      {},
+	"important": {},
+	"success":   {},
+	"check":     {},
+	"done":      {},
+	"question":  {},
+	"help":      {},
+	"faq":       {},
+	"warning":   {},
+	"caution":   {},
+	"attention": {},
+	"failure":   {},
+	"fail":      {},
+	"missing":   {},
+	"danger":    {},
+	"error":     {},
+	"bug":       {},
+	"example":   {},
+	"quote":     {},
+	"cite":      {},
 }
 
 // validTypeOrder is the message-facing list of base type names. The
@@ -94,13 +101,20 @@ var validTypeOrder = []string{
 // underscore).
 var calloutRE = regexp.MustCompile(`^\[!([A-Za-z0-9_-]+)\]`)
 
-// Check implements rule.Rule.
+// Check implements rule.Rule. The callout token lives on a blockquote's
+// first content line — read from the AST's first paragraph on a parsed
+// File and from the Layer 0 BlockQuote span's first line on a parse-
+// skipped File (f.AST nil). Both resolve the same token, line, and
+// column, so the diagnostics are identical.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	if r.AllowUnknown {
 		return nil
 	}
-	if f == nil || f.AST == nil {
+	if f == nil {
 		return nil
+	}
+	if f.AST == nil {
+		return r.checkLayer0(f)
 	}
 	allowed := r.cachedAllowSet(f)
 	var diags []lint.Diagnostic
@@ -116,7 +130,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 		if !ok {
 			return ast.WalkContinue, nil
 		}
-		if allowed[strings.ToLower(token)] {
+		if setutil.Contains(allowed, strings.ToLower(token)) {
 			return ast.WalkContinue, nil
 		}
 		diags = append(diags, r.unknownTypeDiag(f.Path, line, col, token))
@@ -125,18 +139,131 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	return diags
 }
 
+// checkLayer0 is the nil-AST counterpart of the AST walk. It scans
+// source lines directly, tracking blockquote nesting depth. A line
+// whose depth d exceeds the previous non-blank line's depth marks the
+// opening line of a nested blockquote at depth d; calloutRE is applied
+// to its content, matching what the AST path extracts from each
+// blockquote node's first paragraph. Code-block lines are skipped.
+//
+// This line-by-line approach is necessary because Layer0 emits only one
+// BlockQuote span per outermost blockquote run; inner nested spans live
+// only in the throwaway recursive scan and are never surfaced.
+func (r *Rule) checkLayer0(f *lint.File) []lint.Diagnostic {
+	allowed := r.cachedAllowSet(f)
+	codeLines := lint.CollectCodeBlockLines(f)
+	var diags []lint.Diagnostic
+	prevDepth := 0
+	for lineNum := 1; lineNum <= len(f.Lines); lineNum++ {
+		if _, inCode := codeLines[lineNum]; inCode {
+			prevDepth = 0
+			continue
+		}
+		d := lineQuoteDepth(f.Lines[lineNum-1])
+		if d == 0 {
+			// Only a truly blank line closes the blockquote context;
+			// a non-blank line without `>` is a CommonMark lazy
+			// continuation of the current paragraph and must not reset
+			// the depth, otherwise the next `>` line is mistaken for a
+			// new callout opener inside the same goldmark Blockquote node.
+			if len(bytes.TrimRight(f.Lines[lineNum-1], " \t\r\n")) == 0 {
+				prevDepth = 0
+			}
+			continue
+		}
+		if d <= prevDepth {
+			prevDepth = d
+			continue
+		}
+		// d > prevDepth: first content line at this nesting depth.
+		token, line, col, ok := calloutTokenFromLine(f, lineNum, d)
+		if !ok {
+			prevDepth = d
+			continue
+		}
+		if setutil.Contains(allowed, strings.ToLower(token)) {
+			prevDepth = d
+			continue
+		}
+		diags = append(diags, r.unknownTypeDiag(f.Path, line, col, token))
+		prevDepth = d
+	}
+	return diags
+}
+
+// lineQuoteDepth counts the number of consecutive blockquote marker
+// levels (stripped one at a time by quoteMarkerLen) on a raw line.
+func lineQuoteDepth(line []byte) int {
+	d, offset := 0, 0
+	for {
+		n := quoteMarkerLen(line[offset:])
+		if n == 0 {
+			return d
+		}
+		d++
+		offset += n
+	}
+}
+
+// calloutTokenFromLine reads the `[!type]` token from the 1-based source
+// line lineNum, stripping depth blockquote marker levels to reach the
+// paragraph content goldmark feeds calloutRE on the AST path. The column
+// is the 1-based source column of the matched `[`, matching the AST path's
+// ColumnOfOffset(seg.Start + m[0]).
+func calloutTokenFromLine(f *lint.File, lineNum int, depth int) (token string, line, col int, ok bool) {
+	idx := lineNum - 1
+	if idx < 0 || idx >= len(f.Lines) {
+		return "", 0, 0, false
+	}
+	raw := f.Lines[idx]
+	contentStart := 0
+	for i := 0; i < depth; i++ {
+		n := quoteMarkerLen(raw[contentStart:])
+		if n == 0 {
+			return "", 0, 0, false
+		}
+		contentStart += n
+	}
+	content := bytes.TrimRight(raw[contentStart:], "\r\n")
+	m := calloutRE.FindSubmatchIndex(content)
+	if m == nil {
+		return "", 0, 0, false
+	}
+	return string(content[m[2]:m[3]]), lineNum, contentStart + m[0] + 1, true
+}
+
+// quoteMarkerLen returns the byte length of the leading blockquote marker
+// on line: up to 3 spaces of indent, one `>`, and one optional following
+// space. It mirrors goldmark's blockquote-marker consumption so the
+// paragraph content begins at the returned offset. A line with no `>`
+// returns 0.
+func quoteMarkerLen(line []byte) int {
+	i := 0
+	for i < len(line) && i < 3 && line[i] == ' ' {
+		i++
+	}
+	if i >= len(line) || line[i] != '>' {
+		return 0
+	}
+	i++
+	if i < len(line) && line[i] == ' ' {
+		i++
+	}
+	return i
+}
+
 // buildAllowSet constructs the union of the built-in Obsidian types and the
 // user-configured Allow entries. It is called from cachedAllowSet via f.Memo
 // so it runs at most once per file. Rule instances are shared across concurrent
 // LSP calls, so mutable caching on the Rule struct itself would race; the
 // per-File memo is sync.Map + sync.Once protected and avoids that entirely.
-func (r *Rule) buildAllowSet() map[string]bool {
-	out := make(map[string]bool, len(builtInTypes)+len(r.Allow))
+func (r *Rule) buildAllowSet() map[string]struct{} {
+	out := make(map[string]struct{}, len(builtInTypes)+len(r.Allow))
 	for k := range builtInTypes {
-		out[k] = true
+		out[k] = struct{}{}
 	}
 	for _, name := range r.Allow {
-		out[strings.ToLower(name)] = true
+		out[strings.ToLower(name)] = struct{}{}
 	}
 	return out
 }
@@ -144,9 +271,9 @@ func (r *Rule) buildAllowSet() map[string]bool {
 // cachedAllowSet returns the effective allow set memoised on the per-Check
 // *lint.File, so the map is built at most once per file regardless of how
 // many callout blockquotes the file contains.
-func (r *Rule) cachedAllowSet(f *lint.File) map[string]bool {
+func (r *Rule) cachedAllowSet(f *lint.File) map[string]struct{} {
 	v := f.Memo("MDS067.allowSet", func() any { return r.buildAllowSet() })
-	return v.(map[string]bool)
+	return v.(map[string]struct{})
 }
 
 // calloutToken returns the `[!type]` token, body-relative line, and

@@ -1,6 +1,7 @@
 package build
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -36,6 +37,35 @@ func TestRule_ID(t *testing.T) {
 
 func TestRule_Name(t *testing.T) {
 	assert.Equal(t, "build", (&Rule{}).Name())
+}
+
+func TestRule_RuleID(t *testing.T) {
+	assert.Equal(t, "MDS039", (&Rule{}).RuleID())
+}
+
+func TestRule_RuleName(t *testing.T) {
+	assert.Equal(t, "build", (&Rule{}).RuleName())
+}
+
+func TestRule_Validate(t *testing.T) {
+	r := ruleWithRender()
+
+	diags := r.Validate("test.md", 1,
+		map[string]string{"recipe": "render", "outputs": "out.png", "source": "a.svg"}, nil)
+	assert.Empty(t, diags, "expected no diagnostics for a valid directive")
+
+	diags = r.Validate("test.md", 1, map[string]string{"outputs": "out.png"}, nil)
+	require.Len(t, diags, 1)
+	assert.Contains(t, diags[0].Message, `missing required "recipe"`)
+}
+
+func TestRule_Generate(t *testing.T) {
+	r := ruleWithRender()
+
+	body, diags := r.Generate(nil, "test.md", 1,
+		map[string]string{"recipe": "render", "outputs": "out.png", "source": "a.svg"}, nil)
+	assert.Empty(t, diags)
+	assert.Equal(t, "![render output: out.png](out.png)\n", body)
 }
 
 func TestRule_Category(t *testing.T) {
@@ -764,4 +794,16 @@ func TestValidatePathEntry_InputsAcceptGlobChars(t *testing.T) {
 	} {
 		assert.Empty(t, validatePathEntry(p, true), "path %q should be accepted for inputs", p)
 	}
+}
+
+// TestReservedDeviceNames_ZeroByteValues pins reservedDeviceNames as a
+// map[string]struct{} membership set rather than map[string]bool: the
+// set is only ever probed for presence, and struct{} is a zero-byte
+// value type per docs/development/high-performance-go.md "map[K]struct{}
+// for sets".
+func TestReservedDeviceNames_ZeroByteValues(t *testing.T) {
+	typ := reflect.TypeOf(reservedDeviceNames)
+	require.Equal(t, reflect.Map, typ.Kind())
+	assert.Equal(t, uintptr(0), typ.Elem().Size(),
+		"reservedDeviceNames values should be zero-byte struct{}, not bool")
 }

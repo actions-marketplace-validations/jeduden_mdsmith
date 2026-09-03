@@ -7,8 +7,9 @@ package tableformat
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/jeduden/mdsmith/internal/archetype/gensection"
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -28,10 +29,12 @@ func init() {
 // Rule gates table well-formedness: edge-pipe style (MD055), column
 // count vs the header (MD056), surrounding blank lines (MD058), and
 // the column-alignment / padding pass that gives the rule its name.
+// Style (a string, containing a pointer) sits first to keep the GC
+// pointer-scan span at 8 bytes instead of 24.
 type Rule struct {
-	Pad            int // spaces on each side of cell content
-	SeparatorStyle tablefmt.SeparatorStyle
 	Style          string // edge-pipe style: one of the Style* constants
+	Pad            int    // spaces on each side of cell content
+	SeparatorStyle tablefmt.SeparatorStyle
 }
 
 // ID implements rule.Rule.
@@ -126,12 +129,16 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	// diagnostics anchor at the offending row. With multiple tables in
 	// one file the two streams interleave by line, so a final sort
 	// puts the combined slice in source order — what fixture tests
-	// and editors expect.
-	sort.SliceStable(diags, func(i, j int) bool {
-		if diags[i].Line != diags[j].Line {
-			return diags[i].Line < diags[j].Line
+	// and editors expect. slices.SortStableFunc sorts the concrete
+	// lint.Diagnostic values directly, unlike sort.SliceStable, which
+	// drives reflect.Swapper under the hood — see
+	// docs/development/high-performance-go.md's "reflect in hot
+	// paths" anti-pattern.
+	slices.SortStableFunc(diags, func(a, b lint.Diagnostic) int {
+		if a.Line != b.Line {
+			return cmp.Compare(a.Line, b.Line)
 		}
-		return diags[i].Column < diags[j].Column
+		return cmp.Compare(a.Column, b.Column)
 	})
 	return diags
 }

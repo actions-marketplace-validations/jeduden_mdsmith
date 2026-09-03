@@ -69,6 +69,14 @@ func TestCheck_AdjacentSameDelim(t *testing.T) {
 	assert.Equal(t, 1, diags[0].Column)
 }
 
+func TestCheck_AdjacentSameDelim_DedupsAfterEmit(t *testing.T) {
+	// Four __ runs: the third triggers the diagnostic; the fourth hits the
+	// dedup continue inside adjacentSameDelimDiags (emitted[k] guard).
+	diags := runOnLine(t, activeRule(), "__a__b__c__")
+	require.Len(t, diags, 1, "dedup should produce exactly one diagnostic for all four runs")
+	assert.Equal(t, "adjacent same-delimiter emphasis is ambiguous", diags[0].Message)
+}
+
 func TestCheck_AdjacentSingleStar(t *testing.T) {
 	diags := runOnLine(t, activeRule(), "*a*b*")
 	require.Len(t, diags, 1)
@@ -124,6 +132,20 @@ func TestCheck_LongRunDedup_OnlyOnePerLength(t *testing.T) {
 	diags := runOnLine(t, activeRule(), "***x***")
 	require.Len(t, diags, 1)
 	assert.Equal(t, 1, diags[0].Column)
+}
+
+// TestCheck_MultipleLines_SortedByLine pins the Line-tiebreak branch
+// of Check's final sort: two triggering lines produce diagnostics in
+// ascending line order. Every other Check test in this file triggers
+// at most one line per document, so this is the only test that
+// exercises the `a.Line != b.Line` comparison.
+func TestCheck_MultipleLines_SortedByLine(t *testing.T) {
+	f, err := lint.NewFile("test.md", []byte("***a***\n\n***b***\n"))
+	require.NoError(t, err)
+	diags := activeRule().Check(f)
+	require.Len(t, diags, 2)
+	assert.Equal(t, 1, diags[0].Line)
+	assert.Equal(t, 3, diags[1].Line)
 }
 
 func TestApplySettings_RejectsUnknownKey(t *testing.T) {

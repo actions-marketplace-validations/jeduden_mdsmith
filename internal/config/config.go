@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/jeduden/mdsmith/internal/mdpath"
 )
 
 // ValidCategories lists the recognized rule category names.
@@ -22,8 +24,10 @@ var ValidCategories = []string{
 }
 
 // DefaultFiles is the built-in list of glob patterns used for file
-// discovery when no file arguments are given on the command line.
-var DefaultFiles = []string{"**/*.md", "**/*.markdown"}
+// discovery when no file arguments are given on the command line. It is
+// derived from the canonical Markdown extension set in mdpath so the
+// linter's default scope tracks that single source of truth.
+var DefaultFiles = mdpath.RecursiveGlobs()
 
 // UserConvention is a user-defined convention bundle declared either
 // inline under the top-level `conventions:` block in .mdsmith.yml or
@@ -47,6 +51,23 @@ type UserConvention struct {
 	SourcePath string `yaml:"-"`
 }
 
+// UserWordlist is a user-defined word-list declared either inline
+// under the top-level `wordlists:` block in .mdsmith.yml or in a file
+// under `.mdsmith/wordlists/<name>.yaml`. A rule names a list via its
+// `lists:` setting; the resolved entries union into the rule's own
+// list. A list may `extends:` another user list.
+type UserWordlist struct {
+	// Extends optionally names a parent list whose entries are
+	// prepended (parent-first, de-duplicated) when this list resolves.
+	Extends string `yaml:"extends,omitempty"`
+	// Entries are the literal strings this list contributes.
+	Entries []string `yaml:"entries"`
+	// SourcePath is the workspace-absolute path of the file that
+	// defined this list (`.mdsmith.yml` for inline lists, otherwise
+	// `.mdsmith/wordlists/<name>.{yaml,yml}`). Not serialized.
+	SourcePath string `yaml:"-"`
+}
+
 // Config is the top-level configuration.
 type Config struct {
 	Rules          map[string]RuleCfg    `yaml:"rules"`
@@ -61,6 +82,15 @@ type Config struct {
 	KindAssignment []KindAssignmentEntry `yaml:"kind-assignment,omitempty"`
 	Build          BuildConfig           `yaml:"build,omitempty"`
 
+	// ForeignRegions lists marker pairs that bound content another
+	// generator owns (e.g. APM's `<!-- apm:start -->` /
+	// `<!-- apm:end -->`). The fix pipeline treats the bytes inside a
+	// matched pair as opaque — no fixer rewrites them and style rules
+	// skip diagnostics there — while whole-file rules (MDS022, MDS028)
+	// still count the bytes. Glob-scopable via `overrides:`, which
+	// append their own pairs to this base list per matching file.
+	ForeignRegions []ForeignRegion `yaml:"foreign-regions,omitempty"`
+
 	// Convention names a Markdown convention bundle. Built-in
 	// values: "portable", "github", "plain". User-defined
 	// conventions may also be referenced here after being declared
@@ -74,6 +104,14 @@ type Config struct {
 	// { flavor, rules } pair. Names must not collide with the
 	// built-in conventions ("portable", "github", "plain").
 	Conventions map[string]UserConvention `yaml:"conventions,omitempty"`
+
+	// Wordlists holds user-defined word-lists declared under the
+	// top-level `wordlists:` key — the inline equivalent of a
+	// `.mdsmith/wordlists/<name>.yaml` file. A rule references one by
+	// name via its `lists:` setting; the resolved entries union into
+	// the rule's own list. Names must not collide with a
+	// `.mdsmith/wordlists/` file basename.
+	Wordlists map[string]UserWordlist `yaml:"wordlists,omitempty"`
 
 	// Schemas holds named document-structure schemas declared inline
 	// under the top-level `schemas:` key — the inline equivalent of a
@@ -130,6 +168,19 @@ type Override struct {
 	Files      []string           `yaml:"files,omitempty"`
 	Rules      map[string]RuleCfg `yaml:"rules"`
 	Categories map[string]bool    `yaml:"categories"`
+	// ForeignRegions are marker pairs scoped to this override's glob.
+	// They append to the top-level `foreign-regions:` list for files
+	// matching Patterns(); see config.EffectiveForeignRegions.
+	ForeignRegions []ForeignRegion `yaml:"foreign-regions,omitempty"`
+}
+
+// ForeignRegion declares one foreign-owned marker pair. Start and End
+// are matched against whole trimmed source lines; the bytes spanned by
+// a matched pair (markers included) are treated as opaque by the fix
+// pipeline and skipped by style rules.
+type ForeignRegion struct {
+	Start string `yaml:"start"`
+	End   string `yaml:"end"`
 }
 
 // Patterns returns the effective set of glob patterns for the override.

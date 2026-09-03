@@ -1,10 +1,12 @@
 package nobareurls
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -127,7 +129,7 @@ func TestFix_NoChange(t *testing.T) {
 	require.NoError(t, err)
 	r := &Rule{}
 	result := r.Fix(f)
-	if string(result) != string(src) {
+	if !bytes.Equal(result, src) {
 		t.Errorf("expected no change, got %q", string(result))
 	}
 }
@@ -156,4 +158,70 @@ func TestCategory(t *testing.T) {
 	if r.Category() == "" {
 		t.Error("expected non-empty category")
 	}
+}
+
+// TestInlineCapable_NoBareURLs covers the InlineCapable method.
+func TestInlineCapable_NoBareURLs(t *testing.T) {
+	r := &Rule{}
+	assert.True(t, r.InlineCapable())
+}
+
+// TestFlagTextNode_HttpNeedleNoFullURL covers the len(matches)==0 early
+// return: "http" is present in the text but urlPattern finds no full URL.
+func TestFlagTextNode_HttpNeedleNoFullURL(t *testing.T) {
+	// "see http section notes" contains the needle "http" but has no
+	// scheme://host form that urlPattern matches, so no diagnostic is emitted.
+	src := []byte("see http section notes\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	r := &Rule{}
+	diags := r.Check(f)
+	require.Len(t, diags, 0, "http without a URL pattern must not be flagged")
+}
+
+func TestCheck_NilASTEquivalence(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"prose-bare", "Visit https://example.com today\n"},
+		{"no-url", "just a plain paragraph\n"},
+		{"linked", "See [example](https://example.com) here\n"},
+		{"autolink", "See <https://example.com> here\n"},
+		{"code-span-url", "Run `https://example.com` here\n"},
+		{"heading-bare", "# See https://example.com\n"},
+		{"list-bare", "- visit https://a.com\n- and https://b.com\n"},
+		{"list-mixed", "- visit https://a.com\n- and [x](https://b.com)\n"},
+		{"link-text-url", "[https://example.com](https://example.com)\n"},
+		{"two-paragraphs", "first https://a.com\n\nsecond https://b.com\n"},
+		{"multiline-para", "line one https://a.com\nline two https://b.com\n"},
+		{"quote-bare", "> quoted https://example.com\n"},
+		{"http-and-https", "http://a.com and https://b.com\n"},
+		{"trailing-punct", "see https://example.com.\n"},
+		{"wrapped-list-url", "- see\n  https://example.com\n"},
+		{"bq-multiline-url", "> line one https://a.com\n> line two\n"},
+		{"url-in-html-block", "<div>\nhttps://x.com\n</div>\n"},
+		{"html-block-interrupt", "text https://a.com\n<div>raw</div>\nmore https://b.com\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			astFile, err := lint.NewFile("test.md", []byte(tc.src))
+			require.NoError(t, err)
+			lineFile := lint.NewFileLines("test.md", []byte(tc.src))
+			r := &Rule{}
+			assert.Equal(t, r.Check(astFile), r.Check(lineFile),
+				"nil-AST diagnostics diverge from AST path")
+		})
+	}
+}
+
+func TestCheck_MultipleBareURLsPreSized(t *testing.T) {
+	// Three bare URLs must produce exactly three diagnostics; pre-sizing
+	// diags with len(matches) must not affect the count.
+	src := []byte("Visit https://a.com and https://b.com and https://c.com\n")
+	f, err := lint.NewFile("test.md", src)
+	require.NoError(t, err)
+	r := &Rule{}
+	diags := r.Check(f)
+	require.Len(t, diags, 3, "expected 3 diagnostics for 3 bare URLs")
 }

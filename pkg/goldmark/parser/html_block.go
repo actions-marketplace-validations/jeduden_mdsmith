@@ -3,77 +3,124 @@ package parser
 import (
 	"bytes"
 	"regexp"
-	"strings"
 
 	"github.com/jeduden/mdsmith/pkg/goldmark/ast"
 	"github.com/jeduden/mdsmith/pkg/goldmark/text"
 	"github.com/jeduden/mdsmith/pkg/goldmark/util"
 )
 
-var allowedBlockTags = map[string]bool{
-	"address":    true,
-	"article":    true,
-	"aside":      true,
-	"base":       true,
-	"basefont":   true,
-	"blockquote": true,
-	"body":       true,
-	"caption":    true,
-	"center":     true,
-	"col":        true,
-	"colgroup":   true,
-	"dd":         true,
-	"details":    true,
-	"dialog":     true,
-	"dir":        true,
-	"div":        true,
-	"dl":         true,
-	"dt":         true,
-	"fieldset":   true,
-	"figcaption": true,
-	"figure":     true,
-	"footer":     true,
-	"form":       true,
-	"frame":      true,
-	"frameset":   true,
-	"h1":         true,
-	"h2":         true,
-	"h3":         true,
-	"h4":         true,
-	"h5":         true,
-	"h6":         true,
-	"head":       true,
-	"header":     true,
-	"hr":         true,
-	"html":       true,
-	"iframe":     true,
-	"legend":     true,
-	"li":         true,
-	"link":       true,
-	"main":       true,
-	"menu":       true,
-	"menuitem":   true,
-	"meta":       true,
-	"nav":        true,
-	"noframes":   true,
-	"ol":         true,
-	"optgroup":   true,
-	"option":     true,
-	"p":          true,
-	"param":      true,
-	"search":     true,
-	"section":    true,
-	"summary":    true,
-	"table":      true,
-	"tbody":      true,
-	"td":         true,
-	"tfoot":      true,
-	"th":         true,
-	"thead":      true,
-	"title":      true,
-	"tr":         true,
-	"track":      true,
-	"ul":         true,
+var allowedBlockTags = map[string]struct{}{
+	"address":    {},
+	"article":    {},
+	"aside":      {},
+	"base":       {},
+	"basefont":   {},
+	"blockquote": {},
+	"body":       {},
+	"caption":    {},
+	"center":     {},
+	"col":        {},
+	"colgroup":   {},
+	"dd":         {},
+	"details":    {},
+	"dialog":     {},
+	"dir":        {},
+	"div":        {},
+	"dl":         {},
+	"dt":         {},
+	"fieldset":   {},
+	"figcaption": {},
+	"figure":     {},
+	"footer":     {},
+	"form":       {},
+	"frame":      {},
+	"frameset":   {},
+	"h1":         {},
+	"h2":         {},
+	"h3":         {},
+	"h4":         {},
+	"h5":         {},
+	"h6":         {},
+	"head":       {},
+	"header":     {},
+	"hr":         {},
+	"html":       {},
+	"iframe":     {},
+	"legend":     {},
+	"li":         {},
+	"link":       {},
+	"main":       {},
+	"menu":       {},
+	"menuitem":   {},
+	"meta":       {},
+	"nav":        {},
+	"noframes":   {},
+	"ol":         {},
+	"optgroup":   {},
+	"option":     {},
+	"p":          {},
+	"param":      {},
+	"search":     {},
+	"section":    {},
+	"summary":    {},
+	"table":      {},
+	"tbody":      {},
+	"td":         {},
+	"tfoot":      {},
+	"th":         {},
+	"thead":      {},
+	"title":      {},
+	"tr":         {},
+	"track":      {},
+	"ul":         {},
+}
+
+// tagBuf is a fixed-capacity stack buffer for an ASCII tag name, sized so
+// the longest HTML tag (and longer non-tags, truncated harmlessly) fits
+// without a heap allocation.
+type tagBuf struct {
+	buf [32]byte
+	n   int
+}
+
+// lowerInto copies the ASCII-lowercased bytes of b into the stack buffer,
+// truncating anything past its capacity (a name that long is not in
+// allowedBlockTags or the raw-text set, so truncation cannot cause a
+// false match against the short tag names they contain).
+func (t *tagBuf) lowerInto(b []byte) []byte {
+	t.n = 0
+	for _, c := range b {
+		if t.n >= len(t.buf) {
+			break
+		}
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		t.buf[t.n] = c
+		t.n++
+	}
+	return t.buf[:t.n]
+}
+
+// tagInAllowedSet reports whether b is (case-insensitively) one of the
+// type-6 HTML block tags, lowercasing into a stack buffer so the lookup
+// allocates nothing — strings.ToLower(string(b)) allocated a new string
+// on every trigger candidate line (docs/development/high-performance-go.md).
+func tagInAllowedSet(b []byte) bool {
+	var t tagBuf
+	_, ok := allowedBlockTags[string(t.lowerInto(b))]
+	return ok
+}
+
+// isRawTextTag reports whether b is (case-insensitively) one of the
+// raw-text tags that type-7 openers defer to type 1 for.
+func isRawTextTag(b []byte) bool {
+	var t tagBuf
+	switch string(t.lowerInto(b)) {
+	case "script", "style", "pre":
+		return true
+	}
+	return false
 }
 
 var htmlBlockType1OpenRegexp = regexp.MustCompile(`(?i)^[ ]{0,3}<(script|pre|style|textarea)(?:\s.*|>.*|/>.*|)(?:\r\n|\n)?$`) //nolint:golint,lll
@@ -128,20 +175,17 @@ func (b *htmlBlockParser) Open(parent ast.Node, reader text.Reader, pc Context) 
 	} else if match := htmlBlockType7Regexp.FindSubmatchIndex(line); match != nil {
 		isCloseTag := match[2] > -1 && bytes.Equal(line[match[2]:match[3]], []byte("/"))
 		hasAttr := match[6] != match[7]
-		tagName := strings.ToLower(string(line[match[4]:match[5]]))
-		_, ok := allowedBlockTags[tagName]
-		if ok {
+		tagBytes := line[match[4]:match[5]]
+		if tagInAllowedSet(tagBytes) {
 			node = ast.NewHTMLBlock(ast.HTMLBlockType6)
-		} else if tagName != "script" && tagName != "style" &&
-			tagName != "pre" && !ast.IsParagraph(last) && !(isCloseTag && hasAttr) { // type 7 can not interrupt paragraph
+		} else if !isRawTextTag(tagBytes) &&
+			!ast.IsParagraph(last) && !(isCloseTag && hasAttr) { // type 7 can not interrupt paragraph
 			node = ast.NewHTMLBlock(ast.HTMLBlockType7)
 		}
 	}
 	if node == nil {
 		if match := htmlBlockType6Regexp.FindSubmatchIndex(line); match != nil {
-			tagName := string(line[match[2]:match[3]])
-			_, ok := allowedBlockTags[strings.ToLower(tagName)]
-			if ok {
+			if tagInAllowedSet(line[match[2]:match[3]]) {
 				node = ast.NewHTMLBlock(ast.HTMLBlockType6)
 			}
 		}

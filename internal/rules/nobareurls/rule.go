@@ -18,6 +18,15 @@ var urlPattern = regexp.MustCompile(`https?://[^\s)>\]]+`)
 // urlNeedle is the literal prefix every urlPattern match carries.
 var urlNeedle = []byte("http")
 
+// mayContainURL reports whether content could contain a urlPattern
+// match. Every match starts with "http", so this literal check spares
+// the regex engine on the overwhelming majority of text nodes. Shared
+// by flagTextNode (Check) and Fix so the two paths can't drift apart
+// on which nodes get scanned.
+func mayContainURL(content []byte) bool {
+	return bytes.Contains(content, urlNeedle)
+}
+
 // Rule checks that bare URLs in text are flagged.
 // URLs inside links, code blocks, code spans, autolinks, or reference
 // definitions are not considered bare.
@@ -37,14 +46,44 @@ func (r *Rule) Category() string { return "link" }
 // this rule into one shared AST walk; a direct call still works via
 // rule.WalkNodes.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
+	// On the parse-skipped path (f.AST nil) the AST walk surfaces no
+	// nodes, so serve from the shared run-grouped inline parse: the same
+	// Text-node logic runs over every parsed run, with run-local segment
+	// offsets mapped back to the document. Re-using goldmark's own parser
+	// keeps the flagged bare-URL set byte-identical to the AST path.
+	if f.AST == nil {
+		var diags []lint.Diagnostic
+		lint.WalkInlineNodes(f, func(n ast.Node, base int) {
+			diags = append(diags, r.flagTextNode(n, f, base)...)
+		})
+		return diags
+	}
 	return rule.WalkNodes(r, f)
 }
 
-// CheckNode implements rule.NodeChecker.
+// InlineCapable implements rule.InlineChecker: Check serves the nil-AST
+// path from lint.WalkInlineNodes (which reads lint.InlineBlocks).
+func (r *Rule) InlineCapable() bool { return true }
+
+var _ rule.InlineChecker = (*Rule)(nil)
+
+// CheckNode implements rule.NodeChecker. On the AST path the segment
+// offsets are already document-absolute, so the base offset is zero.
 func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnostic {
 	if !entering {
 		return nil
 	}
+	return r.flagTextNode(n, f, 0)
+}
+
+// flagTextNode emits a diagnostic for each bare URL inside a Text node that
+// is not within a link, autolink, or code span. base is added to the node's
+// segment-local offsets to recover document-absolute positions: zero on the
+// AST path (segments are already absolute), the run's start offset on the
+// per-block path. The node's content is read against f.Source on the AST
+// path and against the same Source via the absolute offsets on the per-block
+// path — both index the identical bytes.
+func (r *Rule) flagTextNode(n ast.Node, f *lint.File, base int) []lint.Diagnostic {
 	textNode, ok := n.(*ast.Text)
 	if !ok {
 		return nil
@@ -55,11 +94,10 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 	}
 
 	seg := textNode.Segment
-	content := seg.Value(f.Source)
-	// Every urlPattern match starts with "http"; gating on the
-	// literal spares the regex engine on the overwhelming majority
-	// of text nodes.
-	if !bytes.Contains(content, urlNeedle) {
+	absStart := base + seg.Start
+	absStop := base + seg.Stop
+	content := f.Source[absStart:absStop]
+	if !mayContainURL(content) {
 		return nil
 	}
 	matches := urlPattern.FindAllIndex(content, -1)
@@ -67,9 +105,9 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 		return nil
 	}
 
-	var diags []lint.Diagnostic
+	diags := make([]lint.Diagnostic, 0, len(matches))
 	for _, m := range matches {
-		offset := seg.Start + m[0]
+		offset := absStart + m[0]
 		diags = append(diags, lint.Diagnostic{
 			File:     f.Path,
 			Line:     f.LineOfOffset(offset),
@@ -126,6 +164,9 @@ func (r *Rule) Fix(f *lint.File) []byte {
 
 		seg := textNode.Segment
 		content := seg.Value(f.Source)
+		if !mayContainURL(content) {
+			return ast.WalkContinue, nil
+		}
 		matches := urlPattern.FindAllIndex(content, -1)
 		for _, m := range matches {
 			absStart := seg.Start + m[0]
@@ -147,8 +188,10 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	}
 
 	// Build result by applying replacements in order (they are already in
-	// document order from the AST walk).
-	var result []byte
+	// document order from the AST walk). Each replacement adds exactly
+	// two bytes (`<` and `>`) over the source it wraps, so the final
+	// size is known before the first append.
+	result := make([]byte, 0, len(f.Source)+2*len(replacements))
 	prev := 0
 	for _, rep := range replacements {
 		result = append(result, f.Source[prev:rep.start]...)

@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"io/fs"
 	"math"
-	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -17,11 +15,11 @@ import (
 	"github.com/jeduden/mdsmith/internal/checker"
 	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/explain"
+	"github.com/jeduden/mdsmith/internal/foreignregion"
 	"github.com/jeduden/mdsmith/internal/gitignore"
 	"github.com/jeduden/mdsmith/internal/lint"
 	vlog "github.com/jeduden/mdsmith/internal/log"
 	"github.com/jeduden/mdsmith/internal/rule"
-	"github.com/jeduden/mdsmith/internal/rulelayer"
 )
 
 // sourceBufPool recycles the per-file source-read buffer across the
@@ -155,6 +153,14 @@ type Runner struct {
 	// hit, and that RunCache's Invalidate seam would be the one
 	// driving correctness — easy to get wrong, so don't mix.
 	ParseCache *lint.ParseCache
+	// SourceConfigCache memoizes checker.ConfigureEnabledRules for
+	// RunSource / RunSourceWithVersion, keyed by the effective-config
+	// signature (see SourceConfigCache's own doc comment). nil (the
+	// default) leaves RunSource configuring fresh on every call, exactly
+	// as before this field existed. A long-lived caller — the LSP session
+	// — installs one so a buffer re-linted at an unchanged effective
+	// config skips re-cloning every Configurable rule's settings.
+	SourceConfigCache *SourceConfigCache
 }
 
 // fileOutcome is one file's contribution to a run. Workers fill a
@@ -339,6 +345,7 @@ func (r *Runner) runFiles(work []string, cache *lint.RunCache) []fileOutcome {
 			mdRules:   markdownRulesFrom(r.Rules, r.ConfigPath),
 			catLookup: catLookup,
 			effCache:  effCache,
+			confCache: map[string]configuredRules{},
 		}
 		for i, path := range work {
 			outcomes[i] = r.lintFile(path, intraCap, cache, rr)
@@ -352,10 +359,13 @@ func (r *Runner) runFiles(work []string, cache *lint.RunCache) []fileOutcome {
 		go func() {
 			defer wg.Done()
 			// Each worker filters its own rule clones once, not per file.
+			// confCache is per-worker (unsynchronised) because the worker
+			// walks its files sequentially.
 			rr := runResolve{
 				mdRules:   markdownRulesFrom(cloneRules(r.Rules), r.ConfigPath),
 				catLookup: catLookup,
 				effCache:  effCache,
+				confCache: map[string]configuredRules{},
 			}
 			for {
 				i := int(next.Add(1)) - 1
@@ -391,6 +401,13 @@ func cloneRules(rules []rule.Rule) []rule.Rule {
 // catalog/include rules share one target read across every host file in
 // this pass.
 func (r *Runner) lintFile(path string, intraFileCap int, cache *lint.RunCache, rr runResolve) (out fileOutcome) {
+	// Registered first so it runs last: out.log is set by the log defer before this fires.
+	defer func() {
+		if rv := recover(); rv != nil {
+			out.diags = []lint.Diagnostic{checker.PanicDiagnostic(path, rv)}
+		}
+	}()
+
 	// When verbose, log into a per-file buffer instead of the shared
 	// logger; Run flushes these in input order so concurrent workers
 	// don't interleave -v output. The named return + defer attaches
@@ -433,7 +450,7 @@ func (r *Runner) lintFile(path string, intraFileCap int, cache *lint.RunCache, r
 		return fileOutcome{errs: []error{err}}
 	}
 
-	effective := r.effectiveCached(path, fmKinds, fmFields, rr)
+	effective, sigKey := r.effectiveCached(path, fmKinds, fmFields, rr)
 	logRulesTo(flog, rr.mdRules, effective)
 
 	// The pooled parse recycles AST slab memory across files. lintFile
@@ -454,7 +471,13 @@ func (r *Runner) lintFile(path string, intraFileCap int, cache *lint.RunCache, r
 	var f *lint.File
 	releaseArena := func() {}
 	if r.layer0SkipEligible(source, rr.mdRules, effective) {
-		f = lint.NewFileLinesFromSource(path, source, r.StripFrontMatter)
+		// The parse-skip File carries the flat ClassifyLines projection so
+		// CollectCodeBlockLines serves the classifier (gated byte-identical
+		// to the AST across the corpus, code-bearing files included) rather
+		// than an on-demand scanLayer0; block-span rules still read
+		// Layer0(f).BlockSpans. This is what lets the gate engage on files
+		// with code blocks (see layer0SkipEligible).
+		f, _ = lint.NewFileFlatPooled(path, source, r.StripFrontMatter)
 	} else {
 		f, releaseArena = r.pooledFileConstructor(source)(path, source, r.StripFrontMatter)
 	}
@@ -471,11 +494,32 @@ func (r *Runner) lintFile(path string, intraFileCap int, cache *lint.RunCache, r
 	// directives, so it has no generated sections — leave the ranges nil.
 	populateGeneratedRanges(f)
 
-	diags, errs := checkRulesWithIntraFile(f, rr.mdRules, effective, r.SkipSourceContext, intraFileCap)
+	// Configure the enabled rules once per config signature (cached on the
+	// worker's confCache) and reuse the result across every file that shares
+	// that config, instead of re-cloning every Configurable rule per file.
+	configured, cfgErrs := rr.configured(sigKey, effective)
+	diags := r.checkWithForeignRegions(f, configured, path, intraFileCap)
 	if r.Explain {
 		explain.Attach(diags, r.Config, path, fmKinds, fmFields)
 	}
-	return fileOutcome{diags: diags, errs: errs}
+	// cfgErrs is the cached configuration-error slice for this signature;
+	// the aggregator copies elements out, never mutates it, so sharing it
+	// across files that hit the same cache entry is safe. It is nil on
+	// every well-formed config (the common path).
+	return fileOutcome{diags: diags, errs: cfgErrs}
+}
+
+// checkWithForeignRegions extends f.GeneratedRanges with the foreign-
+// region spans that apply to path (a plain line scan, no AST needed) so
+// style rules skip diagnostics inside a marker pair another generator
+// owns, runs the configured rules, and appends the malformed-region
+// (MDS074) diagnostics for any unmatched or duplicated marker.
+func (r *Runner) checkWithForeignRegions(
+	f *lint.File, configured []rule.Rule, path string, intraFileCap int,
+) []lint.Diagnostic {
+	foreignDiags := foreignregion.Apply(f, r.Config, path)
+	diags := checker.CheckConfiguredRules(f, configured, r.SkipSourceContext, intraFileCap)
+	return append(diags, foreignDiags...)
 }
 
 // populateGeneratedRanges fills f.GeneratedRanges from the include/catalog
@@ -496,10 +540,16 @@ func (r *Runner) configureFile(f *lint.File, path string, cache *lint.RunCache) 
 	f.MaxInputBytes = r.MaxInputBytes
 	f.RunCache = cache
 	dir := filepath.Dir(path)
-	f.FS = os.DirFS(dir)
+	f.FS = lint.OpenRootFS(dir)
 	gitignoreDir := dir
 	if r.RootDir != "" {
-		f.SetRootDir(r.RootDir)
+		if dir == r.RootDir {
+			// Reuse the already-opened FS; avoid a second os.OpenRoot for the same dir.
+			f.RootDir = r.RootDir
+			f.RootFS = f.FS
+		} else {
+			f.SetRootDir(r.RootDir)
+		}
 		gitignoreDir = r.RootDir
 	}
 	gd := gitignoreDir // capture for closure
@@ -526,46 +576,6 @@ func (r *Runner) pooledFileConstructor(source []byte) func(string, []byte, bool)
 	return lint.NewFileFromSourcePooled
 }
 
-// computeFlatLayer0Active reports whether this run may skip the goldmark
-// parse for line-capable files. It requires the opt-in Runner.FlatLayer0
-// flag and a config simple enough that the globally-enabled rule set is
-// the whole story: every enabled markdown rule must be rule.LineCapable,
-// and the config must declare no kinds or overrides (either could enable a
-// non-line-capable rule for some file that the empty-path effective config
-// does not surface). This conservative gate is sufficient for the prototype
-// (plan 2606142147) measurement, whose single-rule line-length config has
-// neither; the full Layer-0 plan refines it to a per-file resolution.
-func (r *Runner) computeFlatLayer0Active() bool {
-	if !r.FlatLayer0 {
-		return false
-	}
-	if len(r.Config.Kinds) > 0 || len(r.Config.Overrides) > 0 {
-		return false
-	}
-	mdRules := markdownRulesFrom(r.Rules, r.ConfigPath)
-	effective := r.effectiveWithCategories("", nil, nil)
-	for _, rl := range mdRules {
-		cfg, ok := effective[rl.Name()]
-		if !ok || !cfg.Enabled {
-			continue
-		}
-		// Apply the rule's effective settings before asking LineCapable:
-		// a rule's line-capability can depend on its config (line-length
-		// is not line-capable once a per-heading limit is set). With no
-		// kinds or overrides, the empty-path effective config is the
-		// rule's settings for every file.
-		configured, err := checker.ConfigureRule(rl, cfg)
-		if err != nil {
-			return false
-		}
-		lc, ok := configured.(rule.LineCapable)
-		if !ok || !lc.LineCapable() {
-			return false
-		}
-	}
-	return true
-}
-
 // frontMatterPrefix returns the leading YAML front-matter block of source
 // (including its --- delimiters), or nil when stripping is off or source
 // has none. It mirrors what NewFileFromSource stores in File.FrontMatter,
@@ -577,80 +587,6 @@ func frontMatterPrefix(source []byte, stripFrontMatter bool) []byte {
 	}
 	prefix, _ := lint.StripFrontMatter(source)
 	return prefix
-}
-
-// layer0SkipOverride, when non-nil, forces the Layer 0 parse-skip gate
-// on (*true) or off (*false), bypassing the environment. The gate's
-// in-package equivalence tests set it so they can flip the toggle without
-// mutating the process environment. nil (the default) defers to
-// MDSMITH_LAYER0_SKIP.
-var layer0SkipOverride *bool
-
-// layer0SkipEnabled reports whether the master Layer 0 parse-skip toggle
-// is on. It honours an in-process override when set, otherwise reads the
-// MDSMITH_LAYER0_SKIP environment variable each call so a test in any
-// package can flip it via t.Setenv. Default off: the gate is a
-// benchmarking and CI-equivalence seam for now, not yet a shipped
-// optimization, so a normal run always parses.
-func layer0SkipEnabled() bool {
-	if layer0SkipOverride != nil {
-		return *layer0SkipOverride
-	}
-	return os.Getenv("MDSMITH_LAYER0_SKIP") != ""
-}
-
-// layer0SkipEligible reports whether this file's run can skip the goldmark
-// parse and lint from the Layer 0 scan alone. Four conditions must hold:
-//
-//  1. The MDSMITH_LAYER0_SKIP toggle is set (default off).
-//  2. Every enabled rule resolves to Layer 0 (rulelayer.IsLayer0) — no
-//     enabled rule navigates f.AST. An unknown rule id is treated as
-//     AST-requiring, so a rule the audit does not cover is never skipped.
-//  3. The source carries no `<?` directive marker. Generated-section
-//     suppression walks the AST for processing instructions, so a file
-//     with directives must be parsed.
-//  4. The source may contain no code block (lint.SourceMayHaveCodeBlock is
-//     false). The Layer 0 scanner does not descend into a list item's
-//     content, so a fenced or indented code block inside a list item makes
-//     its CodeBlockLines diverge from the AST; skipping only code-free files
-//     sidesteps that divergence, since a file with no code block has an empty
-//     CodeBlockLines under both paths.
-//
-// The block-only and flat-Layer-0 spike flags force their own
-// constructors, so the gate stands down when either is set.
-func (r *Runner) layer0SkipEligible(
-	source []byte, rules []rule.Rule, effective map[string]config.RuleCfg,
-) bool {
-	if !layer0SkipEnabled() || r.BlockOnlyParse || r.FlatLayer0 {
-		return false
-	}
-	if bytes.Contains(source, piOpenScan) {
-		return false
-	}
-	if lint.SourceMayHaveCodeBlock(source) {
-		return false
-	}
-	return allEnabledRulesLayer0(rules, effective)
-}
-
-// piOpenScan is the directive opener the gate scans for; any occurrence
-// disqualifies the parse skip.
-var piOpenScan = []byte("<?")
-
-// allEnabledRulesLayer0 reports whether every enabled rule in effective is
-// a Layer 0 rule. A run with no enabled rules trivially qualifies. A
-// disabled rule is ignored — it will not run, so its layer is irrelevant.
-func allEnabledRulesLayer0(rules []rule.Rule, effective map[string]config.RuleCfg) bool {
-	for _, rl := range rules {
-		cfg, ok := effective[rl.Name()]
-		if !ok || !cfg.Enabled {
-			continue
-		}
-		if !rulelayer.IsLayer0(rl.ID()) {
-			return false
-		}
-	}
-	return true
 }
 
 // RunSource lints in-memory source bytes (e.g. from stdin or an LSP
@@ -809,7 +745,7 @@ func (r *Runner) populateFileFields(f *lint.File, path string) {
 	}
 	// An in-memory workspace (the Session's MemWorkspace, e.g. the WASM
 	// build) has no on-disk RootDir, but its SourceFS is rooted at the
-	// project root — the same contract os.DirFS(RootDir) gives on disk.
+	// project root — the same contract OpenRootFS(RootDir) gives on disk.
 	// Wire it as RootFS so RootFS-aware cross-file rules (include's ".."
 	// resolution, MDS020's schema reads) read through the workspace
 	// instead of falling back to os.*, which is "not implemented on js".
@@ -823,6 +759,10 @@ func (r *Runner) populateFileFields(f *lint.File, path string) {
 		}
 	}
 	f.GeneratedRanges = gensection.FindAllGeneratedRanges(f)
+	// Extend the exclusion set with foreign-region spans before the *File
+	// is published to the parse cache, so the read-only diagnostic pass
+	// (runSourceCheckRules) never has to mutate the shared File.
+	foreignregion.AppendRanges(f, r.Config, path)
 }
 
 // runSourceCheckRules wraps the post-parse check pipeline for
@@ -846,12 +786,38 @@ func (r *Runner) runSourceCheckRules(
 	// IntraFileConcurrency knob still overrides — set 1 to keep
 	// the LSP single-threaded for predictability.
 	intraFileCap := resolveIntraFileWorkers(r.IntraFileConcurrency, 0)
-	diags, errs := checkRulesWithIntraFile(f, mdRules, effective, r.SkipSourceContext, intraFileCap)
+	diags, errs := r.checkRulesForSource(f, mdRules, effective, path, fmKinds, fmFields, intraFileCap)
 	if r.Explain {
 		explain.Attach(diags, r.Config, path, fmKinds, fmFields)
 	}
 	res.Diagnostics = append(res.Diagnostics, diags...)
+	res.Diagnostics = append(res.Diagnostics, foreignregion.Diagnostics(f, r.Config, path)...)
 	res.Errors = append(res.Errors, errs...)
+}
+
+// checkRulesForSource configures mdRules against effective and runs them
+// against f. When r.SourceConfigCache is installed, the settings-
+// application work (rule.CloneRule's reflect.New plus two ApplySettings
+// passes) is memoized by the effective-config signature
+// (config.EffectiveSignature) so a caller that re-lints the same
+// document under an unchanged config — the LSP's per-keystroke
+// RunSourceWithVersion — skips paying it again; SourceConfigCache still
+// hands back a private per-call clone of every rule, so this stays safe
+// even when two documents that share an effective config are checked
+// concurrently (see SourceConfigCache's doc comment). nil (the default)
+// falls straight through to CheckRulesWithIntraFile, preserving the
+// exact pre-existing behavior for every other caller.
+func (r *Runner) checkRulesForSource(
+	f *lint.File, mdRules []rule.Rule, effective map[string]config.RuleCfg,
+	path string, fmKinds []string, fmFields map[string]any, intraFileCap int,
+) ([]lint.Diagnostic, []error) {
+	if r.SourceConfigCache == nil {
+		return checker.CheckRulesWithIntraFile(f, mdRules, effective, r.SkipSourceContext, intraFileCap)
+	}
+	key, _ := config.EffectiveSignature(r.Config, path, fmKinds, fmFields)
+	configured, errs := r.SourceConfigCache.configured(key, mdRules, effective)
+	diags := checker.CheckConfiguredRules(f, configured, r.SkipSourceContext, intraFileCap)
+	return diags, errs
 }
 
 // markdownRules returns the subset of rules to run against individual Markdown
@@ -933,135 +899,6 @@ func (r *Runner) effectiveWithCategories(
 	return config.ApplyCategories(effective, categories, ruleCategoryLookup(r.Rules), explicit)
 }
 
-// effectiveCache memoizes effective rule configs by config signature for
-// the span of one runFiles call. File workers read and write it
-// concurrently, so it wraps sync.Map. The stored maps are read-only
-// downstream — classifyRules clones a rule's settings before applying
-// them — so sharing one map across files is safe.
-type effectiveCache struct{ m sync.Map }
-
-func (c *effectiveCache) get(key string) (map[string]config.RuleCfg, bool) {
-	v, ok := c.m.Load(key)
-	if !ok {
-		return nil, false
-	}
-	return v.(map[string]config.RuleCfg), true
-}
-
-// loadOrStore returns the cached map for key, storing and returning v
-// when none exists yet. Concurrent misses on the same key thus converge
-// on one shared instance instead of each keeping its own equal copy.
-func (c *effectiveCache) loadOrStore(key string, v map[string]config.RuleCfg) map[string]config.RuleCfg {
-	actual, _ := c.m.LoadOrStore(key, v)
-	return actual.(map[string]config.RuleCfg)
-}
-
-// runResolve bundles the resolution state lintFile needs, across two
-// lifetimes: mdRules is per-worker (each worker filters its own rule
-// clones), while catLookup and effCache are per-run — built once and
-// shared across all workers (effCache is concurrency-safe). Bundling
-// keeps lintFile's signature small and hoists work the per-file loop
-// used to repeat.
-type runResolve struct {
-	mdRules   []rule.Rule
-	catLookup func(string) string
-	effCache  *effectiveCache
-}
-
-// effectiveCached is the hot-path config resolver: it memoizes the
-// effective rule config on rr.effCache keyed by the file's config
-// signature and reuses the prebuilt rr.catLookup, so a corpus that
-// shares one config resolves it once instead of per file. Cold callers
-// (RunSource, config-target, defaults) keep using effectiveWithCategories.
-func (r *Runner) effectiveCached(
-	path string, fmKinds []string, fmFields map[string]any, rr runResolve,
-) map[string]config.RuleCfg {
-	key, kinds := config.EffectiveSignature(r.Config, path, fmKinds, fmFields)
-	if v, ok := rr.effCache.get(key); ok {
-		return v
-	}
-	effective, categories, explicit := config.EffectiveAllForKinds(r.Config, path, kinds)
-	res := config.ApplyCategories(effective, categories, rr.catLookup, explicit)
-	return rr.effCache.loadOrStore(key, res)
-}
-
-// runCacheForCall returns the run-scoped read cache to thread through
-// the next Run / RunSource pass. A caller-supplied r.RunCache (the
-// LSP installs one on Server and invalidates entries on document
-// events) is reused as-is. When nil, a fresh cache is built for this
-// call only and never stored on r — a Runner re-used for a second
-// Run starts clean and cannot serve stale reads from the previous
-// corpus.
-func (r *Runner) runCacheForCall() *lint.RunCache {
-	if r.RunCache != nil {
-		return r.RunCache
-	}
-	return lint.NewRunCache()
-}
-
-// cachedGitignore returns a *gitignore.Matcher for the given directory,
-// creating and caching it on first use to avoid re-walking the filesystem.
-// The cache key is normalized to an absolute path so equivalent paths
-// (e.g. "sub" vs "./sub") share the same entry.
-func (r *Runner) cachedGitignore(dir string) *gitignore.Matcher {
-	r.gitignoreMu.Lock()
-	defer r.gitignoreMu.Unlock()
-	if r.gitignoreCache == nil {
-		r.gitignoreCache = make(map[string]*gitignore.Matcher)
-	}
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		absDir = filepath.Clean(dir)
-	}
-	if m, ok := r.gitignoreCache[absDir]; ok {
-		return m
-	}
-	m := gitignore.NewMatcher(absDir)
-	r.gitignoreCache[absDir] = m
-	return m
-}
-
-// log returns the runner's logger. If no logger is set, it returns a
-// disabled logger so callers don't need nil checks.
-func (r *Runner) log() *vlog.Logger {
-	if r.Logger != nil {
-		return r.Logger
-	}
-	return &vlog.Logger{}
-}
-
-// logRules logs each enabled rule in the effective config from the provided slice.
-func (r *Runner) logRules(rules []rule.Rule, effective map[string]config.RuleCfg) {
-	logRulesTo(r.log(), rules, effective)
-}
-
-// logRulesTo logs each enabled rule to l. Split from logRules so the
-// per-file buffered logger in lintFile can reuse the same formatting
-// without going through the shared Runner logger.
-func logRulesTo(l *vlog.Logger, rules []rule.Rule, effective map[string]config.RuleCfg) {
-	if !l.Enabled {
-		return
-	}
-	for _, rl := range rules {
-		cfg, ok := effective[rl.Name()]
-		if !ok || !cfg.Enabled {
-			continue
-		}
-		l.Printf("rule: %s %s", rl.ID(), rl.Name())
-	}
-}
-
-// ruleCategoryLookup returns a function that maps a rule name to its category.
-func ruleCategoryLookup(rules []rule.Rule) func(string) string {
-	m := make(map[string]string, len(rules))
-	for _, rl := range rules {
-		m[rl.Name()] = rl.Category()
-	}
-	return func(name string) string {
-		return m[name]
-	}
-}
-
 // runConfigTargetRules runs rules that implement rule.ConfigTarget once
 // against a synthetic lint.File for the config file. These rules validate
 // the project config rather than individual Markdown files. They are skipped
@@ -1071,6 +908,14 @@ func (r *Runner) runConfigTargetRules(res *Result) {
 	if r.ConfigPath == "" {
 		return
 	}
+	// Also covers panics in ConfigureRule (ApplySettings, Clone) which run
+	// before runConfigRule's own guard.
+	defer func() {
+		if rv := recover(); rv != nil {
+			res.Diagnostics = append(res.Diagnostics,
+				checker.PanicDiagnostic(r.ConfigPath, rv))
+		}
+	}()
 	effective := r.effectiveWithCategories(r.ConfigPath, nil, nil)
 	f, err := lint.NewFile(r.ConfigPath, []byte{})
 	if err != nil {
@@ -1091,9 +936,19 @@ func (r *Runner) runConfigTargetRules(res *Result) {
 			res.Errors = append(res.Errors, err)
 			continue
 		}
-		diags := configured.Check(f)
+		diags := runConfigRule(configured, f)
 		res.Diagnostics = append(res.Diagnostics, diags...)
 	}
+}
+
+// Outside the lintFile recover boundary — runConfigTargetRules runs on Run()'s goroutine.
+func runConfigRule(configured rule.Rule, f *lint.File) (diags []lint.Diagnostic) {
+	defer func() {
+		if rv := recover(); rv != nil {
+			diags = []lint.Diagnostic{checker.PanicDiagnostic(f.Path, rv)}
+		}
+	}()
+	return configured.Check(f)
 }
 
 // anyRepoScopedEnabled reports whether any markdown rule (excluding
@@ -1124,23 +979,4 @@ func (r *Runner) anyRepoScopedEnabled() bool {
 		}
 	}
 	return false
-}
-
-// sortDiagnostics sorts diagnostics by file, line, column, then message.
-// sort.SliceStable preserves the input order only for diagnostics that are
-// equal on all compared fields, including Message.
-func sortDiagnostics(diags []lint.Diagnostic) {
-	sort.SliceStable(diags, func(i, j int) bool {
-		di, dj := diags[i], diags[j]
-		if di.File != dj.File {
-			return di.File < dj.File
-		}
-		if di.Line != dj.Line {
-			return di.Line < dj.Line
-		}
-		if di.Column != dj.Column {
-			return di.Column < dj.Column
-		}
-		return di.Message < dj.Message
-	})
 }

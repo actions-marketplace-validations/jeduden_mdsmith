@@ -7,8 +7,9 @@ package linkvalidity
 
 import (
 	"bytes"
+	"cmp"
 	"regexp"
-	"sort"
+	"slices"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -45,13 +46,22 @@ const reversedMessage = "reversed link: use [text](url) instead of (text)[url]"
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 	diags := r.checkEmpty(f)
 	diags = append(diags, r.checkReversed(f)...)
-	sort.SliceStable(diags, func(i, j int) bool {
-		if diags[i].Line != diags[j].Line {
-			return diags[i].Line < diags[j].Line
-		}
-		return diags[i].Column < diags[j].Column
-	})
+	sortDiagnostics(diags)
 	return diags
+}
+
+// sortDiagnostics orders diags by line then column in place.
+// slices.SortStableFunc sorts the concrete lint.Diagnostic values
+// directly, unlike sort.SliceStable, which drives reflect.Swapper
+// under the hood — see docs/development/high-performance-go.md's
+// "reflect in hot paths" anti-pattern.
+func sortDiagnostics(diags []lint.Diagnostic) {
+	slices.SortStableFunc(diags, func(a, b lint.Diagnostic) int {
+		if a.Line != b.Line {
+			return cmp.Compare(a.Line, b.Line)
+		}
+		return cmp.Compare(a.Column, b.Column)
+	})
 }
 
 // checkEmpty walks real link/image nodes and flags an empty or `#`-only
@@ -60,31 +70,57 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 // Direct recursion (entering visits only) replaces ast.Walk: the rule
 // only reacts to two node types, and the closure-driven double visit
 // per node was measurable on every file.
+//
+// On the parse-skipped path (f.AST nil) the document tree is unavailable,
+// so the same per-node check runs over the shared run-grouped inline parse
+// (lint.WalkInlineNodes), with run-local segment offsets mapped back to the
+// document via base. Re-using goldmark's parser per run reproduces the
+// link/image nodes byte-identically.
 func (r *Rule) checkEmpty(f *lint.File) []lint.Diagnostic {
 	var diags []lint.Diagnostic
-	r.checkEmptyNode(f.AST, f, &diags)
+	if f.AST != nil {
+		r.checkEmptyNode(f.AST, f, 0, &diags)
+		return diags
+	}
+	// On the parse-skipped path the document tree is unavailable, so the
+	// same per-node check runs over the shared run-grouped inline parse,
+	// with run-local segment offsets mapped to the document via base.
+	lint.WalkInlineNodes(f, func(n ast.Node, base int) {
+		r.checkEmptyNodeOne(n, f, base, &diags)
+	})
 	return diags
 }
 
-func (r *Rule) checkEmptyNode(n ast.Node, f *lint.File, diags *[]lint.Diagnostic) {
+// checkEmptyNode recursively applies checkEmptyNodeOne over n's subtree on
+// the AST path, where offsets are document-absolute (base zero).
+func (r *Rule) checkEmptyNode(n ast.Node, f *lint.File, base int, diags *[]lint.Diagnostic) {
 	if n == nil {
 		return
 	}
+	r.checkEmptyNodeOne(n, f, base, diags)
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		r.checkEmptyNode(c, f, base, diags)
+	}
+}
+
+// checkEmptyNodeOne flags a single Link or Image node with an empty/`#`
+// destination, or (links only) empty visible text. base maps the node's
+// segment offsets to the document: zero on the AST path, the run's start
+// offset on the inline-walk path (where WalkInlineNodes already visits
+// every node, so no extra recursion is needed here).
+func (r *Rule) checkEmptyNodeOne(n ast.Node, f *lint.File, base int, diags *[]lint.Diagnostic) {
 	switch node := n.(type) {
 	case *ast.Image:
 		if emptyDestination(node.Destination) {
-			*diags = append(*diags, r.diag(f, nodeLine(node, f), "empty image destination"))
+			*diags = append(*diags, r.diag(f, nodeLine(node, f, base), "empty image destination"))
 		}
 	case *ast.Link:
 		switch {
 		case emptyDestination(node.Destination):
-			*diags = append(*diags, r.diag(f, nodeLine(node, f), "empty link destination"))
-		case !hasVisibleContent(node, f.Source):
-			*diags = append(*diags, r.diag(f, nodeLine(node, f), "empty link text"))
+			*diags = append(*diags, r.diag(f, nodeLine(node, f, base), "empty link destination"))
+		case !hasVisibleContent(node, f.Source, base):
+			*diags = append(*diags, r.diag(f, nodeLine(node, f, base), "empty link text"))
 		}
-	}
-	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-		r.checkEmptyNode(c, f, diags)
 	}
 }
 
@@ -110,8 +146,9 @@ func emptyDestination(dest []byte) bool {
 
 // hasVisibleContent reports whether the link renders any visible
 // content: an image, code span, autolink, raw HTML, or non-whitespace
-// text anywhere in its subtree.
-func hasVisibleContent(link *ast.Link, source []byte) bool {
+// text anywhere in its subtree. base maps span-local Text segment offsets
+// to the document on the per-block path (zero on the AST path).
+func hasVisibleContent(link *ast.Link, source []byte, base int) bool {
 	found := false
 	_ = ast.Walk(link, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -122,7 +159,7 @@ func hasVisibleContent(link *ast.Link, source []byte) bool {
 			found = true
 			return ast.WalkStop, nil
 		case *ast.Text:
-			if len(bytes.TrimSpace(t.Segment.Value(source))) > 0 {
+			if len(bytes.TrimSpace(source[base+t.Segment.Start:base+t.Segment.Stop])) > 0 {
 				found = true
 				return ast.WalkStop, nil
 			}
@@ -134,9 +171,11 @@ func hasVisibleContent(link *ast.Link, source []byte) bool {
 
 // nodeLine returns the 1-based source line of an inline node. Inline
 // nodes carry no position, so it uses the first descendant text segment
-// and falls back to the nearest block ancestor's first line.
-func nodeLine(n ast.Node, f *lint.File) int {
-	if ln := firstTextLine(n, f); ln > 0 {
+// and falls back to the nearest block ancestor's first line. base maps
+// span-local offsets to the document on the per-block path (zero on the
+// AST path).
+func nodeLine(n ast.Node, f *lint.File, base int) int {
+	if ln := firstTextLine(n, f, base); ln > 0 {
 		return ln
 	}
 	for p := n.Parent(); p != nil; p = p.Parent() {
@@ -145,18 +184,18 @@ func nodeLine(n ast.Node, f *lint.File) int {
 		}
 		lines := p.Lines()
 		if lines != nil && lines.Len() > 0 {
-			return f.LineOfOffset(lines.At(0).Start)
+			return f.LineOfOffset(base + lines.At(0).Start)
 		}
 	}
 	return 1
 }
 
-func firstTextLine(n ast.Node, f *lint.File) int {
+func firstTextLine(n ast.Node, f *lint.File, base int) int {
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
 		if t, ok := c.(*ast.Text); ok {
-			return f.LineOfOffset(t.Segment.Start)
+			return f.LineOfOffset(base + t.Segment.Start)
 		}
-		if ln := firstTextLine(c, f); ln > 0 {
+		if ln := firstTextLine(c, f, base); ln > 0 {
 			return ln
 		}
 	}
@@ -165,10 +204,12 @@ func firstTextLine(n ast.Node, f *lint.File) int {
 
 // isInlineNode reports whether n is an inline node, whose Lines() would
 // panic. nodeLine skips these while walking ancestors for a block with a
-// source position.
+// source position. *ast.String is included alongside the other inline kinds
+// because it too is a BaseInline whose Lines() panics; omitting it would let
+// the ancestor walk reach lines := p.Lines() on a String node and crash.
 func isInlineNode(n ast.Node) bool {
 	switch n.(type) {
-	case *ast.Text, *ast.CodeSpan, *ast.Emphasis,
+	case *ast.Text, *ast.String, *ast.CodeSpan, *ast.Emphasis,
 		*ast.Link, *ast.Image, *ast.AutoLink, *ast.RawHTML:
 		return true
 	}
@@ -268,6 +309,13 @@ func reversedInLine(orig, masked []byte) []revMatch {
 	if idx == nil {
 		return nil
 	}
+	// idx already gives the exact upper bound on match count, but every
+	// entry can still be dropped by the guards below (e.g. an ordinary
+	// [text](url)[ref] — a link immediately followed by a reference or
+	// footnote). Allocate lazily on the first survivor so an all-filtered
+	// line costs nothing extra and returns nil, not a discarded non-nil
+	// empty slice — see docs/development/high-performance-go.md
+	// "Return nil, not []T{}."
 	var out []revMatch
 	for _, m := range idx {
 		s, e := m[0], m[1]
@@ -279,6 +327,9 @@ func reversedInLine(orig, masked []byte) []revMatch {
 		}
 		if e < len(orig) && orig[e] == '(' {
 			continue // [text](url) — a normal link, not reversed
+		}
+		if out == nil {
+			out = make([]revMatch, 0, len(idx))
 		}
 		out = append(out, revMatch{
 			col0:     s,

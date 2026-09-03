@@ -12,6 +12,26 @@ import (
 	"github.com/jeduden/mdsmith/pkg/goldmark/ast"
 )
 
+// msgWantLevel builds the "first line should be a level N heading"
+// message. Heading levels are always 1-6, so strconv.Itoa never
+// allocates on this input (Go caches formatted results for 0-99); the
+// win over fmt.Sprintf is CPU only (skips reflection), not allocs. See
+// docs/development/high-performance-go.md "strconv over fmt.Sprintf".
+func msgWantLevel(level int) string {
+	return "first line should be a level " + strconv.Itoa(level) + " heading"
+}
+
+// msgWantLevelBlankLine builds the blank-line variant of msgWantLevel.
+func msgWantLevelBlankLine(level int) string {
+	return "first line should be a level " + strconv.Itoa(level) + " heading, found blank line"
+}
+
+// msgWrongLevel builds the "first heading should be level N, got M"
+// message.
+func msgWrongLevel(level, got int) string {
+	return "first heading should be level " + strconv.Itoa(level) + ", got " + strconv.Itoa(got)
+}
+
 func init() {
 	rule.Register(&Rule{Level: 1})
 }
@@ -28,45 +48,126 @@ func (r *Rule) ID() string { return "MDS004" }
 // Name implements rule.Rule.
 func (r *Rule) Name() string { return "first-line-heading" }
 
+// WordlistTarget implements rule.WordlistConsumer: resolved `lists:`
+// entries union into this rule's "placeholders" setting.
+func (r *Rule) WordlistTarget() string { return "placeholders" }
+
+var _ rule.WordlistConsumer = (*Rule)(nil)
+
 // Category implements rule.Rule.
 func (r *Rule) Category() string { return "heading" }
 
+// LineCapable implements rule.LineCapable. With no placeholder tokens
+// configured the verdict reads only the first block's kind, position, and
+// heading level — all from the Layer 0 block scan — so the rule can lint
+// the parse-skipped File. A configured placeholder list makes the rule
+// read the first heading's inline text, which lives in the AST, so it
+// falls back to the parse path.
+func (r *Rule) LineCapable() bool { return len(r.Placeholders) == 0 }
+
 // Check implements rule.Rule.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
+	if f != nil && f.AST == nil {
+		return r.checkNilAST(f)
+	}
+
 	level := r.Level
 	if level == 0 {
 		level = 1
 	}
 
 	if len(f.Source) == 0 {
-		return r.diag(f, "first line should be a level "+strconv.Itoa(level)+" heading")
+		return r.diag(f, msgWantLevel(level))
 	}
 
 	firstChild := f.AST.FirstChild()
 	if firstChild == nil {
-		return r.diag(f, "first line should be a level "+strconv.Itoa(level)+" heading")
+		return r.diag(f, msgWantLevel(level))
 	}
 
 	heading, ok := firstChild.(*ast.Heading)
 	if !ok {
-		return r.diag(f, "first line should be a level "+strconv.Itoa(level)+" heading")
+		return r.diag(f, msgWantLevel(level))
 	}
 
 	if headingLine(heading, f) != 1 {
-		return r.diag(f, "first line should be a level "+strconv.Itoa(level)+" heading, found blank line")
+		return r.diag(f, msgWantLevelBlankLine(level))
 	}
 
 	if heading.Level != level {
 		// If the heading text matches a configured placeholder token,
 		// treat it as opaque and suppress the level diagnostic.
-		text := astutil.HeadingText(heading, f.Source)
+		text := astutil.HeadingTextCached(f, heading)
 		if placeholders.ContainsBodyToken(text, r.Placeholders) {
 			return nil
 		}
-		return r.diag(f, "first heading should be level "+strconv.Itoa(level)+", got "+strconv.Itoa(heading.Level))
+		return r.diag(f, msgWrongLevel(level, heading.Level))
 	}
 
 	return nil
+}
+
+// checkNilAST is the parse-skip path: it reads the first block span from
+// the Layer 0 scan and replicates the AST path's verdict exactly. It runs
+// only with empty placeholders (LineCapable gates the skip); a
+// placeholder-configured rule would need the heading's inline text, so it
+// returns nil defensively if ever reached with one.
+func (r *Rule) checkNilAST(f *lint.File) []lint.Diagnostic {
+	if len(r.Placeholders) > 0 {
+		return nil
+	}
+	level := r.Level
+	if level == 0 {
+		level = 1
+	}
+
+	if len(f.Source) == 0 {
+		return r.diag(f, msgWantLevel(level))
+	}
+
+	spans := lint.Layer0(f).BlockSpans
+	if len(spans) == 0 {
+		return r.diag(f, msgWantLevel(level))
+	}
+	first := spans[0]
+	if first.Kind != lint.BlockATXHeading && first.Kind != lint.BlockSetextHeading {
+		return r.diag(f, msgWantLevel(level))
+	}
+	if first.Start != 1 {
+		return r.diag(f, msgWantLevelBlankLine(level))
+	}
+	gotLevel := headingLevelFromSpan(f, first)
+	if gotLevel != level {
+		return r.diag(f, msgWrongLevel(level, gotLevel))
+	}
+	return nil
+}
+
+// headingLevelFromSpan returns the heading level for a Layer 0 heading
+// span: the leading-`#` count for ATX, or 1/2 from the setext underline.
+func headingLevelFromSpan(f *lint.File, span lint.BlockSpan) int {
+	if span.Kind == lint.BlockATXHeading {
+		line := f.Lines[span.Start-1]
+		i := 0
+		for i < len(line) && i < 3 && line[i] == ' ' {
+			i++
+		}
+		level := 0
+		for i < len(line) && line[i] == '#' {
+			level++
+			i++
+		}
+		return level
+	}
+	line := f.Lines[span.End-1]
+	i := 0
+	for i < len(line) && i < 3 && line[i] == ' ' {
+		i++
+	}
+	if i < len(line) && line[i] == '=' {
+		return 1
+	}
+	return 2
 }
 
 // diag returns a single-element diagnostic slice for a line-1 issue.
@@ -132,6 +233,7 @@ func (r *Rule) SettingMergeMode(key string) rule.MergeMode {
 var (
 	_ rule.Configurable = (*Rule)(nil)
 	_ rule.ListMerger   = (*Rule)(nil)
+	_ rule.LineCapable  = (*Rule)(nil)
 )
 
 func headingLine(heading *ast.Heading, f *lint.File) int {

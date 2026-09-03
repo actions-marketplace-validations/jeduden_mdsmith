@@ -9,12 +9,12 @@ maintainability: null
 markdownlint:
   - id: MD051
     name: link-fragments
-    partial: false
+    partial: true
     default: true
 rumdl:
   - id: MD051
     name: link-fragments
-    partial: false
+    partial: true
     default: true
 mado: []
 panache:
@@ -26,7 +26,7 @@ obsidian-linter: []
 gomarklint:
   - id: link-fragments
     name: link-fragments
-    partial: false
+    partial: true
     default: true
 ---
 # MDS027: cross-file-reference-integrity
@@ -44,7 +44,7 @@ Links to local files and heading anchors must resolve.
 | `wikilinks`      | bool   | `false`      | Validate Obsidian-style `[[Page]]`, `[[Page#anchor]]`, `[[Page\|alias]]`, and `![[file.png]]` targets against the workspace. |
 | `wikilink-style` | string | `"obsidian"` | Resolution style for wikilinks. Only `obsidian` ships today; other values are rejected at config load.                       |
 
-Useful tokens: `var-token`, `heading-question`, `placeholder-section`.
+Useful tokens: `var-token`, `heading-question`, `placeholder-section`, `apm-input-token`.
 
 With `strict: false`, only Markdown targets (`.md`, `.markdown`)
 are checked (except images — see `links.validate-images`).
@@ -205,10 +205,10 @@ See [guide](bad/ref/guide.md#missing-section).
 - **Implementation**:
   [source](./)
 - **Category**: link
-- **markdownlint**: [MD051][mdl-md051] (link-fragments)
-- **rumdl**: [MD051][rumdl-md051] (link-fragments)
+- **markdownlint**: [MD051][mdl-md051] (link-fragments) (partial)
+- **rumdl**: [MD051][rumdl-md051] (link-fragments) (partial)
 - **panache**: [undefined-anchor]
-- **gomarklint**: [link-fragments][gomarklint-rules]
+- **gomarklint**: [link-fragments][gomarklint-rules] (partial)
 
 [mdl-md051]: https://github.com/DavidAnson/markdownlint/blob/main/doc/md051.md
 [rumdl-md051]: https://rumdl.dev/md051/

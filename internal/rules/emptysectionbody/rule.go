@@ -1,6 +1,7 @@
 package emptysectionbody
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"strings"
@@ -22,9 +23,10 @@ var htmlCommentPattern = regexp.MustCompile(`(?s)<!--.*?-->`)
 
 func init() {
 	rule.Register(&Rule{
-		MinLevel:    defaultMinLevel,
-		MaxLevel:    defaultMaxLevel,
-		AllowMarker: defaultAllowMarker,
+		MinLevel:             defaultMinLevel,
+		MaxLevel:             defaultMaxLevel,
+		AllowMarker:          defaultAllowMarker,
+		allowMarkerDirective: "<?" + defaultAllowMarker + "?>",
 	})
 }
 
@@ -33,6 +35,9 @@ type Rule struct {
 	MinLevel    int
 	MaxLevel    int
 	AllowMarker string
+	// allowMarkerDirective is "<?"+AllowMarker+"?>" precomputed so
+	// Check does not call fmt.Sprintf per violation.
+	allowMarkerDirective string
 }
 
 // ID implements rule.Rule.
@@ -65,19 +70,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 			continue
 		}
 
-		end := len(nodes)
-		for j := i + 1; j < len(nodes); j++ {
-			nextHeading, ok := nodes[j].(*ast.Heading)
-			if !ok {
-				continue
-			}
-			if nextHeading.Level <= heading.Level {
-				end = j
-				break
-			}
-		}
-
-		sectionNodes := nodes[i+1 : end]
+		sectionNodes := nodes[i+1 : findSectionEnd(nodes, i)]
 		if hasAllowMarker(sectionNodes, allowMarker) {
 			continue
 		}
@@ -90,7 +83,7 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 				"add paragraph, list, table, or code content, "+
 				"or add %q for an intentional empty section",
 			headingLabel(heading, f.Source),
-			fmt.Sprintf("<?%s?>", allowMarker),
+			r.allowMarkerDir(allowMarker),
 		)
 		diags = append(diags, lint.Diagnostic{
 			File:     f.Path,
@@ -129,6 +122,7 @@ func (r *Rule) ApplySettings(settings map[string]any) error {
 	r.MinLevel = minLevel
 	r.MaxLevel = maxLevel
 	r.AllowMarker = allowMarker
+	r.allowMarkerDirective = "<?" + allowMarker + "?>"
 	return nil
 }
 
@@ -239,12 +233,41 @@ func (r *Rule) effectiveSettings() (int, int, string) {
 	return minLevel, maxLevel, allowMarker
 }
 
+// allowMarkerDir returns "<?"+allowMarker+"?>", reusing the precomputed
+// allowMarkerDirective field (set by init/ApplySettings) when it already
+// matches allowMarker so the common configured path emits the message with
+// no per-violation Sprintf. allowMarker is the effective marker
+// effectiveSettings resolved; when it differs from the field (an empty or
+// out-of-range setting that fell back to the default), the directive is
+// built on the spot. It is only reached when a section is actually empty,
+// so a clean file allocates nothing here.
+func (r *Rule) allowMarkerDir(allowMarker string) string {
+	if r.allowMarkerDirective != "" && r.AllowMarker == allowMarker {
+		return r.allowMarkerDirective
+	}
+	return "<?" + allowMarker + "?>"
+}
+
 func topLevelNodes(root ast.Node) []ast.Node {
-	var nodes []ast.Node
+	// root.ChildCount() is an O(1) field read (goldmark tracks it per
+	// node), so the exact count is known before the walk starts —
+	// pre-sizing to it avoids any backing-array regrowth regardless of
+	// document length, unlike a fixed heuristic capacity.
+	nodes := make([]ast.Node, 0, root.ChildCount())
 	for n := root.FirstChild(); n != nil; n = n.NextSibling() {
 		nodes = append(nodes, n)
 	}
 	return nodes
+}
+
+func findSectionEnd(nodes []ast.Node, i int) int {
+	level := nodes[i].(*ast.Heading).Level
+	for j := i + 1; j < len(nodes); j++ {
+		if h, ok := nodes[j].(*ast.Heading); ok && h.Level <= level {
+			return j
+		}
+	}
+	return len(nodes)
 }
 
 func hasAllowMarker(nodes []ast.Node, markerName string) bool {
@@ -299,7 +322,8 @@ func hasNonBlankLines(node ast.Node, source []byte) bool {
 	lines := node.Lines()
 	for i := 0; i < lines.Len(); i++ {
 		seg := lines.At(i)
-		if strings.TrimSpace(string(seg.Value(source))) != "" {
+		// bytes.TrimSpace returns a sub-slice — zero allocations per line.
+		if len(bytes.TrimSpace(seg.Value(source))) != 0 {
 			return true
 		}
 	}

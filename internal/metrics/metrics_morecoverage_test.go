@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,22 +16,24 @@ import (
 
 func TestConcisenessScore_EmptyText(t *testing.T) {
 	// Empty text produces no tokens — should return 100.0.
-	score := concisenessScore("")
+	score := concisenessScore("", 0)
 	assert.Equal(t, 100.0, score)
 }
 
 func TestConcisenessScore_PunctuationOnly(t *testing.T) {
 	// Only punctuation: no token-pattern matches → returns 100.0.
-	score := concisenessScore("!!! ??? ---")
+	score := concisenessScore("!!! ??? ---", 0)
 	assert.Equal(t, 100.0, score)
 }
 
 // --- concisenessScore: sentences < 1 → set to 1 branch ---
 
 func TestConcisenessScore_NoSentenceEnding(t *testing.T) {
-	// A phrase with no sentence-ending punctuation: CountSentences may
-	// return 0, which is then clamped to 1 inside concisenessScore.
-	score := concisenessScore("hello world foo bar")
+	// The caller passes 0 directly here to drive the sentences < 1
+	// clamp inside concisenessScore; mdtext.CountSentences itself
+	// returns at least 1 for any non-empty text, so no real input
+	// produces 0 — this only exercises the clamp in isolation.
+	score := concisenessScore("hello world foo bar", 0)
 	assert.GreaterOrEqual(t, score, 0.0)
 	assert.LessOrEqual(t, score, 100.0)
 }
@@ -218,4 +221,200 @@ func TestLookupDocFromFS_ListDocsError(t *testing.T) {
 	_, err := lookupDocFromFS(errFS{}, "MET001")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reading metrics directory")
+}
+
+// --- MET008/MET009/MET010 compute error paths ---
+
+func TestMET008_Readability_NoWords_ReturnsUnavailable(t *testing.T) {
+	def, ok := Lookup("MET008")
+	require.True(t, ok, "MET008 must be registered")
+
+	// Empty document has no words; readability must be unavailable, not 0.
+	doc := NewDocument("test.md", []byte(""))
+	v, err := def.Compute(doc)
+	require.NoError(t, err)
+	assert.False(t, v.Available)
+}
+
+func TestMET008_Readability_PlainTextError(t *testing.T) {
+	def, ok := Lookup("MET008")
+	require.True(t, ok, "MET008 must be registered")
+
+	doc := NewDocument("test.md", []byte("# Hello\n"))
+	sentinel := errors.New("plain-text failure")
+	doc.plainTextReady = true
+	doc.plainTextErr = sentinel
+
+	v, err := def.Compute(doc)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sentinel)
+	assert.False(t, v.Available)
+}
+
+func TestMET008_Readability_PlainTextErrorAfterWordCountSuccess(t *testing.T) {
+	def, ok := Lookup("MET008")
+	require.True(t, ok, "MET008 must be registered")
+
+	doc := NewDocument("test.md", []byte("# Hello\n"))
+	sentinel := errors.New("plain-text failure")
+	// WordCount succeeds with a non-zero result; the subsequent PlainText call fails.
+	doc.wordCountReady = true
+	doc.wordCount = 5
+	doc.wordCountErr = nil
+	doc.plainTextReady = true
+	doc.plainTextErr = sentinel
+
+	v, err := def.Compute(doc)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sentinel)
+	assert.False(t, v.Available)
+}
+
+func TestMET006_Conciseness_SentenceCountError(t *testing.T) {
+	def, ok := Lookup("MET006")
+	require.True(t, ok, "MET006 must be registered")
+
+	doc := NewDocument("test.md", []byte("# Hello\n\nSome text.\n"))
+	sentinel := errors.New("sentence-count failure")
+	// MET006's own PlainText() call succeeds first, so the only way to
+	// reach its SentenceCount() error check is to prime SentenceCount's
+	// own cache directly: SentenceCount's internal PlainText() call
+	// would otherwise share the same already-successful PlainText()
+	// cache slot MET006 just populated.
+	doc.sentenceCountReady = true
+	doc.sentenceCountErr = sentinel
+
+	v, err := def.Compute(doc)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sentinel)
+	assert.False(t, v.Available)
+}
+
+func TestMET009_Sentences_PlainTextError(t *testing.T) {
+	def, ok := Lookup("MET009")
+	require.True(t, ok, "MET009 must be registered")
+
+	doc := NewDocument("test.md", []byte("# Hello\n"))
+	sentinel := errors.New("plain-text failure")
+	doc.plainTextReady = true
+	doc.plainTextErr = sentinel
+
+	v, err := def.Compute(doc)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sentinel)
+	assert.False(t, v.Available)
+}
+
+func TestMET010_AvgWordsPerSentence_WordCountError(t *testing.T) {
+	def, ok := Lookup("MET010")
+	require.True(t, ok, "MET010 must be registered")
+
+	doc := NewDocument("test.md", []byte("# Hello\n"))
+	sentinel := errors.New("word-count failure")
+	doc.wordCountReady = true
+	doc.wordCountErr = sentinel
+	// PlainText must also be primed to fail so WordCount propagates it.
+	doc.plainTextReady = true
+	doc.plainTextErr = sentinel
+
+	v, err := def.Compute(doc)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sentinel)
+	assert.False(t, v.Available)
+}
+
+func TestMET010_AvgWordsPerSentence_PlainTextErrorAfterWordCountSuccess(t *testing.T) {
+	def, ok := Lookup("MET010")
+	require.True(t, ok, "MET010 must be registered")
+
+	doc := NewDocument("test.md", []byte("# Hello\n"))
+	sentinel := errors.New("plain-text failure")
+	// WordCount succeeds (cached), but the subsequent PlainText call fails.
+	doc.wordCountReady = true
+	doc.wordCount = 5
+	doc.wordCountErr = nil
+	doc.plainTextReady = true
+	doc.plainTextErr = sentinel
+
+	v, err := def.Compute(doc)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sentinel)
+	assert.False(t, v.Available)
+}
+
+func TestMET010_AvgWordsPerSentence_ZeroSentences(t *testing.T) {
+	// An empty document produces 0 words and 0 sentences → result is 0.
+	def, ok := Lookup("MET010")
+	require.True(t, ok, "MET010 must be registered")
+
+	doc := NewDocument("test.md", []byte(""))
+	v, err := def.Compute(doc)
+	require.NoError(t, err)
+	assert.True(t, v.Available)
+	assert.Equal(t, 0.0, v.Number)
+}
+
+// --- MET007: word-frequency ---
+
+func TestMET007_WordFrequency_ParagraphRepetition(t *testing.T) {
+	def, ok := Lookup("MET007")
+	require.True(t, ok, "MET007 must be registered")
+
+	// ExtractPlainText concatenates heading text and paragraph text without a
+	// separator, so "Title" + "process..." runs as "Titleprocess..." — making
+	// the first "process" merge into the heading word. Only the remaining 4
+	// space-separated "process" tokens are counted as the word "process".
+	// Use a paragraph-only document (no heading) to count all 5.
+	doc := NewDocument("test.md", []byte("process process process process process.\n"))
+	v, err := def.Compute(doc)
+	require.NoError(t, err)
+	assert.True(t, v.Available)
+	assert.Equal(t, 5.0, v.Number)
+}
+
+func TestMET007_WordFrequency_HeadingConcatenation(t *testing.T) {
+	// ExtractPlainText concatenates block-level nodes without separators.
+	// Adjacent headings "# process ## process" produce "processprocess" (one
+	// long token), not two separate "process" tokens. This locks that behavior:
+	// heading-only repetition does NOT raise MET007 because the tokenizer
+	// never sees the words as distinct. MDS075 (which checks paragraph nodes
+	// directly) is consistent: it also never flags heading text.
+	def, ok := Lookup("MET007")
+	require.True(t, ok, "MET007 must be registered")
+
+	src := "# process\n\n## process\n\n### process\n\n#### process\n\n##### process\n"
+	doc := NewDocument("test.md", []byte(src))
+	v, err := def.Compute(doc)
+	require.NoError(t, err)
+	assert.True(t, v.Available)
+	// All five "process" headings concatenate into one long unrecognised token.
+	assert.Equal(t, 1.0, v.Number)
+}
+
+func TestMET007_WordFrequency_NoRepetition(t *testing.T) {
+	def, ok := Lookup("MET007")
+	require.True(t, ok, "MET007 must be registered")
+
+	// "fish" and "title" each appear once; both are < 4 runes, so max = 0?
+	// Use words >= 4 runes that each appear exactly once.
+	doc := NewDocument("test.md", []byte("This text contains unique words.\n"))
+	v, err := def.Compute(doc)
+	require.NoError(t, err)
+	assert.True(t, v.Available)
+	assert.Equal(t, 1.0, v.Number)
+}
+
+func TestMET007_WordFrequency_PlainTextError(t *testing.T) {
+	def, ok := Lookup("MET007")
+	require.True(t, ok, "MET007 must be registered")
+
+	doc := NewDocument("test.md", []byte("# Hello\n"))
+	sentinel := errors.New("plain-text error")
+	doc.plainTextReady = true
+	doc.plainTextErr = sentinel
+
+	v, err := def.Compute(doc)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sentinel)
+	assert.False(t, v.Available)
 }

@@ -266,6 +266,30 @@ func TestFile_Memo(t *testing.T) {
 		"a distinct key must not re-run the first key's build")
 }
 
+// TestFile_Memo_WarmPathAllocatesNothing pins Memo's cache-hit cost at
+// zero allocs. MemoFile.CollectSectionParagraphs feeds every
+// paragraph-aware rule, so a per-call allocation on the warm path
+// multiplies by every rule pass that re-touches an already-memoized
+// key on the same File.
+//
+// Before this test, the warm path still paid for the throwaway
+// &memoEntry{} that f.scratch.LoadOrStore's second argument
+// constructs before the call — Go evaluates that argument whether or
+// not the key is already present, and the freshly built entry is
+// discarded on a hit. A Load-first check must run ahead of
+// LoadOrStore to avoid it.
+func TestFile_Memo_WarmPathAllocatesNothing(t *testing.T) {
+	f := &File{Path: "t.md"}
+	build := func() any { return 42 }
+
+	f.Memo("k", build)
+
+	allocs := testing.AllocsPerRun(200, func() {
+		f.Memo("k", build)
+	})
+	assert.Zero(t, allocs, "Memo's cache-hit path must not allocate")
+}
+
 // TestFile_Memo_ConcurrentSingleBuild pins that build runs exactly
 // once even under the concurrent readers the LSP can run against a
 // single document.
@@ -374,6 +398,91 @@ func TestFile_MemoFile_IndependentFromMemo(t *testing.T) {
 		"MemoFile must return the value the prior Memo call cached")
 	assert.Equal(t, int32(0), atomic.LoadInt32(&memoFileCalls),
 		"the MemoFile build must not run when Memo populated the key")
+}
+
+// TestFile_HeadingTextCache_ComputesOnce pins that HeadingTextCache
+// runs compute exactly once per heading node even when called
+// repeatedly for the same *ast.Heading — the shape multiple default
+// rules (no-trailing-punctuation, no-duplicate-headings,
+// heading-increment, first-line-heading) hit when each independently
+// extracts the same heading's text within one Check pass over f.
+func TestFile_HeadingTextCache_ComputesOnce(t *testing.T) {
+	f := &File{Path: "t.md"}
+	heading := &ast.Heading{}
+
+	var calls int32
+	compute := func() string {
+		atomic.AddInt32(&calls, 1)
+		return "Title"
+	}
+
+	require.Equal(t, "Title", f.HeadingTextCache(heading, 0, compute))
+	require.Equal(t, "Title", f.HeadingTextCache(heading, 0, compute))
+	require.Equal(t, "Title", f.HeadingTextCache(heading, 0, compute))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls),
+		"compute must run exactly once per heading node")
+}
+
+// TestFile_HeadingTextCache_IndependentHeadings pins that distinct
+// heading nodes get distinct cache entries — a shared key across all
+// headings would make every heading after the first return the
+// wrong text.
+func TestFile_HeadingTextCache_IndependentHeadings(t *testing.T) {
+	f := &File{Path: "t.md"}
+	h1, h2 := &ast.Heading{}, &ast.Heading{}
+
+	got1 := f.HeadingTextCache(h1, 0, func() string { return "First" })
+	got2 := f.HeadingTextCache(h2, 0, func() string { return "Second" })
+	assert.Equal(t, "First", got1)
+	assert.Equal(t, "Second", got2)
+	// Re-querying h1 must still serve its own cached value, not h2's.
+	assert.Equal(t, "First", f.HeadingTextCache(h1, 0, func() string { return "wrong" }))
+}
+
+// TestFile_HeadingTextCache_IndependentBases pins that the same
+// heading pointer queried at two different base offsets gets two
+// independent cache entries. HeadingText (the AST path) always
+// queries base 0; HeadingTextBase (the parse-skipped path) queries
+// whatever run-local base applies. Without base in the key, whichever
+// call reaches a given heading first would permanently decide every
+// later caller's answer regardless of the base it asked for.
+func TestFile_HeadingTextCache_IndependentBases(t *testing.T) {
+	f := &File{Path: "t.md"}
+	heading := &ast.Heading{}
+
+	got0 := f.HeadingTextCache(heading, 0, func() string { return "base-zero" })
+	got5 := f.HeadingTextCache(heading, 5, func() string { return "base-five" })
+	assert.Equal(t, "base-zero", got0)
+	assert.Equal(t, "base-five", got5)
+	// Re-querying base 0 must still serve its own cached value, not
+	// base 5's answer.
+	assert.Equal(t, "base-zero", f.HeadingTextCache(heading, 0, func() string { return "wrong" }))
+}
+
+// TestFile_HeadingTextCache_ConcurrentSingleBuild pins that compute
+// runs exactly once per heading even under the concurrent readers
+// the LSP can run against a single document, mirroring
+// TestFile_Memo_ConcurrentSingleBuild for the pointer-keyed cache.
+func TestFile_HeadingTextCache_ConcurrentSingleBuild(t *testing.T) {
+	f := &File{Path: "t.md"}
+	heading := &ast.Heading{}
+
+	var calls int32
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v := f.HeadingTextCache(heading, 0, func() string {
+				atomic.AddInt32(&calls, 1)
+				return "once"
+			})
+			assert.Equal(t, "once", v)
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls),
+		"compute must run exactly once under concurrent access")
 }
 
 // TestFile_Memo_PanicReleasesMutex pins that a panicking build does

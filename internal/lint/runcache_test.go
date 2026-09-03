@@ -51,6 +51,50 @@ func TestRunCache_IncludesBuildsOnce(t *testing.T) {
 		"include-adjacency build must run exactly once per absPath")
 }
 
+// TestRunCache_RawSchemaFileBuildsOnce pins the same single-build
+// guarantee for the raw-schema-bytes cache: a schema referenced by
+// many host files (the common case for a workspace-wide kind) must
+// be read and inspected once per run, not once per host file.
+func TestRunCache_RawSchemaFileBuildsOnce(t *testing.T) {
+	c := NewRunCache()
+
+	var calls int32
+	build := func() any {
+		atomic.AddInt32(&calls, 1)
+		return "schema bytes"
+	}
+
+	for i := 0; i < 3; i++ {
+		got := c.RawSchemaFile("/abs/schema.md", build)
+		require.Equal(t, "schema bytes", got)
+	}
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls),
+		"build must run exactly once per absPath")
+}
+
+// TestRunCache_RawSchemaFileInvalidateForcesRebuild pins that
+// Invalidate clears the raw-schema-bytes slot alongside the other
+// per-path caches, so an LSP edit to a schema file is picked up on
+// the next lookup instead of serving stale bytes forever.
+func TestRunCache_RawSchemaFileInvalidateForcesRebuild(t *testing.T) {
+	c := NewRunCache()
+
+	var calls int32
+	build := func(v string) func() any {
+		return func() any {
+			atomic.AddInt32(&calls, 1)
+			return v
+		}
+	}
+	c.RawSchemaFile("/abs/schema.md", build("v1"))
+	c.Invalidate("/abs/schema.md")
+	got := c.RawSchemaFile("/abs/schema.md", build("v2"))
+
+	assert.Equal(t, "v2", got, "Invalidate must clear the raw-schema slot")
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls),
+		"build must run again after Invalidate")
+}
+
 // TestRunCache_DistinctKeysDoNotShare pins that two absPaths are
 // independent: caching one must not silently serve the other.
 func TestRunCache_DistinctKeysDoNotShare(t *testing.T) {
@@ -1036,4 +1080,111 @@ func TestInvalidatePath_LeavesGlobMatchesIntact(t *testing.T) {
 	c.Invalidate("/some/file.md")
 	_ = c.GlobMatches("k", func() []string { builds++; return nil })
 	assert.Equal(t, 1, builds)
+}
+
+func TestDuplicateParagraphs_BuildsOncePerKey(t *testing.T) {
+	c := NewRunCache()
+	builds := 0
+	build := func() any { builds++; return []string{"p1"} }
+	first := c.DuplicateParagraphs("/root/a.md\x0010", build)
+	second := c.DuplicateParagraphs("/root/a.md\x0010", build)
+	assert.Equal(t, first, second)
+	assert.Equal(t, 1, builds, "same key must build once")
+
+	_ = c.DuplicateParagraphs("/root/a.md\x0050", build)
+	assert.Equal(t, 2, builds, "a distinct min-chars suffix builds separately")
+}
+
+func TestCorpusIndex_BuildsOncePerKey(t *testing.T) {
+	c := NewRunCache()
+	builds := 0
+	build := func() any { builds++; return map[string]int{"fp": 1} }
+	first := c.CorpusIndex("/root\x0010", build)
+	second := c.CorpusIndex("/root\x0010", build)
+	assert.Equal(t, first, second)
+	assert.Equal(t, 1, builds, "same key must build once")
+
+	_ = c.CorpusIndex("/root\x0050", build)
+	assert.Equal(t, 2, builds, "a distinct min-chars suffix builds separately")
+}
+
+func TestCorpusIndex_InvalidatePathDropsEveryKey(t *testing.T) {
+	// A content edit to any file could change what its paragraphs
+	// fingerprint to, and a corpus-index aggregate has no cheap way to
+	// know which keys summed over the edited path — so every key drops,
+	// unlike GlobMatches (which only tree-shape changes affect).
+	c := NewRunCache()
+	builds := 0
+	build := func() any { builds++; return map[string]int{"fp": 1} }
+	_ = c.CorpusIndex("/root\x0010", build)
+	_ = c.CorpusIndex("/root\x0050", build)
+	require.Equal(t, 2, builds)
+
+	c.Invalidate("/root/unrelated.md")
+
+	_ = c.CorpusIndex("/root\x0010", build)
+	_ = c.CorpusIndex("/root\x0050", build)
+	assert.Equal(t, 4, builds, "every corpus-index key must drop on any content edit")
+}
+
+func TestCorpusIndex_InvalidateGlobMatchesDropsEveryKey(t *testing.T) {
+	c := NewRunCache()
+	builds := 0
+	build := func() any { builds++; return map[string]int{"fp": 1} }
+	_ = c.CorpusIndex("/root\x0010", build)
+	require.Equal(t, 1, builds)
+
+	c.InvalidateGlobMatches()
+
+	_ = c.CorpusIndex("/root\x0010", build)
+	assert.Equal(t, 2, builds, "a tree-shape change must drop the corpus-index cache too")
+}
+
+func TestDuplicateParagraphs_InvalidateDropsEveryKeyForPath(t *testing.T) {
+	// A content edit to /root/a.md must drop every cached slot built
+	// from it, regardless of which min-chars suffix produced the key
+	// — Invalidate does not know which suffixes are in use.
+	c := NewRunCache()
+	builds := 0
+	build := func() any { builds++; return []string{"p1"} }
+	_ = c.DuplicateParagraphs("/root/a.md\x0010", build)
+	_ = c.DuplicateParagraphs("/root/a.md\x0050", build)
+	_ = c.DuplicateParagraphs("/root/b.md\x0010", build)
+	require.Equal(t, 3, builds)
+
+	c.Invalidate("/root/a.md")
+
+	_ = c.DuplicateParagraphs("/root/a.md\x0010", build)
+	_ = c.DuplicateParagraphs("/root/a.md\x0050", build)
+	_ = c.DuplicateParagraphs("/root/b.md\x0010", build)
+	assert.Equal(t, 5, builds,
+		"both a.md keys must rebuild; b.md's slot must survive untouched")
+}
+
+// TestLoad_WarmPathAllocatesNothing pins load's cache-hit cost at zero
+// allocs. Every RunCache accessor (FrontMatter, Includes, GlobMatches,
+// ParsedSchema, DuplicateParagraphs, Wikilinks, CompiledCUE,
+// UniqueFieldIndex) is called at least once per host file across a
+// workspace run, so a per-call allocation on the warm path multiplies
+// by the corpus size.
+//
+// Before this test, load's warm path paid two allocations per call
+// regardless of hit/miss: LoadOrStore's second argument (&runCacheEntry{})
+// is constructed before the call and discarded on a hit, and
+// e.once.Do(func() { e.val = build() }) allocates the wrapping closure
+// as an argument even when Do's internal check makes it a no-op — the
+// exact closure-box anti-pattern file.go's memoEntry doc comment
+// describes fixing for File.Memo, which had the same gap: a Load-first
+// check before the throwaway LoadOrStore value must run first.
+func TestLoad_WarmPathAllocatesNothing(t *testing.T) {
+	var m sync.Map
+	build := func() any { return 42 }
+
+	// Warm the entry.
+	load(&m, "k", build)
+
+	allocs := testing.AllocsPerRun(200, func() {
+		load(&m, "k", build)
+	})
+	assert.Zero(t, allocs, "load's cache-hit path must not allocate")
 }

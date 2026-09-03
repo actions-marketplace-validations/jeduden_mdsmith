@@ -9,12 +9,29 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/jeduden/mdsmith/internal/gitignore"
+	"github.com/jeduden/mdsmith/internal/mdpath"
 )
 
-// isMarkdown returns true if the file extension is .md or .markdown.
+// getwdFn resolves the process working directory. It is a package-level
+// variable so tests can substitute a failing implementation to exercise
+// the os.Getwd-error branches without manipulating the process CWD.
+var getwdFn = os.Getwd
+
+// volumeNameFn extracts the volume component of a path (non-empty only on
+// Windows). Package-level so tests can inject a non-empty volume on Unix.
+var volumeNameFn = filepath.VolumeName
+
+// absPathFn converts a relative path to absolute (used only for the
+// Windows volume-relative branch). Package-level so tests can inject a
+// failure without running on Windows.
+var absPathFn = filepath.Abs
+
+// isMarkdown returns true if the file has a recognised Markdown
+// extension. Membership is delegated to mdpath, the single source of
+// truth for the extension set; mdpath.HasMarkdownExt folds case without
+// the heap allocation strings.ToLower would make.
 func isMarkdown(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	return ext == ".md" || ext == ".markdown"
+	return mdpath.HasMarkdownExt(filepath.Ext(path))
 }
 
 // hasGlobChars returns true if the string contains glob meta-characters.
@@ -72,6 +89,16 @@ type ResolveOpts struct {
 	// root) as well as FIFOs, devices, and sockets (reading them
 	// during linting could block or fail unexpectedly).
 	FollowSymlinks bool
+
+	// OnSkipNonMarkdown, when non-nil, is called with each
+	// explicitly named path dropped because it is not Markdown, so a
+	// caller can warn instead of leaving `mdsmith fix .gitattributes`
+	// a silent no-op (issue #759). It fires ONLY for a directly named
+	// file: entries filtered out during a directory walk or glob
+	// expansion are skipped silently, because the user named the
+	// directory or pattern, not the individual file. The argument is
+	// the path exactly as it was passed.
+	OnSkipNonMarkdown func(path string)
 }
 
 // DefaultResolveOpts returns options with defaults applied.
@@ -100,7 +127,7 @@ func ResolveFiles(args []string) ([]string, error) {
 // ResolveFilesWithOpts is like ResolveFiles but accepts options to control
 // behavior such as gitignore filtering.
 func ResolveFilesWithOpts(args []string, opts ResolveOpts) ([]string, error) {
-	seen := make(map[string]bool)
+	seen := make(map[string]struct{})
 	var result []string
 
 	addFile := func(path string) {
@@ -108,8 +135,8 @@ func ResolveFilesWithOpts(args []string, opts ResolveOpts) ([]string, error) {
 		if err != nil {
 			abs = path
 		}
-		if !seen[abs] {
-			seen[abs] = true
+		if _, ok := seen[abs]; !ok {
+			seen[abs] = struct{}{}
 			result = append(result, path)
 		}
 	}
@@ -136,8 +163,15 @@ func resolveArg(arg string, opts ResolveOpts, addFile func(string)) error {
 	// like `linked/dirty.md` reach an external target, since Lstat
 	// on the leaf follows the intermediate symlink during name
 	// resolution. Symlinked directories are always skipped regardless
-	// of FollowSymlinks, per the Option doc.
-	if hasSymlinkAncestor(arg) {
+	// of FollowSymlinks, per the Option doc. When the scan boundary
+	// cannot be determined (no cwd or .git anchor), propagate the
+	// error so the caller knows the path was skipped rather than silently
+	// returning a zero-file clean run.
+	isSymlinkAnc, symErr := hasSymlinkAncestor(arg)
+	if symErr != nil {
+		return symErr
+	}
+	if isSymlinkAnc {
 		return nil
 	}
 
@@ -187,7 +221,24 @@ func resolveArg(arg string, opts ResolveOpts, addFile func(string)) error {
 		return nil
 	}
 
-	// Explicitly named files are never filtered by gitignore.
+	// Skip files that are not Markdown even when named explicitly, so
+	// an explicit path matches the walk (walkDir) and glob (resolveGlob)
+	// branches, both of which gate on isMarkdown. Without this, `mdsmith
+	// check .gitattributes` lints a git-config file as Markdown and
+	// `mdsmith fix` rewrites it — including the merge-driver block
+	// mdsmith generates there (issue #759). The extension is the only
+	// signal available at resolve time; content sniffing would be both
+	// slower and ambiguous. Unlike the walk and glob paths, a directly
+	// named file gets an OnSkipNonMarkdown notification so the caller
+	// can warn rather than silently doing nothing.
+	if !isMarkdown(arg) {
+		if opts.OnSkipNonMarkdown != nil {
+			opts.OnSkipNonMarkdown(arg)
+		}
+		return nil
+	}
+
+	// Explicitly named Markdown files are never filtered by gitignore.
 	addFile(arg)
 	return nil
 }
@@ -206,11 +257,11 @@ func resolveArg(arg string, opts ResolveOpts, addFile func(string)) error {
 //   - otherwise, the nearest ancestor of the path that contains a
 //     `.git` entry (so an absolute path run from a sibling shell
 //     is still scanned within the target project);
-//   - otherwise, "" (trust the user — no scan).
+//   - otherwise, an error is returned (boundary unverifiable).
 //
 // This keeps system-level symlinks above the boundary (e.g. `/tmp`
 // on macOS) out of the probe.
-func hasSymlinkAncestor(path string) bool {
+func hasSymlinkAncestor(path string) (bool, error) {
 	return hasSymlinkAncestorCached(path, make(map[string]bool))
 }
 
@@ -218,8 +269,8 @@ func hasSymlinkAncestor(path string) bool {
 // hasSymlinkAncestor. Callers that run the check repeatedly (e.g.
 // per glob match) should share a `cache` across invocations to
 // avoid repeated `os.Lstat` calls on the same ancestor directories.
-func hasSymlinkAncestorCached(path string, cache map[string]bool) bool {
-	cwd, _ := os.Getwd() // "" on error; handled downstream
+func hasSymlinkAncestorCached(path string, cache map[string]bool) (bool, error) {
+	cwd, _ := getwdFn() // "" on error; handled downstream
 	return hasSymlinkAncestorWithCwd(path, cwd, cache)
 }
 
@@ -234,14 +285,26 @@ func hasSymlinkAncestorCached(path string, cache map[string]bool) bool {
 // is a symlinked dir, the walker probes `linked` (detects the
 // symlink) before the `..` pops back; `a/b/../c.md` with no
 // symlinks anywhere is allowed.
-func hasSymlinkAncestorWithCwd(path, cwd string, cache map[string]bool) bool {
+func hasSymlinkAncestorWithCwd(path, cwd string, cache map[string]bool) (bool, error) {
 	abs := absWithCwd(path, cwd)
 	if abs == "" {
-		return false
+		return false, nil
 	}
 	stop := ancestorStopBoundary(abs, cwd)
 	if stop == "" {
-		return false
+		// When the working directory is unknown (cwd=="") and no .git
+		// ancestor anchors the scan, the ancestor walk cannot be bounded:
+		// we have no project root to stop at, so a symlinked directory
+		// outside any project boundary would go undetected. Return an
+		// error so callers can treat the path as unverifiable rather than
+		// silently trusting it. When cwd is non-empty, the path is simply
+		// outside every known project root; that is trusted by design so
+		// system-level symlinks (e.g. /tmp on macOS) stay out of scope.
+		if cwd == "" {
+			return false, fmt.Errorf("cannot determine scan boundary for %q: "+
+				"working directory unavailable and no .git ancestor found", path)
+		}
+		return false, nil
 	}
 
 	// Determine the starting "current" directory for the walk and
@@ -256,9 +319,9 @@ func hasSymlinkAncestorWithCwd(path, cwd string, cache map[string]bool) bool {
 		current = vol + string(filepath.Separator)
 		rest = strings.TrimPrefix(path, vol)
 	} else if current == "" {
-		wd, err := os.Getwd()
+		wd, err := getwdFn()
 		if err != nil {
-			return false
+			return false, nil
 		}
 		current = wd
 	}
@@ -289,7 +352,7 @@ func hasSymlinkAncestorWithCwd(path, cwd string, cache map[string]bool) bool {
 			}
 			if v, ok := cache[current]; ok {
 				if v {
-					return true
+					return true, nil
 				}
 				continue
 			}
@@ -297,11 +360,11 @@ func hasSymlinkAncestorWithCwd(path, cwd string, cache map[string]bool) bool {
 			isSymlink := err == nil && info.Mode()&os.ModeSymlink != 0
 			cache[current] = isSymlink
 			if isSymlink {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 // isDescendantOf reports whether p is a strict descendant of base.
@@ -324,8 +387,12 @@ func isDescendantOf(p, base string) bool {
 // absWithCwd resolves path to an absolute, cleaned form using the
 // caller-supplied cwd to avoid the per-call `os.Getwd` that
 // `filepath.Abs` performs for relative paths. When cwd is empty
-// (e.g. a Getwd error upstream), it falls back to `filepath.Abs`.
-// Returns "" only on the unreachable `filepath.Abs` failure path.
+// it calls getwdFn directly; returns "" if getwdFn fails.
+//
+// Windows volume-relative paths (e.g. "C:foo") are not absolute but
+// require per-drive CWD resolution that os.Getwd cannot provide;
+// filepath.Abs is used for those so the Windows per-drive CWD is
+// consulted correctly. On Unix, filepath.VolumeName is always "".
 func absWithCwd(path, cwd string) string {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
@@ -333,11 +400,18 @@ func absWithCwd(path, cwd string) string {
 	if cwd != "" {
 		return filepath.Clean(filepath.Join(cwd, path))
 	}
-	abs, err := filepath.Abs(path)
+	if volumeNameFn(path) != "" {
+		abs, err := absPathFn(path)
+		if err != nil {
+			return ""
+		}
+		return filepath.Clean(abs)
+	}
+	wd, err := getwdFn()
 	if err != nil {
 		return ""
 	}
-	return filepath.Clean(abs)
+	return filepath.Clean(filepath.Join(wd, path))
 }
 
 // ancestorStopBoundary returns the directory at which ancestor
@@ -387,15 +461,17 @@ func resolveGlob(pattern string, opts ResolveOpts, addFile func(string)) error {
 	// ancestorStopBoundary and doesn't change across matches. The
 	// per-directory Lstat cache is shared across every match too,
 	// so each ancestor dir is Lstat'd at most once per expansion.
-	cwd, _ := os.Getwd()
+	cwd, _ := getwdFn()
 	ancestorCache := make(map[string]bool)
 	for _, m := range matches {
 		// filepath.Glob follows symlinked directory components
 		// during expansion, so a pattern like `linked/*.md` will
 		// return paths rooted under a symlinked dir. Reject any
 		// match whose ancestor chain contains a symlink: symlinked
-		// directories are always skipped.
-		if hasSymlinkAncestorWithCwd(m, cwd, ancestorCache) {
+		// directories are always skipped. When the scan boundary
+		// cannot be determined, treat the match as unverifiable
+		// and skip it.
+		if isSymlink, err := hasSymlinkAncestorWithCwd(m, cwd, ancestorCache); err != nil || isSymlink {
 			continue
 		}
 		linfo, lerr := os.Lstat(m)

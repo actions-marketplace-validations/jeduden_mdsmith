@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/piparser"
 	"github.com/jeduden/mdsmith/internal/rule"
@@ -724,6 +725,48 @@ filename: "[0-9]*_*.md"
 		`filename: got "my-plan.md", expected filename matching glob [0-9]*_*.md`)
 }
 
+func TestCheck_FilenamePatternListMatchesAlternative(t *testing.T) {
+	// Issue 817: a <?require?> filename list matches when the
+	// basename matches any one glob. Here the file matches the
+	// literal `plan.md`, not the id-prefixed shape.
+	schemaPath := writeSchema(t, `<?require
+filename:
+  - "[0-9]*_*.md"
+  - "plan.md"
+?>
+# ?
+`)
+	r := &Rule{Schema: schemaPath}
+	f := newTestFile(t, "plan.md", "# My Plan\n")
+	diags := r.Check(f)
+	expectDiags(t, diags, 0)
+}
+
+func TestCheck_FilenamePatternListNoneMatch(t *testing.T) {
+	schemaPath := writeSchema(t, `<?require
+filename:
+  - "[0-9]*_*.md"
+  - "plan.md"
+?>
+# ?
+`)
+	r := &Rule{Schema: schemaPath}
+	f := newTestFile(t, "notes.md", "# Notes\n")
+	diags := r.Check(f)
+	expectDiagMsg(t, diags,
+		`filename: got "notes.md", expected filename matching one of globs [0-9]*_*.md, plan.md`)
+}
+
+func TestCheck_FilenamePatternBadType(t *testing.T) {
+	// A `filename:` list entry that is not a string surfaces the
+	// DecodeFilenameField error as an invalid-schema diagnostic.
+	schemaPath := writeSchema(t, "<?require\nfilename:\n  - 5\n?>\n# ?\n")
+	r := &Rule{Schema: schemaPath}
+	f := newTestFile(t, "plan.md", "# Plan\n")
+	diags := r.Check(f)
+	expectDiagMsg(t, diags, "filename must be a string or list of strings")
+}
+
 func TestCheck_FilenamePatternSingleLinePI(t *testing.T) {
 	schemaPath := writeSchema(t, `<?require filename: "[0-9]*_*.md" ?>
 # ?
@@ -1011,6 +1054,53 @@ func TestCheck_PathPattern_DoublestarWildcardMatchesNested(t *testing.T) {
 	expectDiags(t, diags, 0)
 }
 
+// TestCheck_PathPattern_BraceAlternateWithSyntaxErrorUsesMatchVerdict
+// pins a regression a code review found: a path-pattern can pass
+// doublestar.ValidatePattern yet still make doublestar.Match and
+// doublestar.MatchUnvalidated disagree, when a brace alternative
+// contains a construct Match's internal validation aborts on before
+// trying a later, matching alternative — while MatchUnvalidated tries
+// every alternative regardless. checkPathPatterns must reproduce
+// doublestar.Match's verdict for such a pattern, not
+// MatchUnvalidated's.
+func TestCheck_PathPattern_BraceAlternateWithSyntaxErrorUsesMatchVerdict(t *testing.T) {
+	pattern := "{[!mdb[],docs/**/*.md}"
+	require.True(t, doublestar.ValidatePattern(pattern),
+		"precondition: pattern must pass ValidatePattern for this test to be meaningful")
+	matched, err := doublestar.Match(pattern, "docs/a.md")
+	require.Error(t, err,
+		"precondition: doublestar.Match must itself error on this pattern, "+
+			"or this test is not exercising the divergence it claims to")
+	require.False(t, matched)
+	require.True(t, doublestar.MatchUnvalidated(pattern, "docs/a.md"),
+		"precondition: Match and MatchUnvalidated must actually diverge on this pattern")
+
+	root := t.TempDir()
+	f := newRootedFile(t, root, "docs/a.md", "# A\n")
+	r := &Rule{PathPatterns: []PathPattern{
+		{Kind: "special", Pattern: pattern},
+	}}
+	diags := r.Check(f)
+	// checkPathPatterns must match doublestar.Match's verdict (no
+	// match), not MatchUnvalidated's, for a pattern using brace
+	// alternation — so this must emit exactly one diagnostic.
+	expectDiags(t, diags, 1)
+}
+
+// TestCheck_PathPattern_BraceAlternateThatMatchesSucceeds covers the
+// safe path's success branch: a well-formed brace-alternate pattern
+// that doublestar.Match matches cleanly (no syntax-error abort) must
+// still be treated as a match by checkPathPatterns' fallback.
+func TestCheck_PathPattern_BraceAlternateThatMatchesSucceeds(t *testing.T) {
+	root := t.TempDir()
+	f := newRootedFile(t, root, "docs/README.markdown", "# Docs\n")
+	r := &Rule{PathPatterns: []PathPattern{
+		{Kind: "readme", Pattern: "docs/*.{md,markdown}"},
+	}}
+	diags := r.Check(f)
+	expectDiags(t, diags, 0)
+}
+
 // TestCheck_PathPattern_EmptyRootDirFallsBackToPath covers the
 // `f.RootDir == ""` branch of workspaceRelPath: with no workspace
 // root configured, the glob compares against f.Path verbatim.
@@ -1158,7 +1248,7 @@ func TestParseSchema_SchemaIncludeRequireMerge(t *testing.T) {
 
 	tmpl, err := parseSchema([]byte(schema), schemaPath, 0)
 	require.NoError(t, err)
-	assert.Equal(t, `[0-9]*_*.md`, tmpl.Config.FilenamePattern)
+	assert.Equal(t, []string{`[0-9]*_*.md`}, tmpl.Config.FilenamePatterns)
 	require.Len(t, tmpl.Headings, 3)
 	assert.Equal(t, "Tasks", tmpl.Headings[2].Text)
 }
@@ -1728,7 +1818,7 @@ func TestExtractRequireDirective_SingleLineEmpty(t *testing.T) {
 	f := newTestFile(t, "schema.md", src)
 	result, err := extractRequireDirective(f)
 	require.NoError(t, err)
-	assert.Equal(t, "", result)
+	assert.Empty(t, result)
 }
 
 // extractPIFileParam: single-line form
@@ -1863,7 +1953,7 @@ func TestParseSchema_SchemaIncludeNestedRequirePropagated(t *testing.T) {
 	tmpl, err := parseSchema([]byte(schema), schemaPath, 0)
 	require.NoError(t, err)
 	// The filename pattern from the nested include should propagate up.
-	assert.Equal(t, "nested-*.md", tmpl.Config.FilenamePattern)
+	assert.Equal(t, []string{"nested-*.md"}, tmpl.Config.FilenamePatterns)
 }
 
 // validateFrontMatterCUE: invalid CUE schema error
@@ -2001,6 +2091,20 @@ func TestHeadingText_WithLink(t *testing.T) {
 	headings := extractHeadings(f)
 	require.Len(t, headings, 1)
 	assert.Contains(t, headings[0].Text, "link text")
+}
+
+// TestExtractHeadings_Memoized pins that repeated calls on the same
+// File share the same backing slice: a schema composing N>=2 extends
+// sources calls extractHeadings once per source from
+// checkComposedSources's bodySyncDiagnostics loop, so an unmemoized
+// walk would re-scan the same AST N times within one Check.
+func TestExtractHeadings_Memoized(t *testing.T) {
+	f := newTestFile(t, "doc.md", "# H1\n\n## H2\n\n### H3\n")
+	h1 := extractHeadings(f)
+	h2 := extractHeadings(f)
+	require.Len(t, h1, 3)
+	assert.Same(t, &h1[0], &h2[0],
+		"repeated calls must return the cached slice")
 }
 
 // matchesSchema: schemaHeading with field text but compiled == nil falls
@@ -2472,7 +2576,7 @@ func TestFix_BodySync_HeadingFollowedByAnother(t *testing.T) {
 func TestResolveBodySyncLine_NilPath(t *testing.T) {
 	sp := syncPoint{
 		Field: "", InBody: true, BodyText: "- **Category**: {category}",
-		compiled: buildFieldPattern("- **Category**: {category}"),
+		compiled: buildFieldPattern("- **Category**: {category}", nil),
 	}
 	_, ok := resolveBodySyncLine(sp, map[string]any{"category": "structural"}, nil, 1, 1)
 	assert.False(t, ok, "empty field should yield ok=false")
@@ -2590,4 +2694,26 @@ func TestLegacyPrecedingLine(t *testing.T) {
 	assert.Equal(t, 0, legacyPrecedingLine(heads, 0))
 	assert.Equal(t, 2, legacyPrecedingLine(heads, 1))
 	assert.Equal(t, 5, legacyPrecedingLine(heads, 2))
+}
+
+func TestWordlistTarget(t *testing.T) {
+	assert.Equal(t, "placeholders", (&Rule{}).WordlistTarget())
+}
+
+// TestNextUnclaimed_SetValueType pins claimed's value type at
+// map[int]struct{} rather than map[int]bool: claimed is a pure
+// presence set (only ever written struct{}{}/true, never explicitly
+// cleared), so the zero-byte value type is the right one
+// (docs/development/high-performance-go.md "map[K]struct{} for
+// sets"). This test only compiles once nextUnclaimed's signature
+// uses map[int]struct{}.
+func TestNextUnclaimed_SetValueType(t *testing.T) {
+	claimed := map[int]struct{}{1: {}, 3: {}}
+	assert.Equal(t, 0, nextUnclaimed([]int{0, 1, 2, 3}, claimed, 0))
+	assert.Equal(t, 2, nextUnclaimed([]int{1, 2, 3}, claimed, 0))
+	assert.Equal(t, -1, nextUnclaimed([]int{1, 3}, claimed, 0))
+	// A candidate below minIdx is skipped without a claimed lookup: 0
+	// and 1 are both < minIdx here, so the first index actually
+	// considered is 2 (unclaimed).
+	assert.Equal(t, 2, nextUnclaimed([]int{0, 1, 2, 3}, claimed, 2))
 }

@@ -12,14 +12,28 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jeduden/mdsmith/internal/bytelimit"
+	"github.com/jeduden/mdsmith/internal/gitattributes"
 	"github.com/jeduden/mdsmith/internal/githooks"
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
 )
 
+// hookMaxReadBytes is the byte cap applied to all hook-related file reads
+// (pre-merge-commit hook and .gitattributes). Matches the 1 MB cap used
+// by every other os.ReadFile call in the codebase via bytelimit. A file
+// larger than this limit triggers a diagnostic rather than a full read.
+const hookMaxReadBytes int64 = 1024 * 1024
+
 // preMergeMarkerBytes is the package-level byte slice of PreMergeCommitMarker,
 // hoisted to avoid re-converting the marker constant to []byte on every call.
 var preMergeMarkerBytes = []byte(githooks.PreMergeCommitMarker)
+
+// resolveHooksDir is a package variable so tests can substitute a
+// counting stub and assert driftParts resolves the hooks directory
+// exactly once per cache miss, instead of once for peekHookSource and
+// again for preMergeCommitHookDrift (each a `git rev-parse` subprocess).
+var resolveHooksDir = githooks.ResolveHooksDir
 
 func init() {
 	rule.Register(&Rule{})
@@ -88,7 +102,7 @@ func (r *Rule) ID() string { return "MDS048" }
 func (r *Rule) Name() string { return "git-hook-sync" }
 
 // MutatesGitIndex reports that MDS048's Fix stages .gitattributes via
-// an in-process `git add` (see githooks.StageGitattributes), so the
+// an in-process `git add` (see gitattributes.StageGitattributes), so the
 // merge driver must exclude it — the driver runs inside `git merge`,
 // which holds .git/index.lock. Implements rule.GitIndexMutator.
 func (r *Rule) MutatesGitIndex() bool { return true }
@@ -174,10 +188,13 @@ const (
 )
 
 // peekHookSource reports the current state of the pre-merge-commit
-// hook without parsing its contents.
-func peekHookSource(repoRoot string) hookSource {
-	hookPath := filepath.Join(githooks.ResolveHooksDir(repoRoot), "pre-merge-commit")
-	data, err := os.ReadFile(hookPath)
+// hook without parsing its contents. hooksDir is the repo's resolved
+// hooks directory (githooks.ResolveHooksDir), passed in so a caller
+// that also needs it (driftParts) resolves it once rather than
+// spawning a second `git rev-parse` for the same repo.
+func peekHookSource(hooksDir string) hookSource {
+	hookPath := filepath.Join(hooksDir, "pre-merge-commit")
+	data, err := bytelimit.ReadFileLimited(hookPath, hookMaxReadBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return hookSourceAbsent
@@ -205,21 +222,27 @@ func (r *Rule) driftParts(repoRoot string) []string {
 	}
 	driftMu.Unlock()
 
-	hasDriver := githooks.HasMdsmithMergeDriver(repoRoot)
-	hookState := peekHookSource(repoRoot)
-	if !hasDriver && hookState != hookSourceManaged && hookState != hookSourceUnreadable {
+	hasDriver := gitattributes.HasMdsmithMergeDriver(repoRoot)
+	hooksDir := resolveHooksDir(repoRoot)
+	hookState := peekHookSource(hooksDir)
+	// Early-exit when the user has not opted in (no driver) and the hook
+	// is not mdsmith-managed. hookSourceUnreadable (file too large, bad
+	// perms) is included in the early-exit: we cannot verify the hook's
+	// state, but since no driver is registered the user has not opted into
+	// mdsmith hook management, so there is nothing to report.
+	if !hasDriver && hookState != hookSourceManaged {
 		driftMu.Lock()
 		driftCache[repoRoot] = driftResult{}
 		driftMu.Unlock()
 		return nil
 	}
 
-	expectedGlobs := githooks.LoadGlobs(repoRoot)
+	expectedGlobs := gitattributes.LoadGlobs(repoRoot)
 	var parts []string
 	if msg := r.mergeDriverDrift(repoRoot, hasDriver, expectedGlobs); msg != "" {
 		parts = append(parts, msg)
 	}
-	if msg := r.preMergeCommitHookDrift(repoRoot); msg != "" {
+	if msg := r.preMergeCommitHookDrift(hooksDir); msg != "" {
 		parts = append(parts, msg)
 	}
 
@@ -242,18 +265,18 @@ func (r *Rule) driftParts(repoRoot string) []string {
 //
 // A non-ENOENT read error is surfaced as drift rather than silently
 // passing, so permission/IO failures cannot mask real misconfiguration.
-func (r *Rule) mergeDriverDrift(repoRoot string, hasDriver bool, expected githooks.Globs) string {
+func (r *Rule) mergeDriverDrift(repoRoot string, hasDriver bool, expected gitattributes.Globs) string {
 	if !hasDriver {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(repoRoot, ".gitattributes"))
+	data, err := bytelimit.ReadFileLimited(filepath.Join(repoRoot, ".gitattributes"), hookMaxReadBytes)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Sprintf(
 			"cannot verify merge-driver assignments because .gitattributes could not be read: %v",
 			err,
 		)
 	}
-	installed, ok := githooks.ExtractGlobs(string(data))
+	installed, ok := gitattributes.ExtractGlobs(string(data))
 	if !ok {
 		return fmt.Sprintf(
 			"merge.mdsmith.driver is registered but .gitattributes has no managed block "+
@@ -262,7 +285,7 @@ func (r *Rule) mergeDriverDrift(repoRoot string, hasDriver bool, expected githoo
 			describeGlobs(expected.Exclude),
 		)
 	}
-	if githooks.GlobsEqual(installed, expected) {
+	if gitattributes.GlobsEqual(installed, expected) {
 		return ""
 	}
 	return fmt.Sprintf(
@@ -289,10 +312,13 @@ func describeGlobs(patterns []string) string {
 // hook content. Returns an empty string if no hook is installed, the
 // hook is not mdsmith-managed, or the content matches. A non-ENOENT
 // read error is surfaced rather than silently passing so permission
-// or IO failures cannot mask real drift.
-func (r *Rule) preMergeCommitHookDrift(repoRoot string) string {
-	hookPath := filepath.Join(githooks.ResolveHooksDir(repoRoot), "pre-merge-commit")
-	data, err := os.ReadFile(hookPath)
+// or IO failures cannot mask real drift. hooksDir is the repo's
+// resolved hooks directory, shared with peekHookSource by driftParts
+// so the two checks spawn only one `git rev-parse` per repo instead
+// of one each.
+func (r *Rule) preMergeCommitHookDrift(hooksDir string) string {
+	hookPath := filepath.Join(hooksDir, "pre-merge-commit")
+	data, err := bytelimit.ReadFileLimited(hookPath, hookMaxReadBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ""
@@ -372,21 +398,21 @@ func (r *Rule) Fix(f *lint.File) []byte {
 
 	// Only fix when the merge driver is registered. If the driver
 	// isn't set up, there's no .gitattributes to repair.
-	if !githooks.HasMdsmithMergeDriver(repoRoot) {
+	if !gitattributes.HasMdsmithMergeDriver(repoRoot) {
 		return f.Source
 	}
 
-	expected := githooks.LoadGlobs(repoRoot)
+	expected := gitattributes.LoadGlobs(repoRoot)
 	attrPath := filepath.Join(repoRoot, ".gitattributes")
 
 	// When .gitattributes is already in sync, skip the rewrite. If a
 	// previous run failed to stage, retry the staging step now so the
 	// pending error is given a chance to clear without forcing a
 	// redundant write.
-	data, err := os.ReadFile(attrPath)
+	data, err := bytelimit.ReadFileLimited(attrPath, hookMaxReadBytes)
 	if err == nil {
-		installed, ok := githooks.ExtractGlobs(string(data))
-		if ok && githooks.GlobsEqual(installed, expected) {
+		installed, ok := gitattributes.ExtractGlobs(string(data))
+		if ok && gitattributes.GlobsEqual(installed, expected) {
 			if stagingError(repoRoot) != nil {
 				stage(repoRoot)
 			}
@@ -398,7 +424,7 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	// through the staging path so the index always reflects the
 	// updated working-tree content; a transient write failure simply
 	// leaves the tree unchanged so the next Fix call can retry.
-	if err := githooks.WriteGitattributes(attrPath, expected); err != nil {
+	if err := gitattributes.WriteGitattributes(attrPath, expected); err != nil {
 		return f.Source
 	}
 
@@ -427,7 +453,7 @@ func (r *Rule) PredictDryRunFix(f *lint.File) []lint.Diagnostic {
 // stage attempts to stage .gitattributes and records the outcome in
 // stagingErrors so Check can surface a persistent failure.
 func stage(repoRoot string) {
-	err := githooks.StageGitattributes(repoRoot)
+	err := gitattributes.StageGitattributes(repoRoot)
 	stagingMu.Lock()
 	defer stagingMu.Unlock()
 	if err != nil {

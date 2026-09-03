@@ -132,6 +132,7 @@ func (r *Runner) newRunResolve() runResolve {
 		mdRules:   markdownRulesFrom(r.Rules, r.ConfigPath),
 		catLookup: ruleCategoryLookup(r.Rules),
 		effCache:  &effectiveCache{},
+		confCache: map[string]configuredRules{},
 	}
 }
 
@@ -165,9 +166,28 @@ func TestEffectiveCached_MemoizesBySignature(t *testing.T) {
 	rr := r.newRunResolve()
 	// No kinds and no overrides: both files share one signature, so the
 	// second lookup must return the map the first one cached, not a copy.
-	a := r.effectiveCached("a.md", nil, nil, rr)
-	b := r.effectiveCached("b.md", nil, nil, rr)
+	a, _ := r.effectiveCached("a.md", nil, nil, rr)
+	b, _ := r.effectiveCached("b.md", nil, nil, rr)
 	require.NotNil(t, a)
 	assert.Equal(t, reflect.ValueOf(a).Pointer(), reflect.ValueOf(b).Pointer(),
 		"a matching signature must return the memoized map instance")
+}
+
+// TestSortDiagnostics_TieBreaksByRuleID pins that sortDiagnostics produces a
+// deterministic order even when two diagnostics share File, Line, Column, and
+// Message but come from different rules. Without a RuleID tiebreak, the order
+// of such a pair depends on the caller's input order — which differs between
+// the parse-skip block-walk path and the full-parse node-walk path — so the
+// Layer-0 equivalence assertions (TestParityConvention_DiagnosticsMatchFullParse,
+// the corpus gate) that compare full ordered slices could fail spuriously.
+func TestSortDiagnostics_TieBreaksByRuleID(t *testing.T) {
+	// Same File/Line/Column/Message, different RuleID, fed in reverse order.
+	diags := []lint.Diagnostic{
+		{File: "a.md", Line: 1, Column: 1, RuleID: "MDS099", Message: "same"},
+		{File: "a.md", Line: 1, Column: 1, RuleID: "MDS001", Message: "same"},
+	}
+	sortDiagnostics(diags)
+	assert.Equal(t, "MDS001", diags[0].RuleID,
+		"diagnostics equal on File/Line/Column/Message must order by RuleID")
+	assert.Equal(t, "MDS099", diags[1].RuleID)
 }

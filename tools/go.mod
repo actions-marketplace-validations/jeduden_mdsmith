@@ -5,14 +5,13 @@ module github.com/jeduden/mdsmith
 // `go tool -modfile=tools/go.mod <tool>`. Keeping them out of
 // go.mod keeps their large dependency trees out of the module graph
 // that `go install m@version` and library consumers resolve. The go
-// directive is held at 1.25.8 — above the 1.25.0 the linters need —
-// because the skill-eval job reads it via go-version-file to compile
-// a baseline worktree that demands 1.25.8 (see
-// .github/workflows/skill-eval.yml). Tidy with
+// directive is held at 1.25.11 — matching go.mod — because the
+// skill-eval job reads it via go-version-file to compile a baseline
+// worktree. Tidy with
 // `go mod tidy -modfile=tools/go.mod`; the require list is a
 // superset of go.mod because an alternate modfile still covers the
 // repository's own packages.
-go 1.25.8
+go 1.25.11
 
 tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
@@ -29,10 +28,10 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tetratelabs/wazero v1.11.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
-	golang.org/x/mod v0.34.0
-	golang.org/x/net v0.52.0
-	golang.org/x/sys v0.42.0
-	golang.org/x/tools v0.43.0
+	golang.org/x/mod v0.36.0
+	golang.org/x/net v0.56.0
+	golang.org/x/sys v0.46.0
+	golang.org/x/tools v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -233,8 +232,8 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20251023183803-a4bb9ffd2546 // indirect
-	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
+	golang.org/x/text v0.38.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect

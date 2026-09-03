@@ -1,12 +1,16 @@
 package mdsmith
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jeduden/mdsmith/internal/bytelimit"
 )
 
 // TestOverlayWorkspaceReadFilePrefersOverlay verifies an
@@ -38,6 +42,87 @@ func TestOverlayWorkspaceReadFilePrefersOverlay(t *testing.T) {
 	}
 	if string(gotB) != "disk-b" {
 		t.Fatalf("ReadFile b = %q, want disk fall-through disk-b", gotB)
+	}
+}
+
+// TestOverlayWorkspaceFSSymlinkEscapeRefused verifies that the disk
+// fall-through layer of OverlayWorkspace.FS() is os.OpenRoot-contained,
+// so a within-workspace symlink pointing outside the root cannot be read
+// through the editor (LSP) path. An unshadowed include/catalog target
+// reads through this disk layer, so it must enforce the same RESOLVE_BENEATH
+// containment the CLI engine gained in OSWorkspace.FS(). Guards CWE-73.
+func TestOverlayWorkspaceFSSymlinkEscapeRefused(t *testing.T) {
+	root := t.TempDir()
+
+	// Symlink inside the workspace pointing outside the root.
+	symlinkPath := filepath.Join(root, "escape.md")
+	if err := os.Symlink("/etc/passwd", symlinkPath); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	// Confirm os.DirFS can read through the symlink (establishes the
+	// baseline vulnerability that the overlay disk layer must close).
+	if _, errDirFS := fs.ReadFile(os.DirFS(root), "escape.md"); errDirFS != nil {
+		t.Skip("test invariant: os.DirFS must be able to read the symlink target; skipping on this platform")
+	}
+
+	// The escaping symlink is not shadowed by an overlay buffer, so the
+	// read falls through to the disk layer — which must refuse it.
+	fsys := NewOverlayWorkspace(root).FS()
+	if _, err := fsys.Open("escape.md"); err == nil {
+		t.Fatal("overlayFS.Open(escape.md) succeeded; expected containment error for symlink escaping root")
+	}
+	if _, err := fs.ReadFile(fsys, "escape.md"); err == nil {
+		t.Fatal("fs.ReadFile(overlayFS, escape.md) succeeded; expected containment error for symlink escaping root")
+	}
+}
+
+// TestOverlayWorkspaceReadFileSymlinkEscapeRefused verifies that
+// OverlayWorkspace.ReadFile's disk fall-through shares FS()'s
+// os.OpenRoot containment, so an unshadowed within-workspace symlink
+// pointing outside the root is refused. Guards CWE-73.
+func TestOverlayWorkspaceReadFileSymlinkEscapeRefused(t *testing.T) {
+	root := t.TempDir()
+
+	symlinkPath := filepath.Join(root, "escape.md")
+	if err := os.Symlink("/etc/passwd", symlinkPath); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	if _, errDirFS := os.ReadFile(symlinkPath); errDirFS != nil {
+		t.Skip("test invariant: the symlink target must be readable; skipping on this platform")
+	}
+
+	ws := NewOverlayWorkspace(root)
+	if _, err := ws.ReadFile("escape.md"); err == nil {
+		t.Fatal("OverlayWorkspace.ReadFile(escape.md) succeeded; expected containment error for symlink escaping root")
+	}
+}
+
+// TestOverlayWorkspaceReadFileDiskFallthroughSkipsOverlaySnapshot verifies
+// that ReadFile's disk fall-through does not pay FS()'s per-call overlay-map
+// clone (see FS's doc comment): with many open buffers, a disk-fallback read
+// must stay O(1), not O(len(overlay)).
+func TestOverlayWorkspaceReadFileDiskFallthroughSkipsOverlaySnapshot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "disk.md"), []byte("disk"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ws := NewOverlayWorkspace(root)
+	const openBuffers = 500
+	for i := range openBuffers {
+		ws.Set(strconv.Itoa(i)+".md", []byte("x"))
+	}
+	if _, err := ws.ReadFile("disk.md"); err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	allocs := testing.AllocsPerRun(50, func() {
+		_, _ = ws.ReadFile("disk.md")
+	})
+	if allocs > 20 {
+		t.Fatalf("ReadFile disk fall-through allocated %.0f times per call with %d open buffers; "+
+			"expected O(1), not O(overlay size) from cloning the overlay map", allocs, openBuffers)
 	}
 }
 
@@ -150,14 +235,14 @@ func TestOverlayWorkspaceGlobBadPattern(t *testing.T) {
 	}
 }
 
-// TestOverlayWorkspaceReadFileAbsolutePath covers diskPath's
-// passthrough branch: an absolute path is read unchanged (not re-rooted
-// under Root), mirroring OSWorkspace.resolve so an absolute-path caller
-// reaches the file it named.
+// TestOverlayWorkspaceReadFileAbsolutePath covers ReadFile's
+// absolute-path passthrough branch: an absolute path is read unchanged
+// (not re-rooted under Root), mirroring OSWorkspace so an absolute-path
+// caller reaches the file it named.
 func TestOverlayWorkspaceReadFileAbsolutePath(t *testing.T) {
 	root := t.TempDir()
-	// A file OUTSIDE Root, addressed by its absolute path. If diskPath
-	// wrongly joined it under Root, this read would miss.
+	// A file OUTSIDE Root, addressed by its absolute path. If the
+	// passthrough branch wrongly joined it under Root, this read would miss.
 	other := t.TempDir()
 	abs := filepath.Join(other, "elsewhere.md")
 	if err := os.WriteFile(abs, []byte("absolute"), 0o600); err != nil {
@@ -338,5 +423,83 @@ func TestSessionOverlayBufferReachesCrossFileRule(t *testing.T) {
 	}
 	if !strings.Contains(res2.Source, "Buffered") {
 		t.Fatalf("Fix 2: open-buffer summary did not reach the catalog rule:\n%s", res2.Source)
+	}
+}
+
+// TestOverlayWorkspaceReadFileLimitedOverlayHit verifies readFileLimited
+// applies the same cap to an overlaid buffer as it does to a disk read,
+// and returns the buffer bytes unchanged when under the cap.
+func TestOverlayWorkspaceReadFileLimitedOverlayHit(t *testing.T) {
+	ws := NewOverlayWorkspace(t.TempDir())
+	ws.Set("a.md", []byte("buffer-a"))
+
+	got, err := ws.readFileLimited("a.md", 100)
+	if err != nil {
+		t.Fatalf("readFileLimited within limit: %v", err)
+	}
+	if string(got) != "buffer-a" {
+		t.Fatalf("readFileLimited = %q, want %q", got, "buffer-a")
+	}
+
+	if _, err := ws.readFileLimited("a.md", 3); err == nil {
+		t.Fatal("readFileLimited over limit on overlaid buffer: want error, got nil")
+	} else if !errors.Is(err, bytelimit.ErrFileTooLarge) {
+		t.Fatalf("readFileLimited over limit: got err %v, want it to wrap bytelimit.ErrFileTooLarge", err)
+	}
+}
+
+// TestOverlayWorkspaceReadFileLimitedDiskFallthrough verifies
+// readFileLimited rejects an oversized on-disk file (the non-overlaid
+// fall-through path) instead of reading it fully into memory.
+func TestOverlayWorkspaceReadFileLimitedDiskFallthrough(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "huge.md"), make([]byte, 100), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ws := NewOverlayWorkspace(root)
+
+	if _, err := ws.readFileLimited("huge.md", 50); err == nil {
+		t.Fatal("readFileLimited over limit on disk fall-through: want error, got nil")
+	} else if !errors.Is(err, bytelimit.ErrFileTooLarge) {
+		t.Fatalf("readFileLimited over limit: got err %v, want it to wrap bytelimit.ErrFileTooLarge", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "small.md"), []byte("ok"), 0o600); err != nil {
+		t.Fatalf("WriteFile small: %v", err)
+	}
+	got, err := ws.readFileLimited("small.md", 50)
+	if err != nil {
+		t.Fatalf("readFileLimited within limit: %v", err)
+	}
+	if string(got) != "ok" {
+		t.Fatalf("readFileLimited = %q, want %q", got, "ok")
+	}
+}
+
+// TestOverlayWorkspaceReadFileLimitedAbsolutePathIgnoresRoot verifies
+// readFileLimited's absolute-path branch: an absolute path bypasses the
+// rooted disk FS the same way ReadFile's does, even when Root is set,
+// and still enforces the size cap via bytelimit.ReadFileLimited.
+func TestOverlayWorkspaceReadFileLimitedAbsolutePathIgnoresRoot(t *testing.T) {
+	root := t.TempDir()
+	other := t.TempDir()
+	abs := filepath.Join(other, "x.md")
+	if err := os.WriteFile(abs, []byte("absolute"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ws := NewOverlayWorkspace(root)
+
+	got, err := ws.readFileLimited(abs, 50)
+	if err != nil {
+		t.Fatalf("readFileLimited(abs) within limit: %v", err)
+	}
+	if string(got) != "absolute" {
+		t.Fatalf("readFileLimited(abs) = %q, want %q", got, "absolute")
+	}
+
+	if _, err := ws.readFileLimited(abs, 3); err == nil {
+		t.Fatal("readFileLimited(abs) over limit: want error, got nil")
+	} else if !errors.Is(err, bytelimit.ErrFileTooLarge) {
+		t.Fatalf("readFileLimited(abs) over limit: got err %v, want it to wrap bytelimit.ErrFileTooLarge", err)
 	}
 }

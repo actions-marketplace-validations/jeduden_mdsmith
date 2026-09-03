@@ -19,12 +19,19 @@ read from stdin. With no file arguments, files are
 discovered from `.mdsmith.yml` `files:` patterns
 (default: `**/*.md`, `**/*.markdown`).
 
+Only Markdown files are linted. A non-Markdown path
+(such as `.gitattributes`) is skipped whether the walk
+reaches it or you name it explicitly. Naming one
+explicitly prints a `skipping …: not a Markdown file`
+warning on stderr, so the skip is never a silent no-op;
+`--quiet` and the `json`/`sarif` formats suppress it.
+
 ## Flags
 
 | Flag                | Default | Description                            |
 | ------------------- | ------- | -------------------------------------- |
 | `-c`, `--config`    | auto    | Override config path (auto-discovers)  |
-| `-f`, `--format`    | `text`  | `text` or `json`                       |
+| `-f`, `--format`    | `text`  | `text`, `json`, or `sarif`             |
 | `--max-input-size`  | `2MB`   | Max file size (e.g. `2MB`, `0`=none)   |
 | `--no-color`        | false   | Plain output                           |
 | `--follow-symlinks` | config  | Follow symlinks; tri-state — see below |
@@ -57,9 +64,29 @@ the winning source for each leaf setting:
 ```bash
 mdsmith check docs/                  # lint a directory
 mdsmith check -f json docs/          # JSON output
+mdsmith check -f sarif docs/         # SARIF 2.1.0 output
 mdsmith check --explain README.md    # provenance trailer
 echo "# Hi" | mdsmith check -        # lint stdin
 ```
+
+## GitHub Code Scanning
+
+`-f sarif` emits a SARIF 2.1.0 document that GitHub's
+Code Scanning dashboard ingests directly. Upload with
+[`github/codeql-action/upload-sarif`](https://github.com/github/codeql-action):
+
+```yaml
+- name: Run mdsmith
+  run: mdsmith check -f sarif . 2> report.sarif || true
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: report.sarif
+    category: mdsmith
+```
+
+Each fired rule links back to its mdsmith.dev doc page via
+`helpUri` in the SARIF `driver.rules` array.
 
 ## Pre-commit
 

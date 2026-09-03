@@ -155,7 +155,7 @@ func parseFixFlags(args []string) (fixCLIOpts, []string, bool, int) {
 	var bf buildFixFlags
 
 	fs.StringVarP(&configPath, "config", "c", "", "Override config file path")
-	fs.StringVarP(&format, "format", "f", "text", "Output format: text, json")
+	fs.StringVarP(&format, "format", "f", "text", "Output format: text, json, sarif")
 	fs.BoolVar(&noColor, "no-color", false, "Disable ANSI colors")
 	fs.BoolVarP(&quiet, "quiet", "q", false, "Suppress non-error output")
 	fs.BoolVarP(&verbose, "verbose", "v", false, "Show config, files, and rules on stderr")
@@ -226,6 +226,7 @@ type fixCLIOpts struct {
 func fixFiles(fileArgs []string, opts fixCLIOpts) int {
 	cfg, cfgPath, logger, files, maxBytes, code := loadAndResolve(
 		fileArgs, opts.configPath, opts.verbose, opts.walk, opts.maxInputSize,
+		nonMarkdownSkipWarner(os.Stderr, opts.format, opts.quiet),
 	)
 	if code >= 0 {
 		return code
@@ -320,8 +321,14 @@ func orderFilesLeavesFirst(files []string, rootDir string, maxBytes int64) []str
 		rels = append(rels, rel)
 	}
 
+	// Build, not BuildSerial: the loader only reads relToAbs (built
+	// above and never mutated again) and opens its own file handle per
+	// call via bytelimit.ReadFileLimited, so it is safe for the
+	// concurrent calls Build makes — see index.Index.Build's doc comment
+	// and internal/index's benchmarks for the general ~2x speedup this
+	// call site inherits on a workspace-sized file set.
 	idx := index.New(rootDir)
-	idx.BuildSerial(rels, func(rel string) ([]byte, error) {
+	idx.Build(rels, func(rel string) ([]byte, error) {
 		return bytelimit.ReadFileLimited(relToAbs[rel], maxBytes)
 	})
 
@@ -361,11 +368,20 @@ func reportFixResultTo(opts fixCLIOpts, fixResult *fixpkg.Result, logger *vlog.L
 			_ = bw.Flush()
 			return code
 		}
+	} else if opts.dryRun && opts.format == "sarif" && !opts.quiet {
+		// SARIF dry-run: emit diagnostics in SARIF format without the
+		// text preview — mixing prose and structured JSON would produce
+		// invalid output.
+		if code := formatDiagnosticsTo(bw, fixResult.Diagnostics, opts.format, opts.noColor); code != 0 {
+			_ = bw.Flush()
+			return code
+		}
 	} else {
 		if opts.dryRun && !opts.quiet {
 			printDryRunPreview(bw, fixResult)
 		}
-		if !opts.quiet && len(fixResult.Diagnostics) > 0 {
+		// SARIF must be emitted even with zero diagnostics (same reason as check).
+		if !opts.quiet && (len(fixResult.Diagnostics) > 0 || opts.format == "sarif") {
 			if code := formatDiagnosticsTo(bw, fixResult.Diagnostics, opts.format, opts.noColor); code != 0 {
 				_ = bw.Flush()
 				return code

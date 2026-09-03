@@ -1,6 +1,9 @@
 package config
 
-import "github.com/jeduden/mdsmith/internal/rule"
+import (
+	"github.com/jeduden/mdsmith/internal/rule"
+	"github.com/jeduden/mdsmith/internal/wordlist"
+)
 
 // mergeRuleCfg deep-merges later on top of earlier and returns the
 // result. Both layers configure the same rule; later sits after earlier
@@ -52,30 +55,69 @@ func mergeSettingsMap(ruleName string, earlier, later map[string]any) map[string
 // mergeAny merges later onto earlier for a single settings leaf or
 // nested value. Maps recurse, lists honor the rule's declared merge
 // mode, and everything else is replaced wholesale by later.
+//
+// The default merge mode (rule.MergeReplace) is by far the common
+// case — MergeAppend is an opt-in a rule declares via
+// rule.ListMerger. toAnySlice(earlier) fully deep-clones the earlier
+// side, so it is only called when settingMergeMode says the clone
+// will actually be used (the append branch); the replace branch
+// returns later's clone (ll) directly instead of copying it a second
+// time — toAnySlice already gives every case (`[]any`, `[]string`,
+// `[]int`) a fresh, independent backing array, so a second copy adds
+// nothing. See docs/development/high-performance-go.md "Skip work
+// you don't need".
 func mergeAny(ruleName, key string, earlier, later any) any {
 	if em, ok := earlier.(map[string]any); ok {
 		if lm, ok := later.(map[string]any); ok {
 			return mergeSettingsMap(ruleName, em, lm)
 		}
 	}
-	if el, ok := toAnySlice(earlier); ok {
+	if isAnySliceType(earlier) {
 		if ll, ok := toAnySlice(later); ok {
 			if settingMergeMode(ruleName, key) == rule.MergeAppend {
+				el, _ := toAnySlice(earlier)
 				merged := make([]any, 0, len(el)+len(ll))
 				merged = append(merged, el...)
 				merged = append(merged, ll...)
 				return merged
 			}
-			return append([]any(nil), ll...)
+			if len(ll) == 0 {
+				// toAnySlice always returns a non-nil make([]any, 0, ...)
+				// even for an empty input; append([]any(nil), ll...)
+				// used to fold that back to nil for a zero-length ll.
+				// Preserve that so an empty later list still merges to
+				// nil, not an observably different empty slice (JSON,
+				// reflect).
+				return []any(nil)
+			}
+			return ll
 		}
 	}
 	return cloneAny(later)
+}
+
+// isAnySliceType reports whether v is one of the slice types
+// toAnySlice normalizes, without cloning it. Mirrors toAnySlice's
+// type switch exactly.
+func isAnySliceType(v any) bool {
+	switch v.(type) {
+	case []any, []string, []int:
+		return true
+	}
+	return false
 }
 
 // settingMergeMode returns the merge mode for a list-typed rule
 // setting, defaulting to rule.MergeReplace when the rule does not
 // implement rule.ListMerger or is not registered.
 func settingMergeMode(ruleName, settingKey string) rule.MergeMode {
+	// The generic `lists:` setting (word-list references) unions across
+	// config layers for every rule, so a convention's `lists:` and a
+	// project's `lists:` combine rather than replace. Handled here in
+	// the one place all settings merge through, so no rule declares it.
+	if settingKey == "lists" {
+		return rule.MergeAppend
+	}
 	r := rule.ByName(ruleName)
 	if r == nil {
 		return rule.MergeReplace
@@ -99,11 +141,7 @@ func toAnySlice(v any) ([]any, bool) {
 		}
 		return out, true
 	case []string:
-		out := make([]any, len(x))
-		for i, s := range x {
-			out[i] = s
-		}
-		return out, true
+		return wordlist.ToAnySlice(x), true
 	case []int:
 		out := make([]any, len(x))
 		for i, n := range x {

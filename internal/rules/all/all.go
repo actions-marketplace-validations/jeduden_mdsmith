@@ -34,6 +34,7 @@ import (
 	_ "github.com/jeduden/mdsmith/internal/rules/duplicatedcontent"           // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/emphasisstyle"               // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/emptysectionbody"            // registers rule
+	_ "github.com/jeduden/mdsmith/internal/rules/externallink"                // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/fencedcodelanguage"          // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/fencedcodestyle"             // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/firstlineheading"            // registers rule
@@ -67,16 +68,21 @@ import (
 	_ "github.com/jeduden/mdsmith/internal/rules/notrailingspaces"            // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/noundefinedreferencelabels"  // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/nounusedlinkdefinitions"     // registers rule
+	_ "github.com/jeduden/mdsmith/internal/rules/occurrence"                  // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/orderedlistnumbering"        // registers rule
+	_ "github.com/jeduden/mdsmith/internal/rules/overrepetition"              // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/paragraphreadability"        // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/paragraphstructure"          // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/propernames"                 // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/recipesafety"                // registers rule
+	_ "github.com/jeduden/mdsmith/internal/rules/requiredfrontmatter"         // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/requiredmentions"            // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/requiredstructure"           // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/requiredtextpatterns"        // registers rule
+	_ "github.com/jeduden/mdsmith/internal/rules/samefileanchor"              // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/singleh1"                    // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/singletrailingnewline"       // registers rule
+	_ "github.com/jeduden/mdsmith/internal/rules/slidevstructure"             // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/tableformat"                 // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/tablereadability"            // registers rule
 	_ "github.com/jeduden/mdsmith/internal/rules/toc"                         // registers rule

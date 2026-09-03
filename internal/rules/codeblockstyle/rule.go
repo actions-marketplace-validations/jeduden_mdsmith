@@ -41,10 +41,15 @@ func (r *Rule) Category() string { return "code" }
 
 // Check implements rule.Rule.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
-	if f == nil || f.AST == nil {
+	if f == nil {
 		return nil
 	}
-	blocks := collectBlocks(f)
+	var blocks []blockInfo
+	if f.AST == nil {
+		blocks = collectBlocksL0(f)
+	} else {
+		blocks = collectBlocks(f)
+	}
 	want := r.effectiveStyle(blocks)
 	if want == "" {
 		return nil
@@ -65,6 +70,57 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 		})
 	}
 	return diags
+}
+
+// collectBlocksL0 collects code block metadata from the Layer 0 block scan
+// for the nil-AST (parse-skipped) path. It mirrors collectBlocks but reads
+// lint.Layer0(f).BlockSpans instead of walking the goldmark AST.
+// The lastLine and topLevel fields are not populated — they are only consumed
+// by the Fix path, which requires an AST.
+// Limitation: fenced or indented blocks nested inside block quotes are not
+// emitted as BlockFencedCode/BlockIndentedCode spans by the Layer 0 scanner
+// (see layer0.go). Such blocks are invisible to this path and won't be
+// counted in the consistency check. Files with only blockquote-nested
+// code blocks may silently pass or fail incorrectly on the L0 path.
+//
+// BlockSpans covers every block kind (headings, paragraphs, lists,
+// quotes, code, ...), so presizing blocks to len(BlockSpans) would
+// over-allocate on the common case — most files have few or no code
+// blocks against dozens of other spans. A first counting pass over
+// the same slice (a cheap switch, no allocation) gets an exact upper
+// bound instead, so a code-block-free file allocates nothing at all.
+// The counting pass indexes (`spans[i].Kind`) rather than
+// range-copying each BlockSpan value: BlockSpan is a 32-byte struct,
+// and range-by-value materializes a full copy on the stack every
+// iteration just to read one field.
+func collectBlocksL0(f *lint.File) []blockInfo {
+	spans := lint.Layer0(f).BlockSpans
+	n := 0
+	for i := range spans {
+		switch spans[i].Kind {
+		case lint.BlockFencedCode, lint.BlockIndentedCode:
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	blocks := make([]blockInfo, 0, n)
+	for _, span := range spans {
+		switch span.Kind {
+		case lint.BlockFencedCode:
+			if skipBlock(f, span.Start) {
+				continue
+			}
+			blocks = append(blocks, blockInfo{style: "fenced", line: span.Start})
+		case lint.BlockIndentedCode:
+			if skipBlock(f, span.Start) {
+				continue
+			}
+			blocks = append(blocks, blockInfo{style: "indented", line: span.Start})
+		}
+	}
+	return blocks
 }
 
 // Fix implements rule.FixableRule. Only the indented→fenced direction

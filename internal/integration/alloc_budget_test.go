@@ -47,16 +47,11 @@ var allocBudgetGrandfathered = map[string]int{
 	// this to the ≤ 10 ceiling needs the single-table-walk refactor
 	// scheduled as a follow-up to plan 181.
 	"MDS025": 60, // table-format; tightened after five byte-native fixes (plan 195 task 3 partial)
-	// MDS027 uses linkgraph.Links() and linkgraph.RefLinkTargets() (both
-	// memoized accessors from plan 2606130838). Each MemoFile call adds
-	// one *memoEntry on the cold path; Links() also boxes a non-nil []Link
-	// header into any (one extra alloc), but RefLinkTargets() returns nil
-	// for the gate fixture (the ref target is an external URL that
-	// ParseTarget rejects), so its boxing is free. Net: +2 cold-path
-	// allocs from Links() only. The memo removes repeated AST walks when
-	// MDS027 and MDS068 run on the same File in one engine Check pass;
-	// the per-solo-rule alloc gate always sees the cold path.
-	"MDS027": 12, // cross-file-reference-integrity; raised by plan 2606130838
+	// MDS027 (cross-file-reference-integrity) dropped out: the link
+	// walk no longer materialises each link's visible text, and
+	// ParseTargetBytes resolves an ordinary destination without the
+	// string copy and url.URL the full parse allocated. The rule now
+	// lands at the ≤ 10 ceiling on the gate fixture.
 	// MDS026 (table-readability) dropped out: cells-as-byte-offsets
 	// refactor (task 2) landed; rule now lands at the 10-alloc
 	// ceiling on the gate fixture.
@@ -181,6 +176,13 @@ func TestPerRuleAllocBudget(t *testing.T) {
 	for _, r := range rules {
 		r := r
 		t.Run(r.ID()+"_"+r.Name(), func(t *testing.T) {
+			// A network-bound rule (external-link-check) would issue a
+			// real HTTP request against the fixture's external URL when
+			// Check runs here, so it is excluded from the alloc gate. See
+			// plan 2606280208.
+			if r.ID() == "MDS072" {
+				t.Skip("network-bound rule; excluded from the alloc gate")
+			}
 			allocs := allocsForRule(t, r)
 			budget := float64(allocBudgetCeiling)
 			if g, ok := allocBudgetGrandfathered[r.ID()]; ok {

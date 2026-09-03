@@ -119,6 +119,31 @@ func TestTable_NotATable(t *testing.T) {
 	}
 }
 
+// TestTable_BarePipeLineBeforeRealTable is a regression test: a bare
+// "|" line earlier in the same paragraph must not abort the scan for
+// a real table later in that paragraph. parseDelimiter used to return
+// a non-nil empty slice for a delimiter line with zero columns
+// (bytes.Split("|", "|") splits down to nothing after the leading/
+// trailing blank-column trim), which satisfied Transform's
+// `alignments == nil` "skip this line" sentinel by accident only
+// because it was actually nil; a pre-sized-but-empty slice broke
+// that.
+func TestTable_BarePipeLineBeforeRealTable(t *testing.T) {
+	md := goldmark.New(goldmark.WithExtensions(extension.Table))
+	src := []byte("x\n|\nA | B\n--- | ---\n1 | 2\n")
+	root := md.Parser().Parse(text.NewReader(src))
+	if !walkContains(root, extast.KindTable) {
+		t.Error("expected Table in AST for the real delimiter row after a bare '|' line")
+	}
+	var buf bytes.Buffer
+	if err := md.Convert(src, &buf); err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("<table>")) {
+		t.Errorf("HTML output missing <table>: %s", buf.String())
+	}
+}
+
 func TestDefinitionList_Parse(t *testing.T) {
 	md := goldmark.New(goldmark.WithExtensions(extension.DefinitionList))
 	src := []byte("Term 1\n: Definition 1\n\nTerm 2\n: Definition 2a\n: Definition 2b\n")
@@ -178,4 +203,27 @@ func TestFootnote_UnreferencedDefinitionStillRendered(t *testing.T) {
 	}
 	// Orphan footnotes are dropped from the output entirely; just
 	// confirm Convert ran without error.
+}
+
+// TestFootnote_MultiRefRendersRefIndex verifies that when the same footnote
+// is referenced twice the second link carries a non-zero RefIndex in its
+// rendered id attributes (e.g. "fnref1:1"). This exercises the
+// renderFootnoteLink and renderFootnoteBacklink paths that format RefIndex,
+// ensuring strconv.Itoa produces the same output as the prior fmt.Sprintf.
+func TestFootnote_MultiRefRendersRefIndex(t *testing.T) {
+	md := goldmark.New(goldmark.WithExtensions(extension.Footnote))
+	// Reference [^1] twice so the second FootnoteLink has RefIndex = 1.
+	src := []byte("first[^1] and second[^1] reference.\n\n[^1]: the footnote body\n")
+	var buf bytes.Buffer
+	if err := md.Convert(src, &buf); err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	out := buf.String()
+	// First reference: id="fnref:1" (RefIndex=0, no suffix).
+	// Second reference: id="fnref1:1" (RefIndex=1, suffix rendered by RefIndex formatting).
+	for _, want := range []string{"fnref:1", "fnref1:1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("HTML output missing %q (RefIndex not rendered):\n%s", want, out)
+		}
+	}
 }

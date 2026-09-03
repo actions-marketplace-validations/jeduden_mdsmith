@@ -6,14 +6,17 @@ package noreferencestyle
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"unicode"
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
+	"github.com/jeduden/mdsmith/internal/rules/astutil"
+	"github.com/jeduden/mdsmith/internal/setutil"
 	"github.com/jeduden/mdsmith/pkg/goldmark/ast"
 	"github.com/jeduden/mdsmith/pkg/goldmark/text"
 	"github.com/jeduden/mdsmith/pkg/goldmark/util"
@@ -138,6 +141,9 @@ func (r *Rule) checkUnusedDefinitions(
 // regex over source bytes (filtered against code-block ranges) is
 // sufficient and avoids reparsing the file.
 func (r *Rule) checkFootnotes(f *lint.File) []lint.Diagnostic {
+	if !mayContainFootnote(f.Source) {
+		return nil
+	}
 	codeLines := lint.CollectCodeBlockLines(f)
 	codeSpans := f.CodeSpanLiteralRanges()
 	refs := scanFootnoteReferences(f, codeLines, codeSpans)
@@ -221,8 +227,14 @@ func collectReferenceDefinitions(f *lint.File) []referenceDefinition {
 	lineStart := 0
 	for lineStart <= len(source) {
 		eol := lineStart
-		for eol < len(source) && source[eol] != '\n' {
-			eol++
+		// bytes.IndexByte is SIMD-accelerated; a hand-rolled byte loop is
+		// not vectorized. See docs/development/high-performance-go.md and
+		// internal/lint/linkrefscan.go's buildLineSegments, which scans
+		// the same whole-document source this way.
+		if i := bytes.IndexByte(source[eol:], '\n'); i >= 0 {
+			eol += i
+		} else {
+			eol = len(source)
 		}
 		labelStart, labelEnd, ok := scanRefDefLine(source, lineStart, eol)
 		if ok {
@@ -367,12 +379,26 @@ var footnoteRefRE = regexp.MustCompile(`\[\^([^\]\n]+)\]`)
 // `[^slug]:` then any text.
 var footnoteDefRE = regexp.MustCompile(`(?m)^[ ]{0,3}\[\^([^\]\n]+)\]:`)
 
+// footnoteNeedle is the literal byte sequence every footnoteRefRE and
+// footnoteDefRE match carries. Hoisted so mayContainFootnote does not
+// allocate the needle on each call.
+var footnoteNeedle = []byte("[^")
+
+// mayContainFootnote reports whether source could contain a
+// footnoteRefRE or footnoteDefRE match, mirroring nobareurls'
+// mayContainURL: every match starts with "[^", so this cheap scan
+// spares both regex engines on the overwhelming majority of files
+// that use neither footnote references nor definitions.
+func mayContainFootnote(source []byte) bool {
+	return bytes.Contains(source, footnoteNeedle)
+}
+
 func scanFootnoteReferences(
 	f *lint.File, codeLines map[int]struct{}, codeSpans []lint.Range,
 ) []footnoteOccurrence {
 	source := f.Source
 	matches := footnoteRefRE.FindAllSubmatchIndex(source, -1)
-	var out []footnoteOccurrence
+	out := make([]footnoteOccurrence, 0, len(matches))
 	for _, m := range matches {
 		start := m[0]
 		// Skip definitions: defRE is matched separately.
@@ -394,6 +420,9 @@ func scanFootnoteReferences(
 			end:   m[1],
 		})
 	}
+	if len(out) == 0 {
+		return nil
+	}
 	return out
 }
 
@@ -402,7 +431,7 @@ func scanFootnoteDefinitions(
 ) []footnoteOccurrence {
 	source := f.Source
 	matches := footnoteDefRE.FindAllSubmatchIndex(source, -1)
-	var out []footnoteOccurrence
+	out := make([]footnoteOccurrence, 0, len(matches))
 	for _, m := range matches {
 		start := m[0]
 		line := f.LineOfOffset(start)
@@ -416,6 +445,9 @@ func scanFootnoteDefinitions(
 			start: start,
 			end:   m[1],
 		})
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -487,22 +519,13 @@ func footnotePlacementMessage(
 // end of file. lines is f.Lines (pre-split by lint.NewFile).
 func paragraphEndLine(lines [][]byte, line int, defLines map[int]struct{}) int {
 	end := line
-	for end < len(lines) && !isBlankLine(lines[end]) {
+	for end < len(lines) && !astutil.IsBlank(lines[end]) {
 		if _, ok := defLines[end+1]; ok {
 			break
 		}
 		end++
 	}
 	return end
-}
-
-func isBlankLine(line []byte) bool {
-	for _, b := range line {
-		if b != ' ' && b != '\t' {
-			return false
-		}
-	}
-	return true
 }
 
 func isNumericSlug(s string) bool {
@@ -577,9 +600,9 @@ func (r *Rule) Fix(f *lint.File) []byte {
 	return applyCuts(f.Source, cuts)
 }
 
-func collectLinkRewrites(f *lint.File) ([]fixCut, map[string]bool) {
+func collectLinkRewrites(f *lint.File) ([]fixCut, map[string]struct{}) {
 	var cuts []fixCut
-	usedLabels := map[string]bool{}
+	usedLabels := map[string]struct{}{}
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -615,7 +638,7 @@ func collectLinkRewrites(f *lint.File) ([]fixCut, map[string]bool) {
 		if isImage && start > 0 && f.Source[start-1] == '!' {
 			start--
 		}
-		usedLabels[util.ToLinkReference(ref.Value)] = true
+		usedLabels[util.ToLinkReference(ref.Value)] = struct{}{}
 		cuts = append(cuts, fixCut{
 			start: start,
 			end:   end,
@@ -626,7 +649,7 @@ func collectLinkRewrites(f *lint.File) ([]fixCut, map[string]bool) {
 	return cuts, usedLabels
 }
 
-func collectDefinitionCuts(f *lint.File, usedLabels map[string]bool) []fixCut {
+func collectDefinitionCuts(f *lint.File, usedLabels map[string]struct{}) []fixCut {
 	if len(usedLabels) == 0 {
 		return nil
 	}
@@ -634,7 +657,7 @@ func collectDefinitionCuts(f *lint.File, usedLabels map[string]bool) []fixCut {
 	defs := collectReferenceDefinitions(f)
 	var cuts []fixCut
 	for _, d := range defs {
-		if !usedLabels[util.ToLinkReference([]byte(d.label))] {
+		if !setutil.Contains(usedLabels, util.ToLinkReference([]byte(d.label))) {
 			continue
 		}
 		start := d.start
@@ -649,8 +672,12 @@ func collectDefinitionCuts(f *lint.File, usedLabels map[string]bool) []fixCut {
 }
 
 func applyCuts(source []byte, cuts []fixCut) []byte {
-	sort.Slice(cuts, func(i, j int) bool {
-		return cuts[i].start < cuts[j].start
+	// slices.SortFunc sorts the concrete fixCut values directly,
+	// unlike sort.Slice, which drives reflect.Swapper under the hood —
+	// see docs/development/high-performance-go.md's "reflect in hot
+	// paths" anti-pattern.
+	slices.SortFunc(cuts, func(a, b fixCut) int {
+		return cmp.Compare(a.start, b.start)
 	})
 	var out bytes.Buffer
 	prev := 0

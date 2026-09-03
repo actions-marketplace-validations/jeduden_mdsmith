@@ -12,7 +12,9 @@ import (
 
 	"github.com/jeduden/mdsmith/internal/lint"
 	"github.com/jeduden/mdsmith/internal/rule"
+	"github.com/jeduden/mdsmith/internal/rules/astutil"
 	"github.com/jeduden/mdsmith/internal/rules/fencepos"
+	"github.com/jeduden/mdsmith/internal/rules/listscan"
 	"github.com/jeduden/mdsmith/internal/rules/settings"
 	"github.com/jeduden/mdsmith/pkg/goldmark/ast"
 )
@@ -22,6 +24,10 @@ const (
 	StyleSequential = "sequential"
 	StyleAllOnes    = "all-ones"
 )
+
+// commonMarkMaxOrderedDigits is the CommonMark spec limit on the number of
+// digits in an ordered-list marker (CommonMark §5.3).
+const commonMarkMaxOrderedDigits = 9
 
 var newlineSep = []byte{'\n'}
 
@@ -48,13 +54,45 @@ func (r *Rule) Category() string { return "list" }
 // users pick a project convention and turn the rule on.
 func (r *Rule) EnabledByDefault() bool { return false }
 
-// Check implements rule.Rule. The per-list logic is pure and
-// stateless, so it is expressed as CheckNode and the engine can fold
-// this rule into one shared AST walk; a direct call still works via
-// rule.WalkNodes.
+// Check implements rule.Rule. The per-list logic reads only each item's
+// marker line (its literal number) and the list's Start value — never the
+// inline tree — so on a parsed File it folds into the engine's shared AST
+// walk (rule.WalkNodes), and on a parse-skipped File (f.AST nil) it
+// re-derives the same ordered lists, item lines, and Start from f.Lines
+// via listscan (checkLayer0). Both resolve the same per-item verdict, so
+// the diagnostics are identical.
 func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
+	if f != nil && f.AST == nil {
+		return r.checkLayer0(f)
+	}
 	return rule.WalkNodes(r, f)
 }
+
+// checkLayer0 is the nil-AST counterpart of CheckNode. listscan groups
+// the same ordered lists goldmark would, with the same Start value and
+// item marker lines in order, so each item's numbering verdict is
+// byte-identical.
+func (r *Rule) checkLayer0(f *lint.File) []lint.Diagnostic {
+	lists, _ := listscan.Parse(f.Lines)
+	var diags []lint.Diagnostic
+	for _, l := range lists {
+		if !l.Ordered {
+			continue
+		}
+		lines := make([]int, len(l.Items))
+		for i, it := range l.Items {
+			lines[i] = it.Line
+		}
+		diags = append(diags, r.checkListLines(f, l.Start, lines)...)
+	}
+	return diags
+}
+
+// LinesCapable implements rule.LinesChecker: the rule's Check serves the
+// nil-AST (parse-skip) path itself by re-deriving list structure from
+// f.Lines via listscan, so the engine routes it to Check on a skipped File
+// instead of dropping it. Always true.
+func (r *Rule) LinesCapable() bool { return true }
 
 // CheckNode implements rule.NodeChecker.
 func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnostic {
@@ -77,26 +115,34 @@ func (r *Rule) CheckNode(n ast.Node, entering bool, f *lint.File) []lint.Diagnos
 // "wrong start" would tell the user to renumber items that the start
 // fix would already correct.
 func (r *Rule) checkList(f *lint.File, list *ast.List) []lint.Diagnostic {
-	var diags []lint.Diagnostic
-	startMismatch := list.Start != r.Start
-	i := 0
+	lines := make([]int, 0, list.ChildCount())
 	for c := list.FirstChild(); c != nil; c = c.NextSibling() {
-		item := c.(*ast.ListItem)
-		line := firstLineOfListItem(f, item)
+		lines = append(lines, firstLineOfListItem(f, c.(*ast.ListItem)))
+	}
+	return r.checkListLines(f, list.Start, lines)
+}
+
+// checkListLines is the shared per-list check both the AST (checkList via
+// CheckNode) and Layer 0 (checkLayer0) paths drive: listStart is the
+// list's start value (goldmark list.Start), and itemLines holds each
+// item's 1-based marker line in document order.
+func (r *Rule) checkListLines(f *lint.File, listStart int, itemLines []int) []lint.Diagnostic {
+	var diags []lint.Diagnostic
+	startMismatch := listStart != r.Start
+	for i, line := range itemLines {
+		if line <= 0 {
+			continue
+		}
 		if i == 0 && startMismatch {
-			diags = append(diags, r.diag(f, line, fmt.Sprintf(
-				"ordered list starts at %d; configured start is %d",
-				list.Start, r.Start,
-			)))
+			diags = append(diags, r.diag(f, line,
+				fmt.Sprintf("ordered list starts at %d; configured start is %d", listStart, r.Start)))
 		}
 		if startMismatch {
-			i++
 			continue
 		}
 		if d, ok := r.checkItem(f, line, i); ok {
 			diags = append(diags, d)
 		}
-		i++
 	}
 	return diags
 }
@@ -115,10 +161,8 @@ func (r *Rule) checkItem(f *lint.File, line, i int) (lint.Diagnostic, bool) {
 	if literal == expected {
 		return lint.Diagnostic{}, false
 	}
-	return r.diag(f, line, fmt.Sprintf(
-		"ordered list item %d numbered %d; expected %d",
-		i+1, literal, expected,
-	)), true
+	return r.diag(f, line,
+		fmt.Sprintf("ordered list item %d numbered %d; expected %d", i+1, literal, expected)), true
 }
 
 func (r *Rule) diag(f *lint.File, line int, msg string) lint.Diagnostic {
@@ -226,7 +270,7 @@ func (r *Rule) collectItemEdits(
 // existing leading whitespace are ignored to avoid eating non-space
 // content.
 func applyIndentShift(line []byte, shift int) []byte {
-	if shift == 0 || isBlank(line) {
+	if shift == 0 || astutil.IsBlank(line) {
 		return line
 	}
 	if shift > 0 {
@@ -234,25 +278,16 @@ func applyIndentShift(line []byte, shift int) []byte {
 		return append(pad, line...)
 	}
 	n := -shift
-	if countLeadingSpaces(line) < n {
+	if astutil.CountLeadingSpaces(line) < n {
 		return line
 	}
 	return line[n:]
 }
 
-func isBlank(line []byte) bool {
-	for _, b := range line {
-		if b != ' ' && b != '\t' {
-			return false
-		}
-	}
-	return true
-}
-
 // replaceLeadingDigits replaces a run of digits at the start of a line
 // (after any leading whitespace) with the decimal form of n.
 func replaceLeadingDigits(line []byte, n int) []byte {
-	leading := countLeadingSpaces(line)
+	leading := astutil.CountLeadingSpaces(line)
 	digitStart := leading
 	digitEnd := leading
 	for digitEnd < len(line) && isDigit(line[digitEnd]) {
@@ -303,9 +338,14 @@ func parseListItemNumber(line []byte) (number int, digitStart, digitEnd int, mar
 	if line[i] != '.' && line[i] != ')' {
 		return 0, 0, 0, 0, false
 	}
-	n, err := strconv.Atoi(string(line[digitStart:digitEnd]))
-	if err != nil {
+	// Reject digit runs longer than the CommonMark cap so overflowed values
+	// never flow into Fix on 32-bit targets.
+	if digitEnd-digitStart > commonMarkMaxOrderedDigits {
 		return 0, 0, 0, 0, false
+	}
+	n := 0
+	for _, c := range line[digitStart:digitEnd] {
+		n = n*10 + int(c-'0')
 	}
 	number = n
 	markerChar = line[i]
@@ -326,17 +366,6 @@ func digitWidth(n int) int {
 		w++
 	}
 	return w
-}
-
-func countLeadingSpaces(line []byte) int {
-	n := 0
-	for _, b := range line {
-		if b != ' ' {
-			break
-		}
-		n++
-	}
-	return n
 }
 
 // firstLineOfListItem returns the 1-based source line of an item's

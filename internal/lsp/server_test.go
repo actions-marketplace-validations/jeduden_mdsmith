@@ -1255,16 +1255,25 @@ func TestScheduleLintImmediateCancelsPendingDebounce(t *testing.T) {
 	require.Len(t, s.pending, 1)
 	originalEntry := s.pending["file:///x.md"]
 	s.pendingMu.Unlock()
-	// An immediate trigger (e.g. didOpen) replaces the pending
-	// debounce timer with a zero-delay immediate timer instead of
-	// running runLint synchronously (which would block dispatch).
-	// The original timer is Stop()'d.
+	// An immediate trigger (e.g. didOpen) must stop the existing
+	// debounce timer so it cannot fire later and republish stale
+	// diagnostics. scheduleLint calls prev.timer.Stop() inside
+	// pendingMu, then installs a new zero-delay entry.
+	//
+	// We test the stop invariant race-free: time.Timer.Stop returns
+	// false if the timer has already expired or been stopped. The
+	// 10-second debounce cannot have expired naturally in this
+	// timeframe, so false means scheduleLint stopped it (correct).
+	// true would mean the timer is still running — scheduleLint
+	// failed to cancel it.
+	//
+	// We do NOT assert s.pending has exactly 1 entry here: the
+	// zero-delay immediate timer may fire and drain the map before
+	// we acquire pendingMu, making that assertion inherently racy.
 	s.scheduleLint("file:///x.md", lintTriggerOpen)
-	s.pendingMu.Lock()
-	require.Len(t, s.pending, 1, "immediate trigger should replace the pending debounce entry")
-	require.NotSame(t, originalEntry, s.pending["file:///x.md"],
-		"immediate trigger should install a new (zero-delay) entry, not reuse the debounce one")
-	s.pendingMu.Unlock()
+	alreadyStopped := !originalEntry.timer.Stop()
+	assert.True(t, alreadyStopped,
+		"immediate trigger must stop the previous 10-second debounce timer")
 	// Wait briefly for the immediate timer to fire and clear
 	// itself, then assert the pending map is empty.
 	deadline := time.Now().Add(testPollDeadline)
@@ -2026,6 +2035,25 @@ func TestUriToPathOnWindowsStripsDriveLetterSlash(t *testing.T) {
 	assert.Equal(t, "C:/Users/me/foo.md", filepath.ToSlash(got))
 }
 
+func TestUriToPathOnWindowsBareRoot(t *testing.T) {
+	t.Parallel()
+	// file:///C: (bare drive root, no trailing slash or path) must
+	// return "C:\" — the canonical Windows drive root. Without the
+	// fix, filepath.Clean("C:") returns "C:." on Windows, treating
+	// "C:" as a relative path on drive C. The fix returns early,
+	// bypassing filepath.Clean for this one special case.
+	got := uriToPathOnOS("file:///C:", "windows")
+	assert.Equal(t, `C:\`, got)
+}
+
+func TestUriToPathOnWindowsHostOnlyReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	// file://server (no share component) must return "" — "\\server"
+	// is not a navigable UNC path without a share name.
+	got := uriToPathOnOS("file://server", "windows")
+	assert.Equal(t, "", got)
+}
+
 func TestUriToPathOnLinuxLeavesDriveLetterAlone(t *testing.T) {
 	t.Parallel()
 	// On non-Windows the drive-letter rewrite must not fire — the
@@ -2094,6 +2122,39 @@ func TestDocumentEndPositionEmpty(t *testing.T) {
 	endLine, endChar := documentEndPosition(nil)
 	assert.Equal(t, 0, endLine)
 	assert.Equal(t, 0, endChar)
+}
+
+// representativeLSPDocument is a 2000-line trailing-newline body sized
+// like a real document passed through fullFileEdit on every "fix all"
+// whole-document code action.
+func representativeLSPDocument() []byte {
+	var b strings.Builder
+	for i := 0; i < 2000; i++ {
+		b.WriteString("this is a representative line of markdown prose\n")
+	}
+	return []byte(b.String())
+}
+
+// BenchmarkDocumentEndPosition pins documentEndPosition to zero
+// allocations on the trailing-newline path so a regression back to an
+// allocating implementation fails CI. The newline count itself uses
+// bytes.Count's SIMD-accelerated scan instead of a scalar per-byte Go
+// loop; see docs/development/high-performance-go.md "Strings and
+// bytes".
+func BenchmarkDocumentEndPosition(b *testing.B) {
+	src := representativeLSPDocument()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = documentEndPosition(src)
+	}
+	b.StopTimer()
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_, _ = documentEndPosition(src)
+	})
+	if allocs > 0 {
+		b.Fatalf("documentEndPosition allocs/op = %.0f, budget = 0", allocs)
+	}
 }
 
 func TestReloadConfigEmptyRoot(t *testing.T) {
@@ -3051,10 +3112,12 @@ func TestRunLintIgnoredFile(t *testing.T) {
 	assert.Contains(t, out, `"diagnostics":[]`)
 }
 
-// Regression: surfaceForeignDiagnostics writes one
-// window/logMessage per foreign diagnostic, with a "<file>:<line>
-// <message> [<rule>]" prefix the user can use to navigate to the
-// actual config-file issue.
+// Regression: surfaceForeignDiagnostics writes a window/logMessage
+// for a foreign diagnostic, with a "<file>:<line> <message> [<rule>]"
+// line the user can use to navigate to the actual config-file issue.
+// Diagnostics of the same severity batch into one notification (see
+// TestSurfaceForeignDiagnosticsBatchesBySeverity); a single diagnostic
+// is just the one-line case of that batch.
 func TestSurfaceForeignDiagnosticsEmitsLogMessage(t *testing.T) {
 	t.Parallel()
 	var buf safeBuffer
@@ -3342,6 +3405,18 @@ func TestWatchedFilesTreeChangedSkipsConfig(t *testing.T) {
 		{URI: "file:///proj/.mdsmith.yml", Type: fileChangeCreated},
 	})
 	assert.False(t, got, "a config-only create must not flag a wikilink tree change")
+}
+
+// TestWatchedFilesTreeChangedSkipsNonFileURI pins that a Created/Deleted
+// event with a non-file:// URI (e.g. git://, untitled:) does not trigger
+// a wikilink-index rebuild — uriToPath returns "" for these, and the ""
+// guard prevents them from reaching the type check.
+func TestWatchedFilesTreeChangedSkipsNonFileURI(t *testing.T) {
+	t.Parallel()
+	got := watchedFilesTreeChanged([]fileEvent{
+		{URI: "git://github.com/owner/repo/blob/main/page.md", Type: fileChangeCreated},
+	})
+	assert.False(t, got, "non-file URI Created event must not flag a wikilink tree change")
 }
 
 func TestDocumentStoreGetMissing(t *testing.T) {

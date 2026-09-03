@@ -1,6 +1,7 @@
 package commandsshowoutput
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/jeduden/mdsmith/internal/lint"
@@ -265,6 +266,10 @@ func TestSplitLeadingWhitespace(t *testing.T) {
 
 // --- Defensive paths ---
 
+func TestCheck_NilFile_NoDiagnostics(t *testing.T) {
+	assert.Nil(t, (&Rule{}).Check(nil))
+}
+
 func TestFix_NilFile_ReturnsNil(t *testing.T) {
 	r := &Rule{}
 	assert.Nil(t, r.Fix(nil))
@@ -287,27 +292,27 @@ func TestFix_NoOffendingBlocks_ReturnsSourceUnchanged(t *testing.T) {
 }
 
 func TestStripPromptAfter_NoPrompt_Unchanged(t *testing.T) {
-	assert.Equal(t, "not a prompt", stripPromptAfter([]byte("not a prompt"), 0))
+	assert.Equal(t, []byte("not a prompt"), stripPromptAfter([]byte("not a prompt"), 0))
 }
 
 func TestStripPromptAfter_Indented_PreservesLeadingWhitespace(t *testing.T) {
-	assert.Equal(t, "  ls", stripPromptAfter([]byte("  $ ls"), 0))
+	assert.Equal(t, []byte("  ls"), stripPromptAfter([]byte("  $ ls"), 0))
 }
 
 func TestStripPromptAfter_BlankLine_Unchanged(t *testing.T) {
-	assert.Equal(t, "   ", stripPromptAfter([]byte("   "), 0))
+	assert.Equal(t, []byte("   "), stripPromptAfter([]byte("   "), 0))
 }
 
 func TestStripPromptAfter_WithBlockquotePrefix(t *testing.T) {
 	// contentCol=2 marks the parser-stripped "> " prefix.
-	assert.Equal(t, "> ls", stripPromptAfter([]byte("> $ ls"), 2))
+	assert.Equal(t, []byte("> ls"), stripPromptAfter([]byte("> $ ls"), 2))
 }
 
 func TestStripPromptAfter_ContentColPastEnd_Unchanged(t *testing.T) {
 	// Defensive: a content column past the raw line length passes
 	// through untouched (can happen when goldmark strips a trailing
 	// container marker that the parser logically consumed).
-	assert.Equal(t, "> ", stripPromptAfter([]byte("> "), 10))
+	assert.Equal(t, []byte("> "), stripPromptAfter([]byte("> "), 10))
 }
 
 // TestFix_SkipsGeneratedRange covers the inGeneratedRange guard in
@@ -321,4 +326,41 @@ func TestFix_SkipsGeneratedRange(t *testing.T) {
 	r := &Rule{}
 	got := r.Fix(f)
 	assert.Equal(t, string(src), string(got))
+}
+
+func TestCheck_NilASTMatchesAST(t *testing.T) {
+	srcs := [][]byte{
+		[]byte("```sh\n$ echo hello\n```\n"),
+		[]byte("```sh\nhello\n```\n"),
+		[]byte("```sh\n$ foo\n$ bar\n```\n"),
+		[]byte("```sh\n$ foo\noutput\n```\n"),
+		[]byte("```sh\n\n$ foo\n\n```\n"),
+		[]byte("```sh\n$ ls\n```\n\nText.\n\n```sh\n$ ls\nfoo\n```\n"),
+		[]byte("   ```sh\n   $ cmd\n   ```\n"),
+		[]byte("```sh\n```\n"),
+		[]byte("```sh\n$ cmd\n"),
+	}
+	for i, src := range srcs {
+		t.Run(fmt.Sprintf("src%d", i), func(t *testing.T) {
+			astFile, err := lint.NewFile("f.md", src)
+			require.NoError(t, err)
+			astDiags := (&Rule{}).Check(astFile)
+			l0Diags := (&Rule{}).Check(lint.NewFileLines("f.md", src))
+			assert.Equal(t, astDiags, l0Diags,
+				"nil-AST must match AST for src=%q", src)
+		})
+	}
+}
+
+func TestCheckBlock_SkipsGeneratedRange_NilAST(t *testing.T) {
+	src := []byte("```sh\n$ ls\n```\n")
+	f := lint.NewFileLines("f.md", src)
+	f.GeneratedRanges = []lint.LineRange{{From: 1, To: 1}}
+	assert.Empty(t, (&Rule{}).Check(f), "block in generated range skipped on L0 path")
+}
+
+func TestAllLinesArePromptsL0_UnclosedFence(t *testing.T) {
+	f := lint.NewFileLines("f.md", []byte("```sh\n$ cmd\n"))
+	span := lint.BlockSpan{Kind: lint.BlockFencedCode, Start: 1, End: 2, Closed: false}
+	assert.True(t, allLinesArePromptsL0(f, span))
 }

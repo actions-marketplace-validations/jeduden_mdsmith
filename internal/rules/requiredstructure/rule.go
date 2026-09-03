@@ -21,6 +21,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/piparser"
 	"github.com/jeduden/mdsmith/internal/placeholders"
 	"github.com/jeduden/mdsmith/internal/rule"
+	"github.com/jeduden/mdsmith/internal/rules/astutil"
 	rulesettings "github.com/jeduden/mdsmith/internal/rules/settings"
 	"github.com/jeduden/mdsmith/internal/schema"
 	"github.com/jeduden/mdsmith/internal/yamlutil"
@@ -79,6 +80,12 @@ func (r *Rule) ID() string { return "MDS020" }
 
 // Name implements rule.Rule.
 func (r *Rule) Name() string { return "required-structure" }
+
+// WordlistTarget implements rule.WordlistConsumer: resolved `lists:`
+// entries union into this rule's "placeholders" setting.
+func (r *Rule) WordlistTarget() string { return "placeholders" }
+
+var _ rule.WordlistConsumer = (*Rule)(nil)
 
 // Category implements rule.Rule.
 func (r *Rule) Category() string { return "structural" }
@@ -567,14 +574,61 @@ func (r *Rule) Check(f *lint.File) []lint.Diagnostic {
 func (r *Rule) dispatchSingleFileSchema(
 	f *lint.File, schemaPath string, sources []SchemaSource,
 ) []lint.Diagnostic {
-	data, schPath, err := r.loadSchemaAt(f, schemaPath)
-	if err != nil {
-		return []lint.Diagnostic{r.diag(f.Path, 1, err.Error())}
+	res := r.cachedRawSchema(f, schemaPath)
+	if res.err != nil {
+		return []lint.Diagnostic{r.diag(f.Path, 1,
+			fmt.Sprintf("cannot read schema %q: %v", schemaPath, res.err))}
 	}
-	if schemaDataDeclaresExtends(data) {
+	if res.extends {
 		return r.checkComposedSources(f, sources)
 	}
-	return r.checkSingleFileSchemaFromData(f, schemaPath, data, schPath)
+	return r.checkSingleFileSchemaFromData(f, schemaPath, res.data, schemaPath)
+}
+
+// rawSchemaResult bundles readSchemaFile's return value with the
+// extends-peek schemaDataDeclaresExtends derives from it, so
+// cachedRawSchema can memoize both behind a single RunCache slot.
+// err is the raw read error, not wrapped with a caller's schemaPath
+// string: two kinds can reference the same absolute schema file
+// through differently-spelled (but path-equivalent) schemaPath
+// strings — "docs/proto.md" vs "./docs/proto.md" both resolve to the
+// same absSchemaCacheKey — and whichever caller's spelling populated
+// the cache first must not leak into a later caller's diagnostic.
+// dispatchSingleFileSchema formats the caller-facing message from its
+// own schemaPath argument instead.
+type rawSchemaResult struct {
+	data    []byte
+	err     error
+	extends bool
+}
+
+// cachedRawSchema returns readSchemaFile's result for schemaPath plus
+// the schemaDataDeclaresExtends peek over that data, computed at
+// most once per absolute schema path per RunCache lifetime. Without
+// this, a schema referenced by every file under a workspace-wide
+// kind was re-read from disk and re-unmarshalled as YAML once per
+// host file — see docs/development/high-performance-go.md's
+// "memoize per-input computations" pattern. absSchemaCacheKey
+// returning "" (no RunCache, or no stable absolute identity for
+// schemaPath) falls back to building directly, matching the
+// pre-cache behavior for the struct-literal unit-test path.
+func (r *Rule) cachedRawSchema(f *lint.File, schemaPath string) rawSchemaResult {
+	build := func() any {
+		data, err := readSchemaFile(f, schemaPath)
+		if err != nil {
+			return rawSchemaResult{err: err}
+		}
+		return rawSchemaResult{
+			data:    data,
+			extends: schemaDataDeclaresExtends(data),
+		}
+	}
+	if f.RunCache != nil {
+		if absPath := absSchemaCacheKey(f, schemaPath); absPath != "" {
+			return f.RunCache.RawSchemaFile(absPath, build).(rawSchemaResult)
+		}
+	}
+	return build().(rawSchemaResult)
 }
 
 // schemaDataDeclaresExtends reports whether the raw schema bytes
@@ -765,49 +819,36 @@ func resolveBodySyncLine(
 	if _, err := fieldinterp.ResolvePath(docFM, path); err != nil {
 		return patchedLine{}, false
 	}
-	expected := resolveFields(sp.BodyText, docFM)
+	// Convert expected once so per-line comparisons and the eventual
+	// replacement both work from the same []byte, no string() cast.
+	expectedBytes := []byte(resolveFields(sp.BodyText, docFM))
 	re := sp.compiled
 	for i := startLine - 1; i < endLine && i < len(work); i++ {
-		trimmed := strings.TrimSpace(string(work[i]))
-		if trimmed == expected {
+		trimmed := bytes.TrimSpace(work[i])
+		if bytes.Equal(trimmed, expectedBytes) {
 			continue // already correct; keep scanning for stale duplicates
 		}
-		if re.MatchString(trimmed) {
-			orig := string(work[i])
-			leadLen := len(orig) - len(strings.TrimLeft(orig, " \t"))
-			return patchedLine{idx: i, val: []byte(orig[:leadLen] + expected)}, true
+		if re.Match(trimmed) {
+			leadLen := len(work[i]) - len(bytes.TrimLeft(work[i], " \t"))
+			val := make([]byte, leadLen, leadLen+len(expectedBytes))
+			copy(val, work[i][:leadLen])
+			val = append(val, expectedBytes...)
+			return patchedLine{idx: i, val: val}, true
 		}
 	}
 	return patchedLine{}, false
-}
-
-// buildFieldPattern compiles a regex that matches a body line whose
-// {field} placeholders have been replaced by any non-empty run.
-// The pattern is always valid: each part is regexp.QuoteMeta'd and
-// joined with ".+", so regexp.MustCompile never panics here.
-func buildFieldPattern(bodyText string) *regexp.Regexp {
-	parts := fieldinterp.SplitOnFields(bodyText)
-	var patBuf strings.Builder
-	patBuf.WriteString("^")
-	for i, part := range parts {
-		patBuf.WriteString(regexp.QuoteMeta(part))
-		if i < len(parts)-1 {
-			patBuf.WriteString(".+")
-		}
-	}
-	patBuf.WriteString("$")
-	return regexp.MustCompile(patBuf.String())
 }
 
 // buildSchemaHeading constructs a schemaHeading from a docHeading,
 // pre-compiling the field-interpolation regex when the text contains
 // {field} references so matchesSchema pays no per-call compile cost.
 // Pattern construction is delegated to buildFieldPattern, which owns
-// the QuoteMeta+".+" logic and its MustCompile invariant.
-func buildSchemaHeading(h docHeading) schemaHeading {
+// the QuoteMeta+".+" logic and its MustCompile invariant. cache is
+// forwarded to buildFieldPattern; see its doc comment.
+func buildSchemaHeading(h docHeading, cache *fieldPatternCache) schemaHeading {
 	sh := schemaHeading{Level: h.Level, Text: h.Text}
 	if fieldinterp.ContainsField(h.Text) {
-		sh.compiled = buildFieldPattern(h.Text)
+		sh.compiled = buildFieldPattern(h.Text, cache)
 	}
 	return sh
 }
@@ -1075,8 +1116,13 @@ var (
 
 // schemaConfig holds the parsed schema frontmatter.
 type schemaConfig struct {
-	FrontMatterCUE  string
-	FilenamePattern string // glob pattern the document basename must match
+	FrontMatterCUE string
+	// FilenamePatterns are the globs the document basename must
+	// match — the basename passes when it matches any one of them
+	// (OR semantics, issue 817). A `<?require filename:?>` may spell
+	// this as a single glob string or a YAML sequence of glob
+	// strings. Empty means no filename constraint.
+	FilenamePatterns []string
 
 	// Frontmatter carries the per-key constraint expression
 	// strings. Populated alongside FrontMatterCUE so the
@@ -1165,9 +1211,11 @@ func parseSchemaFrontMatter(prefix []byte, cache *lint.RunCache) (schemaConfig, 
 }
 
 // extractRequireDirective walks the schema AST for a <?require?> PI
-// and parses its YAML body to extract constraints like filename.
-func extractRequireDirective(f *lint.File) (string, error) {
-	var filenamePattern string
+// and parses its YAML body to extract constraints like filename. The
+// `filename:` value may be a single glob string or a YAML sequence of
+// glob strings (issue 817); both decode to the returned slice.
+func extractRequireDirective(f *lint.File) ([]string, error) {
+	var filenamePatterns []string
 	for c := f.AST.FirstChild(); c != nil; c = c.NextSibling() {
 		pi, ok := c.(*piparser.ProcessingInstruction)
 		if !ok || pi.Name != "require" {
@@ -1199,16 +1247,18 @@ func extractRequireDirective(f *lint.File) (string, error) {
 				body = append(body, seg.Value(f.Source)...)
 			}
 		}
-		var params map[string]string
+		var params map[string]any
 		if err := yamlutil.UnmarshalSafe(body, &params); err != nil {
-			return "", fmt.Errorf("invalid <?require?> directive: %w", err)
+			return nil, fmt.Errorf("invalid <?require?> directive: %w", err)
 		}
-		if fn, ok := params["filename"]; ok {
-			filenamePattern = fn
+		pats, err := schema.DecodeFilenameField(params["filename"])
+		if err != nil {
+			return nil, fmt.Errorf("invalid <?require?> directive: %w", err)
 		}
+		filenamePatterns = pats
 		break
 	}
-	return filenamePattern, nil
+	return filenamePatterns, nil
 }
 
 func deriveFrontMatterCUE(yamlBytes []byte) (string, map[string]string, map[string]schema.FieldMeta, error) {
@@ -1326,9 +1376,11 @@ func cueFieldLabel(key string) string {
 // collectBodySyncPoints scans body content for {field} references and
 // adds them to the syncPoints map under their nearest preceding heading.
 // Iterates over content bytes directly to avoid the bytes.Split allocation.
+// fieldCache is forwarded to appendBodySyncFields; see buildFieldPattern's
+// doc comment.
 func collectBodySyncPoints(
 	content []byte, headings []docHeading,
-	syncPoints map[int][]syncPoint,
+	syncPoints map[int][]syncPoint, fieldCache *fieldPatternCache,
 ) {
 	currentHeading := -1
 	// inPIBlock is true while scanning the lines of a multi-line
@@ -1392,7 +1444,7 @@ func collectBodySyncPoints(
 			continue
 		}
 		if currentHeading >= 0 {
-			appendBodySyncFields(syncPoints, currentHeading, string(lineB))
+			appendBodySyncFields(syncPoints, currentHeading, string(lineB), fieldCache)
 		}
 	}
 }
@@ -1410,15 +1462,17 @@ func headingIndexForLine(headings []docHeading, line string) int {
 
 // appendBodySyncFields records a body-sync point under heading idx for
 // each `{field}` token found in the body line. Lines with no token add
-// nothing.
+// nothing. fieldCache is forwarded to buildFieldPattern; see its doc
+// comment.
 func appendBodySyncFields(
 	syncPoints map[int][]syncPoint, idx int, trimmed string,
+	fieldCache *fieldPatternCache,
 ) {
 	fields := fieldinterp.Fields(trimmed)
 	if len(fields) == 0 {
 		return
 	}
-	compiled := buildFieldPattern(trimmed)
+	compiled := buildFieldPattern(trimmed, fieldCache)
 	for _, f := range fields {
 		syncPoints[idx] = append(syncPoints[idx],
 			syncPoint{Field: f, InBody: true, BodyText: trimmed, compiled: compiled})
@@ -1444,7 +1498,7 @@ func fenceOpenRun(raw, lineB []byte) (byte, int) {
 	if len(lineB) == 0 || (lineB[0] != '`' && lineB[0] != '~') {
 		return 0, 0
 	}
-	if lineIndent(raw) > 3 {
+	if astutil.CountLeadingSpaces(raw) > 3 {
 		return 0, 0
 	}
 	n := fenceRun(lineB, lineB[0])
@@ -1459,7 +1513,7 @@ func fenceOpenRun(raw, lineB []byte) (byte, int) {
 // opener, nothing but the run on the trimmed line, and at most three
 // spaces of indentation.
 func fenceClose(raw, lineB []byte, ch byte, openLen int) bool {
-	if lineIndent(raw) > 3 {
+	if astutil.CountLeadingSpaces(raw) > 3 {
 		return false
 	}
 	n := fenceRun(lineB, ch)
@@ -1475,18 +1529,13 @@ func fenceRun(line []byte, ch byte) int {
 	return n
 }
 
-// lineIndent returns the number of leading spaces on the raw line.
-func lineIndent(raw []byte) int {
-	return len(raw) - len(bytes.TrimLeft(raw, " "))
-}
-
 // isPIOpenLine reports whether a raw body line opens a processing
 // instruction, mirroring the block parser in pkg/markdown: at most
 // three spaces of indentation, a `<?` opener, and a non-empty name
 // (the bytes up to the first whitespace or `?>`). An indented code
 // example showing a directive is therefore not mistaken for one.
 func isPIOpenLine(raw []byte) bool {
-	if lineIndent(raw) > 3 {
+	if astutil.CountLeadingSpaces(raw) > 3 {
 		return false
 	}
 	trimmed := bytes.TrimLeft(raw, " ")
@@ -1585,7 +1634,7 @@ func parseSchemaWithRootFS(
 	f, _ := lint.NewFile("schema", content)
 
 	// Extract <?require?> directive from schema body.
-	filenamePattern, err := extractRequireDirective(f)
+	filenamePatterns, err := extractRequireDirective(f)
 	if err != nil {
 		// cfg.FrontMatterCUE was already compiled (and cached
 		// via RunCache.CompiledCUE) before extractRequireDirective
@@ -1596,16 +1645,16 @@ func parseSchemaWithRootFS(
 		// and Invalidate(schemaPath) cannot evict it.
 		return &parsedSchema{Config: cfg}, nil, err
 	}
-	cfg.FilenamePattern = filenamePattern
+	cfg.FilenamePatterns = filenamePatterns
 
 	// Extract headings, expanding <?include?> directives in the schema.
 	var headings []docHeading
 	var includes []string
 	if schemaPath != "" {
 		cleanPath := filepath.Clean(schemaPath)
-		visited := map[string]bool{cleanPath: true}
+		visited := map[string]struct{}{cleanPath: {}}
 		chain := []string{cleanPath}
-		var fp string
+		var fp []string
 		headings, fp, includes, err = extractSchemaHeadings(f, schemaPath, visited, chain, maxBytes, rootFS)
 		if err != nil {
 			// Surface a partial *parsedSchema (carrying the
@@ -1618,8 +1667,8 @@ func parseSchemaWithRootFS(
 			// evicts the schema's failed-parse slot.
 			return &parsedSchema{Config: cfg}, includes, err
 		}
-		if fp != "" && cfg.FilenamePattern == "" {
-			cfg.FilenamePattern = fp
+		if len(fp) > 0 && len(cfg.FilenamePatterns) == 0 {
+			cfg.FilenamePatterns = fp
 		}
 	} else {
 		headings = extractHeadings(f)
@@ -1627,15 +1676,21 @@ func parseSchemaWithRootFS(
 
 	schHeadings := make([]schemaHeading, len(headings))
 	syncPoints := make(map[int][]syncPoint)
+	// fieldCache is scoped to this one parse: it dedupes repeated
+	// {field} template text within this schema's headings and body,
+	// then is discarded with the rest of this call's locals. See
+	// fieldPatternCache's doc comment for why this isn't a package var;
+	// the zero value costs nothing when the schema has no {field} text.
+	var fieldCache fieldPatternCache
 
 	for i, h := range headings {
-		schHeadings[i] = buildSchemaHeading(h)
+		schHeadings[i] = buildSchemaHeading(h, &fieldCache)
 		for _, f := range fieldinterp.Fields(h.Text) {
 			syncPoints[i] = append(syncPoints[i], syncPoint{Field: f})
 		}
 	}
 
-	collectBodySyncPoints(content, headings, syncPoints)
+	collectBodySyncPoints(content, headings, syncPoints, &fieldCache)
 
 	return &parsedSchema{
 		Config:     cfg,
@@ -1661,10 +1716,10 @@ func parseSchemaWithRootFS(
 // transitive set appended after the fragment's own path.
 func extractSchemaHeadings(
 	schemaFile *lint.File, schemaPath string,
-	visited map[string]bool, chain []string, maxBytes int64, rootFS fs.FS,
-) ([]docHeading, string, []string, error) {
+	visited map[string]struct{}, chain []string, maxBytes int64, rootFS fs.FS,
+) ([]docHeading, []string, []string, error) {
 	var headings []docHeading
-	var filenamePattern string
+	var filenamePatterns []string
 	var includes []string
 
 	err := ast.Walk(schemaFile.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -1701,8 +1756,8 @@ func extractSchemaHeadings(
 				includes = append(includes, subIncludes...)
 				return ast.WalkStop, walkErr
 			}
-			if fp != "" && filenamePattern == "" {
-				filenamePattern = fp
+			if len(fp) > 0 && len(filenamePatterns) == 0 {
+				filenamePatterns = fp
 			}
 			headings = append(headings, fragHeadings...)
 			if fragIncluded != "" {
@@ -1720,10 +1775,10 @@ func extractSchemaHeadings(
 		// a downstream <?include?> issue must still let
 		// Invalidate(brokenFragment) evict the schema's failed-parse
 		// slot when the fragment is fixed.
-		return nil, "", includes, err
+		return nil, nil, includes, err
 	}
 
-	return headings, filenamePattern, includes, nil
+	return headings, filenamePatterns, includes, nil
 }
 
 // expandSchemaInclude resolves a single <?include?> PI in a schema file,
@@ -1763,11 +1818,11 @@ func resolveSchemaIncludePath(
 // full dependency footprint on RunCache's reverse-include index.
 func expandSchemaInclude(
 	pi *piparser.ProcessingInstruction, source []byte,
-	schemaPath string, visited map[string]bool, chain []string, maxBytes int64, rootFS fs.FS,
-) ([]docHeading, string, string, []string, error) {
+	schemaPath string, visited map[string]struct{}, chain []string, maxBytes int64, rootFS fs.FS,
+) ([]docHeading, []string, string, []string, error) {
 	includedPath, err := resolveSchemaIncludePath(pi, source, schemaPath)
 	if err != nil {
-		return nil, "", "", nil, err
+		return nil, nil, "", nil, err
 	}
 
 	// Surface includedPath on every error past this point so the
@@ -1777,20 +1832,20 @@ func expandSchemaInclude(
 	// the depth limit), Invalidate(fragmentAbs) then evicts this
 	// schema's failed-parse slot and the next Check re-parses.
 	if len(chain) > maxSchemaIncludeDepth {
-		return nil, "", includedPath, nil, fmt.Errorf(
+		return nil, nil, includedPath, nil, fmt.Errorf(
 			"schema include depth exceeds maximum (%d)", maxSchemaIncludeDepth)
 	}
-	if visited[includedPath] {
+	if _, ok := visited[includedPath]; ok {
 		chainCopy := make([]string, len(chain), len(chain)+1)
 		copy(chainCopy, chain)
 		chainCopy = append(chainCopy, includedPath)
-		return nil, "", includedPath, nil, fmt.Errorf(
+		return nil, nil, includedPath, nil, fmt.Errorf(
 			"cyclic include: %s", strings.Join(chainCopy, " -> "))
 	}
 
 	fragData, err := readSchemaInclude(rootFS, includedPath, maxBytes)
 	if err != nil {
-		return nil, "", includedPath, nil, fmt.Errorf(
+		return nil, nil, includedPath, nil, fmt.Errorf(
 			"cannot read schema include file %q: %w", includedPath, err)
 	}
 
@@ -1803,10 +1858,10 @@ func expandSchemaInclude(
 
 	fp, err := extractRequireDirective(fragFile)
 	if err != nil {
-		return nil, "", includedPath, nil, err
+		return nil, nil, includedPath, nil, err
 	}
 
-	visited[includedPath] = true
+	visited[includedPath] = struct{}{}
 	chain = append(chain, includedPath)
 	fragHeadings, fp2, subIncludes, err := extractSchemaHeadings(
 		fragFile, includedPath, visited, chain, maxBytes, rootFS)
@@ -1817,9 +1872,9 @@ func expandSchemaInclude(
 		// footprint (broken fragment + every successful one
 		// above it) is recorded in the cache's reverse-include
 		// index.
-		return nil, "", includedPath, subIncludes, err
+		return nil, nil, includedPath, subIncludes, err
 	}
-	if fp2 != "" && fp == "" {
+	if len(fp2) > 0 && len(fp) == 0 {
 		fp = fp2
 	}
 
@@ -1867,8 +1922,24 @@ type docHeading struct {
 	Line  int
 }
 
-// extractHeadings walks the AST and collects all headings.
+// extractHeadings walks the AST and collects all headings. Memoized
+// per File via lint.File.MemoFile: within one Check, the document
+// File sees this called once, from checkSingleFileSchemaFromData,
+// when the rule has a single schema source, or once per source from
+// checkComposedSources's bodySyncDiagnostics loop when the rule
+// composes N>=2 extends sources — Check's dispatch on len(sources)
+// makes the two paths mutually exclusive, so a document composing N
+// extends sources would otherwise re-walk the same AST N times per
+// Check. fixBodySyncIn (the Fix path, single-source only) calls this
+// too. parseSchemaWithRootFS also calls this, but on a throwaway
+// schema-content File built fresh per call, so the memo there is a
+// no-op rather than a shared cache.
 func extractHeadings(f *lint.File) []docHeading {
+	return f.MemoFile("requiredstructure.docHeadings", buildDocHeadings).([]docHeading)
+}
+
+// buildDocHeadings is the MemoFile-style builder for extractHeadings.
+func buildDocHeadings(f *lint.File) any {
 	var headings []docHeading
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -1974,7 +2045,7 @@ func walkRequiredHeadings(
 	requiredByText map[string][]int, ref string,
 ) ([]lint.Diagnostic, int, bool) {
 	var diags []lint.Diagnostic
-	claimed := make(map[int]bool)
+	claimed := make(map[int]struct{})
 	docIdx := 0
 	allowExtra := false
 	for schIdx, req := range sch.Headings {
@@ -1982,7 +2053,7 @@ func walkRequiredHeadings(
 			allowExtra = true
 			continue
 		}
-		if claimed[schIdx] {
+		if schema.IsClaimed(claimed, schIdx) {
 			continue
 		}
 		// Save the position before the scan so that a missing-section
@@ -1998,7 +2069,7 @@ func walkRequiredHeadings(
 		if found {
 			allowExtra = false
 		}
-		if !found && !claimed[schIdx] {
+		if !found && !schema.IsClaimed(claimed, schIdx) {
 			diags = append(diags, missingSectionDiagLegacy(
 				f, req, ref, legacyPrecedingLine(docHeadings, preScanIdx)))
 		}
@@ -2077,7 +2148,7 @@ func matchRequired(
 	docHeadings []docHeading,
 	docIdx, schIdx int,
 	requiredByText map[string][]int,
-	claimed map[int]bool,
+	claimed map[int]struct{},
 	allowExtra bool,
 	schemaRef string,
 ) ([]lint.Diagnostic, int, bool) {
@@ -2089,7 +2160,7 @@ func matchRequired(
 			if dh.Level != req.Level {
 				diags = append(diags, levelMismatchDiag(f, dh, req, schemaRef))
 			}
-			claimed[schIdx] = true
+			claimed[schIdx] = struct{}{}
 			return diags, docIdx + 1, true
 		}
 		if ooIdx := nextUnclaimed(requiredByText[dh.Text], claimed, schIdx+1); ooIdx >= 0 {
@@ -2105,7 +2176,7 @@ func matchRequired(
 			if dh.Level != other.Level {
 				diags = append(diags, levelMismatchDiag(f, dh, other, schemaRef))
 			}
-			claimed[ooIdx] = true
+			claimed[ooIdx] = struct{}{}
 			docIdx++
 			continue
 		}
@@ -2140,9 +2211,12 @@ func levelMismatchDiag(
 
 // nextUnclaimed returns the first index in candidates that is >= minIdx
 // and not yet claimed, or -1 if none qualifies.
-func nextUnclaimed(candidates []int, claimed map[int]bool, minIdx int) int {
+func nextUnclaimed(candidates []int, claimed map[int]struct{}, minIdx int) int {
 	for _, idx := range candidates {
-		if idx >= minIdx && !claimed[idx] {
+		if idx < minIdx {
+			continue
+		}
+		if !schema.IsClaimed(claimed, idx) {
 			return idx
 		}
 	}
@@ -2450,8 +2524,33 @@ func (r *Rule) checkPathPatterns(f *lint.File) []lint.Diagnostic {
 		// basename, which would let `path-pattern: README.md` pass
 		// for `docs/README.md` — defeating the documented root-
 		// anchored semantics.
-		ok, err := doublestar.Match(filepath.ToSlash(pp.Pattern), rel)
-		if err == nil && ok {
+		//
+		// MatchUnvalidated (not Match) because pp.Pattern already
+		// passed doublestar.ValidatePattern once, at config-parse
+		// time (parsePathPatterns); Match's own internal validation
+		// step re-runs on every call whenever matching reaches the
+		// end of rel before the end of the pattern — the common case
+		// for a mismatching kind, which is most kinds for most files.
+		//
+		// Passing ValidatePattern does not guarantee Match and
+		// MatchUnvalidated agree, though: a brace alternative (e.g.
+		// "{[!mdb[],docs/**/*.md}") can contain a syntax error in a
+		// non-final alternative that Match's internal validation
+		// aborts on before trying later alternatives, while
+		// MatchUnvalidated tries them all — confirmed directly against
+		// the vendored doublestar source. That divergence requires
+		// brace syntax (a 1.3M+-case differential fuzz over
+		// brace-free, ValidatePattern-accepted patterns found zero
+		// disagreement), so a pattern using "{" falls back to the
+		// safe (slower, but provably correct) Match.
+		pat := filepath.ToSlash(pp.Pattern)
+		matched := false
+		if strings.IndexByte(pat, '{') < 0 {
+			matched = doublestar.MatchUnvalidated(pat, rel)
+		} else if ok, err := doublestar.Match(pat, rel); err == nil {
+			matched = ok
+		}
+		if matched {
 			continue
 		}
 		// path-pattern checks the workspace-relative path (which may
@@ -2460,8 +2559,8 @@ func (r *Rule) checkPathPatterns(f *lint.File) []lint.Diagnostic {
 		// checks emitted by validateFilename / checkFilenamePattern.
 		d := schema.SchemaDiagnostic{
 			Field:     "path",
-			Actual:    fmt.Sprintf("%q", rel),
-			Expected:  fmt.Sprintf("path matching glob %s", pp.Pattern),
+			Actual:    strconv.Quote(rel),
+			Expected:  "path matching glob " + pp.Pattern,
 			SchemaRef: fmt.Sprintf("kinds[%s] / path-pattern", pp.Kind),
 		}
 		diags = append(diags, d.Emit(makeDiag, f.Path, schema.NonBodyDiagLine(f)))
@@ -2497,8 +2596,8 @@ func workspaceRelPath(f *lint.File) string {
 func checkFilenamePattern(
 	f *lint.File, sch *parsedSchema, schemaSource string,
 ) []lint.Diagnostic {
-	pattern := sch.Config.FilenamePattern
-	if pattern == "" {
+	patterns := sch.Config.FilenamePatterns
+	if len(patterns) == 0 {
 		return nil
 	}
 	// Filename diagnostics describe the document as a whole;
@@ -2507,7 +2606,7 @@ func checkFilenamePattern(
 	// section.
 	anchor := schema.NonBodyDiagLine(f)
 	base := filepath.Base(f.Path)
-	matched, err := filepath.Match(pattern, base)
+	matched, badPattern, err := schema.MatchFilename(patterns, base)
 	if err != nil {
 		// Malformed glob in the schema. Surface it via the same
 		// SchemaDiagnostic shape so the message carries the
@@ -2515,7 +2614,7 @@ func checkFilenamePattern(
 		// offending pattern.
 		d := schema.SchemaDiagnostic{
 			Field:     "filename pattern",
-			Actual:    fmt.Sprintf("%q", pattern),
+			Actual:    strconv.Quote(badPattern),
 			Expected:  "valid glob",
 			Hint:      err.Error(),
 			SchemaRef: buildSchemaRefForLegacy(schemaSource),
@@ -2525,10 +2624,12 @@ func checkFilenamePattern(
 	if !matched {
 		// `glob` keeps the wording aligned with schema.validateFilename
 		// and the path-pattern diagnostic; see the rationale there.
+		// With several globs configured the "expected" clause lists
+		// them all so the OR nature is visible.
 		d := schema.SchemaDiagnostic{
 			Field:     "filename",
-			Actual:    fmt.Sprintf("%q", base),
-			Expected:  fmt.Sprintf("filename matching glob %s", pattern),
+			Actual:    strconv.Quote(base),
+			Expected:  schema.FilenameExpected(patterns),
 			SchemaRef: buildSchemaRefForLegacy(schemaSource),
 		}
 		return []lint.Diagnostic{d.Emit(makeDiag, f.Path, anchor)}

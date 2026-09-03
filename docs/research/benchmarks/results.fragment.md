@@ -2,9 +2,10 @@
 docs/research/benchmarks/data/*.json — do not edit by hand. Re-run
 the harness (run.sh) and `mdsmith fix` to refresh. -->
 
-`mdsmith` is the default rule set; `mdsmith-parity` disables the
-mdsmith-only rules so the work class matches the markdownlint
-tools (see `bench-parity.mdsmith.yml`).
+`mdsmith` is the default rule set. The `mdsmith-parity`
+row is the single pre-split parity column; the per-linter
+`mdsmith-<linter>-parity` columns, one per peer, land when
+the benchmark is next re-run.
 
 **Repo corpus — 766 Markdown files** (median wall time, lower is
 better; `vs mado` is the ratio to mado's median):

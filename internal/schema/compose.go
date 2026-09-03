@@ -2,6 +2,8 @@ package schema
 
 import (
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -143,17 +145,17 @@ func composeFrontmatter(out *Schema, schemas []*Schema) {
 
 func composeFilename(out *Schema, schemas []*Schema) error {
 	for _, s := range schemas {
-		if s.Filename == "" {
+		if len(s.Filename) == 0 {
 			continue
 		}
-		if out.Filename == "" {
+		if len(out.Filename) == 0 {
 			out.Filename = s.Filename
 			continue
 		}
-		if out.Filename != s.Filename {
+		if !slices.Equal(out.Filename, s.Filename) {
 			return fmt.Errorf(
 				"conflicting filename patterns across "+
-					"composed schemas: %q and %q",
+					"composed schemas: %v and %v",
 				out.Filename, s.Filename)
 		}
 	}
@@ -531,9 +533,9 @@ func intersectMax(a, b int) int {
 // messages; a 0 max prints as "unbounded".
 func boundsLabel(min, max int) string {
 	if max == 0 {
-		return fmt.Sprintf("%d..unbounded", min)
+		return strconv.Itoa(min) + "..unbounded"
 	}
-	return fmt.Sprintf("%d..%d", min, max)
+	return strconv.Itoa(min) + ".." + strconv.Itoa(max)
 }
 
 func cloneMatcher(m *Matcher) *Matcher {
@@ -559,14 +561,14 @@ func cloneContent(c []ContentEntry) []ContentEntry {
 }
 
 func unionStrings(a, b []string) []string {
-	seen := map[string]bool{}
+	seen := map[string]struct{}{}
 	out := make([]string, 0, len(a)+len(b))
 	for _, list := range [][]string{a, b} {
 		for _, s := range list {
-			if seen[s] {
+			if _, ok := seen[s]; ok {
 				continue
 			}
-			seen[s] = true
+			seen[s] = struct{}{}
 			out = append(out, s)
 		}
 	}

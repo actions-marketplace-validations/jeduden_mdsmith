@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeduden/mdsmith/internal/gitattributes"
 	"github.com/jeduden/mdsmith/internal/githooks"
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/stretchr/testify/assert"
@@ -295,7 +296,7 @@ func TestRunMergeDriverInstall_RejectsWhitespacePath(t *testing.T) {
 func TestRunMergeDriverInstall_NoArgsWritesCanonicalGlobs(t *testing.T) {
 	dir := t.TempDir()
 	initTestRepo(t, dir)
-	// .mdsmith.yml ignore patterns become -merge overrides.
+	// .mdsmith.yml ignore patterns become merge=text overrides.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mdsmith.yml"),
 		[]byte("ignore:\n  - \"vendor/**\"\n"), 0o644))
 
@@ -318,8 +319,14 @@ func TestRunMergeDriverInstall_NoArgsWritesCanonicalGlobs(t *testing.T) {
 	content := string(attrs)
 	assert.Contains(t, content, "*.md merge=mdsmith")
 	assert.Contains(t, content, "*.markdown merge=mdsmith")
-	assert.Contains(t, content, "vendor/** -merge",
-		"ignore patterns from .mdsmith.yml must appear as -merge overrides")
+	assert.Contains(t, content, "vendor/**/*.md merge=text",
+		"ignore patterns from .mdsmith.yml must appear as markdown-scoped merge=text overrides")
+	assert.Contains(t, content, "vendor/**/*.markdown merge=text",
+		"ignore patterns are scoped to every markdown include extension")
+	assert.NotContains(t, content, "vendor/** merge=text",
+		"a bare exclude line would change git's merge for non-markdown files (issue #750)")
+	assert.NotContains(t, content, "-merge",
+		"excludes use merge=text, not -merge, so ignored Markdown still gets git's text merge (issue #755)")
 }
 
 // --- resolveInstalledBinary ---
@@ -773,8 +780,10 @@ func TestRunMergeDriverInstall_DropsAndWarnsForUnrepresentableIgnore(t *testing.
 	attrs, err := os.ReadFile(filepath.Join(dir, ".gitattributes"))
 	require.NoError(t, err)
 	content := string(attrs)
-	assert.Contains(t, content, "vendor/** -merge",
-		"representable ignore patterns survive")
+	assert.Contains(t, content, "vendor/**/*.md merge=text",
+		"representable ignore patterns survive, scoped to markdown")
+	assert.Contains(t, content, "vendor/**/*.markdown merge=text",
+		"representable ignore patterns survive, scoped to every markdown extension")
 	assert.NotContains(t, content, "with space.md",
 		"unrepresentable ignore patterns are dropped from the managed block")
 	assert.NotContains(t, content, "!negated.md",
@@ -1502,7 +1511,7 @@ func TestVerifyGitattributes_NonRegularFile_ReturnsTwo(t *testing.T) {
 	require.NoError(t, os.Mkdir(attr, 0o755))
 
 	got := captureStderr(func() {
-		assert.Equal(t, 2, verifyGitattributes(attr, githooks.Globs{}))
+		assert.Equal(t, 2, verifyGitattributes(attr, gitattributes.Globs{}))
 	})
 	assert.Contains(t, got, "not a regular file")
 }
@@ -1517,7 +1526,7 @@ func TestVerifyGitattributes_ReadError_ReturnsTwo(t *testing.T) {
 	osReadFile = func(string) ([]byte, error) { return nil, fmt.Errorf("boom") }
 
 	got := captureStderr(func() {
-		assert.Equal(t, 2, verifyGitattributes(attr, githooks.Globs{}))
+		assert.Equal(t, 2, verifyGitattributes(attr, gitattributes.Globs{}))
 	})
 	// Assert the injected error is surfaced, not just the generic
 	// "reading" prefix, so a swallowed underlying error fails the test.

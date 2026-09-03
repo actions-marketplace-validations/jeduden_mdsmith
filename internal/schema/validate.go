@@ -16,15 +16,41 @@ import (
 
 // DocHeading is a heading collected from the document under
 // validation.
+//
+// Fields are ordered pointer-containing (string) first, then scalar
+// (int) last, per docs/development/high-performance-go.md "Struct
+// layout" — Go's GC ptrdata spans through the last pointer-containing
+// field, so a scalar between Text and the surrounding ints would
+// force that span to cover it too. ExtractDocHeadings returns a
+// []DocHeading per document, so the layout affects every element the
+// GC scans in that slice.
 type DocHeading struct {
-	Level int
 	Text  string
+	Level int
 	Line  int
 }
 
-// ExtractDocHeadings walks the document AST and collects every
-// heading in source order, with its source line.
+// ExtractDocHeadings returns every heading in the document, in
+// source order, computed once per File via MemoFile: Validate,
+// ValidateContent, ValidateAcronyms, BuildMatchTree, and
+// requiredstructure.applyScopeRules each need this list within one
+// schema Check pass over the same File, and before this memoization
+// each independently re-walked f.AST and re-extracted every heading's
+// text — the exact redundant-computation shape
+// docs/development/high-performance-go.md's "memoize per-input
+// computations" pattern calls out (the same one already applied to
+// astutil.CollectSectionParagraphs). The returned slice is shared
+// read-only with every caller; no caller mutates it.
 func ExtractDocHeadings(f *lint.File) []DocHeading {
+	return f.MemoFile("schema.docHeadings", buildDocHeadings).([]DocHeading)
+}
+
+// buildDocHeadings is the MemoFile builder behind ExtractDocHeadings,
+// defined at package scope to match astutil.buildSectionParagraphs'
+// convention: a package-level function value documents the intent to
+// avoid a per-call closure even where this particular literal
+// wouldn't capture anything and so wouldn't itself allocate.
+func buildDocHeadings(f *lint.File) any {
 	var out []DocHeading
 	_ = ast.Walk(f.AST, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -197,15 +223,15 @@ func dedupedCUEErrorDiags(
 	cueErrs []*cuelite.PathError, keyLines map[string]int, mkDiag MakeDiag,
 ) []lint.Diagnostic {
 	type dedupKey struct{ field, actual, expected string }
-	seen := make(map[dedupKey]bool, len(cueErrs))
+	seen := make(map[dedupKey]struct{}, len(cueErrs))
 	out := make([]lint.Diagnostic, 0, len(cueErrs))
 	for _, ce := range cueErrs {
 		d := schemaDiagFromCUEError(sch, docFM, ce)
 		key := dedupKey{field: d.Field, actual: d.Actual, expected: d.Expected}
-		if seen[key] {
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[key] = true
+		seen[key] = struct{}{}
 		out = append(out, d.Emit(mkDiag, f.Path, fmDiagLine(f, ce.Path(), keyLines)))
 	}
 	return out
@@ -273,10 +299,10 @@ func validateDeprecatedFieldsWithLines(
 //
 // The previous "anchor at line 1" pattern landed on the first
 // body line in front-matter-stripped mode, which
-// engine.filterGeneratedDiags could mistakenly drop if the
+// checker.FilterGeneratedDiags could mistakenly drop if the
 // document body started with a generated section (e.g. a
 // leading <?catalog?> directive). Using `1 - LineOffset`
-// produces a non-positive body-coord that filterGeneratedDiags
+// produces a non-positive body-coord that FilterGeneratedDiags
 // cannot match against any generated line range, and the
 // engine's AdjustDiagnostics adds the offset back so the
 // surfaced diagnostic still anchors at the file's first line.
@@ -303,7 +329,7 @@ func nonBodyDiagLine(f *lint.File) int {
 // result never exceeds len(f.Lines) and can never map to an
 // out-of-range editor/LSP position. A missing section has no body line
 // of its own, and anchoring inside a generated section would let
-// engine.filterGeneratedDiags drop the diagnostic. When candidate is
+// checker.FilterGeneratedDiags drop the diagnostic. When candidate is
 // unusable, the non-body anchor is
 // used: a non-positive value survives filtering and maps back to file
 // line 1, and a positive value (nothing stripped, line 1) is fine as
@@ -323,7 +349,7 @@ func MissingSectionAnchor(f *lint.File, candidate int) int {
 		return fallback
 	}
 	// fallback is a positive line (nothing stripped) inside a leading
-	// generated range, where filterGeneratedDiags would drop it. Prefer
+	// generated range, where FilterGeneratedDiags would drop it. Prefer
 	// the first body line outside every generated range; fall back to 0
 	// only when the whole file is generated.
 	if line := firstNonGeneratedLine(f); line > 0 {
@@ -387,7 +413,7 @@ func lineInGeneratedRange(f *lint.File, line int) bool {
 // stripped mode that AdjustDiagnostics resolves to the first
 // absolute line of the file. The fallback used to be a flat
 // "1", which landed on the first body line in stripped mode
-// and could be silently dropped by filterGeneratedDiags when
+// and could be silently dropped by FilterGeneratedDiags when
 // the document body started with a generated section
 // (PR #284 Copilot review).
 func fmDiagLine(f *lint.File, path []string, keyLines map[string]int) int {
@@ -664,6 +690,12 @@ func skipBelow(heads []DocHeading, rootLevel int) []DocHeading {
 	return out
 }
 
+// IsClaimed reports whether idx is a member of the claimed set.
+func IsClaimed(claimed map[int]struct{}, idx int) bool {
+	_, ok := claimed[idx]
+	return ok
+}
+
 // validateScopes walks scopes (the listed children of a single level)
 // against docHeads starting at docIdx. expectedLevel is the heading
 // level these scopes should appear at. Returns the new docIdx
@@ -679,7 +711,7 @@ func validateScopes(
 	mkDiag MakeDiag,
 ) (int, []lint.Diagnostic) {
 	var diags []lint.Diagnostic
-	claimed := make(map[int]bool)
+	claimed := make(map[int]struct{})
 	claimCounts := make(map[int]int)
 	allowExtra := false
 
@@ -688,15 +720,15 @@ func validateScopes(
 			// The preamble has no heading to match. Its rules: are
 			// applied by the per-scope walker in MDS020 against the
 			// [parent-start, first-child-heading) line range.
-			claimed[i] = true
+			claimed[i] = struct{}{}
 			continue
 		}
 		if isSlotMatcher(sc.Matcher) {
 			allowExtra = true
-			claimed[i] = true
+			claimed[i] = struct{}{}
 			continue
 		}
-		if claimed[i] {
+		if IsClaimed(claimed, i) {
 			continue
 		}
 		newIdx, scDiags, claimedThis := matchScope(
@@ -706,7 +738,7 @@ func validateScopes(
 		docIdx = newIdx
 		if claimedThis {
 			allowExtra = false
-		} else if !claimed[i] && sc.Required() {
+		} else if !IsClaimed(claimed, i) && sc.Required() {
 			// Anchor the missing section at the heading it should
 			// follow (the preceding document heading), so the
 			// squiggle lands where the section belongs rather than
@@ -785,8 +817,8 @@ func outOfOrderDiag(heading, expectedAfter string, sch *Schema) SchemaDiagnostic
 func levelMismatchSchemaDiag(text string, expectedLevel, actualLevel int, sch *Schema) SchemaDiagnostic {
 	return SchemaDiagnostic{
 		Field:     text,
-		Actual:    fmt.Sprintf("h%d", actualLevel),
-		Expected:  fmt.Sprintf("h%d", expectedLevel),
+		Actual:    "h" + strconv.Itoa(actualLevel),
+		Expected:  "h" + strconv.Itoa(expectedLevel),
 		SchemaRef: schemaRef(sch, ""),
 	}
 }
@@ -800,7 +832,7 @@ func levelMismatchSchemaDiag(text string, expectedLevel, actualLevel int, sch *S
 // closed: flagged as unexpected in closed scopes, silently
 // consumed in open ones.
 func handleLeftoverHeadings(
-	f *lint.File, sch *Schema, scopes []Scope, claimed map[int]bool, claimCounts map[int]int,
+	f *lint.File, sch *Schema, scopes []Scope, claimed map[int]struct{}, claimCounts map[int]int,
 	docHeads []DocHeading, docIdx, expectedLevel int,
 	closed, allowExtra bool, docFM map[string]any, mkDiag MakeDiag,
 ) (int, []lint.Diagnostic) {
@@ -875,11 +907,11 @@ func handleLeftoverHeadings(
 // Unbounded matchers (`max == 0`) never exceed; they return
 // `(idx, false)` so callers can still detect non-contiguity.
 func claimedScopeMatches(
-	scopes []Scope, dh DocHeading, claimed map[int]bool,
+	scopes []Scope, dh DocHeading, claimed map[int]struct{},
 	claimCounts map[int]int, docFM map[string]any,
 ) (int, bool) {
 	for i, sc := range scopes {
-		if !claimed[i] {
+		if !IsClaimed(claimed, i) {
 			continue
 		}
 		if sc.Preamble || isSlotMatcher(sc.Matcher) {
@@ -914,14 +946,14 @@ func claimedScopeMatches(
 func claimLateScope(
 	f *lint.File, sch *Schema, scopes []Scope, idx, expectedLevel int,
 	docHeads []DocHeading, docIdx int,
-	claimed map[int]bool, claimCounts map[int]int,
+	claimed map[int]struct{}, claimCounts map[int]int,
 	docFM map[string]any, mkDiag MakeDiag,
 ) (int, []lint.Diagnostic) {
 	sc := scopes[idx]
 	dh := docHeads[docIdx]
 	diags := []lint.Diagnostic{outOfOrderDiag(
 		formatHeading(dh.Level, dh.Text), "", sch).Emit(mkDiag, f.Path, dh.Line)}
-	claimed[idx] = true
+	claimed[idx] = struct{}{}
 	claimCounts[idx]++
 	docIdx++
 	if len(sc.Sections) > 0 {
@@ -938,11 +970,11 @@ func claimLateScope(
 // non-slot, non-preamble scope whose matcher accepts dh, or -1
 // when no listed scope is a candidate.
 func unclaimedListedScope(
-	scopes []Scope, dh DocHeading, claimed map[int]bool,
+	scopes []Scope, dh DocHeading, claimed map[int]struct{},
 	docFM map[string]any,
 ) int {
 	for i, sc := range scopes {
-		if claimed[i] || sc.Preamble || isSlotMatcher(sc.Matcher) {
+		if IsClaimed(claimed, i) || sc.Preamble || isSlotMatcher(sc.Matcher) {
 			continue
 		}
 		if scopeMatchesHeading(sc, dh, docFM) {
@@ -961,7 +993,7 @@ func unclaimedListedScope(
 func matchScope(
 	f *lint.File, sch *Schema, scopes []Scope, idx, expectedLevel int,
 	docHeads []DocHeading, docIdx int,
-	claimed map[int]bool, claimCounts map[int]int,
+	claimed map[int]struct{}, claimCounts map[int]int,
 	allowExtra, closed bool,
 	docFM map[string]any, mkDiag MakeDiag,
 ) (int, []lint.Diagnostic, bool) {
@@ -1006,8 +1038,8 @@ func (s *matchRun) finishRun() {
 	}
 	// A run that consumed fewer than min matches falls short of
 	// the matcher's cardinality contract. The outer loop's
-	// missing-required check only fires when `claimed[idx]` is
-	// false; a partially-claimed run needs its own diagnostic.
+	// missing-required check only fires when `claimed[idx]` is unset;
+	// a partially-claimed run needs its own diagnostic.
 	if s.consumed > 0 && s.consumed < s.min {
 		s.diags = append(s.diags, s.mkDiag(s.f.Path, 1,
 			fmt.Sprintf("section %q matched %d times, required at least %d",
@@ -1066,7 +1098,7 @@ type matchRun struct {
 	scopes        []Scope
 	idx           int
 	expectedLevel int
-	claimed       map[int]bool
+	claimed       map[int]struct{}
 	claimCounts   map[int]int
 	allowExtra    bool
 	closed        bool
@@ -1159,7 +1191,7 @@ func (s *matchRun) claimMatch(docHeads []DocHeading, docIdx int, captured string
 	sc := s.scopes[s.idx]
 	dh := docHeads[docIdx]
 	s.diags = append(s.diags, levelDiagIfNeeded(s.f, s.sch, dh, s.expectedLevel, s.mkDiag)...)
-	s.claimed[s.idx] = true
+	s.claimed[s.idx] = struct{}{}
 	s.claimCounts[s.idx]++
 	if len(sc.Sections) > 0 {
 		newIdx, childDiags := validateScopes(
@@ -1283,11 +1315,11 @@ func laterScopeMatches(
 // keeps broad matchers in the search.
 func anyLaterScopeClaims(
 	scopes []Scope, startIdx int, dh DocHeading,
-	claimed map[int]bool, docFM map[string]any,
+	claimed map[int]struct{}, docFM map[string]any,
 ) bool {
 	for i := startIdx; i < len(scopes); i++ {
 		sc := scopes[i]
-		if claimed[i] || sc.Preamble || isSlotMatcher(sc.Matcher) {
+		if IsClaimed(claimed, i) || sc.Preamble || isSlotMatcher(sc.Matcher) {
 			continue
 		}
 		if scopeMatchesHeading(sc, dh, docFM) {
@@ -1307,11 +1339,11 @@ func anyLaterScopeClaims(
 // catch-all steal a heading from a specific predecessor.
 func claimsLaterLiteral(
 	scopes []Scope, startIdx int, dh DocHeading,
-	claimed map[int]bool, docFM map[string]any,
+	claimed map[int]struct{}, docFM map[string]any,
 ) bool {
 	for i := startIdx; i < len(scopes); i++ {
 		sc := scopes[i]
-		if claimed[i] || sc.Preamble ||
+		if IsClaimed(claimed, i) || sc.Preamble ||
 			isSlotMatcher(sc.Matcher) || isBroadMatcher(sc.Matcher) {
 			continue
 		}
@@ -1363,7 +1395,7 @@ func levelDiagIfNeeded(
 func claimOutOfOrder(
 	f *lint.File, sch *Schema, scopes []Scope, idx, ooIdx, expectedLevel int,
 	docHeads []DocHeading, docIdx int,
-	claimed map[int]bool, claimCounts map[int]int,
+	claimed map[int]struct{}, claimCounts map[int]int,
 	docFM map[string]any, mkDiag MakeDiag,
 ) (int, []lint.Diagnostic) {
 	sc := scopes[idx]
@@ -1397,7 +1429,7 @@ func claimOutOfOrder(
 					"natural position for sequential checks",
 				formatHeading(expectedLevel, displayHeading(ooSc)))))
 	}
-	claimed[ooIdx] = true
+	claimed[ooIdx] = struct{}{}
 	claimCounts[ooIdx]++
 	docIdx++
 	if len(ooSc.Sections) > 0 {
@@ -1442,11 +1474,11 @@ func countMatchingRun(
 // minIdx that matches dh.
 func findOutOfOrderIdx(
 	scopes []Scope, dh DocHeading,
-	claimed map[int]bool, minIdx int, docFM map[string]any,
+	claimed map[int]struct{}, minIdx int, docFM map[string]any,
 ) int {
 	for i := minIdx; i < len(scopes); i++ {
 		sc := scopes[i]
-		if claimed[i] || sc.Preamble || isSlotMatcher(sc.Matcher) {
+		if IsClaimed(claimed, i) || sc.Preamble || isSlotMatcher(sc.Matcher) {
 			continue
 		}
 		if scopeMatchesHeading(sc, dh, docFM) {
@@ -1479,7 +1511,7 @@ func findOutOfOrderIdx(
 func ScopeRunIndices(
 	scopes []Scope, currentIdx int, heads []DocHeading,
 	expectedLevel, parentStart, parentEnd int,
-	claimed map[int]bool, docFM map[string]any,
+	claimed map[int]struct{}, docFM map[string]any,
 ) []int {
 	sc := scopes[currentIdx]
 	if sc.Matcher == nil {
@@ -1510,7 +1542,7 @@ func ScopeRunIndices(
 func scanScopeRunAtLevel(
 	scopes []Scope, currentIdx int, heads []DocHeading,
 	expectedLevel, parentStart, parentEnd int,
-	claimed map[int]bool, docFM map[string]any,
+	claimed map[int]struct{}, docFM map[string]any,
 ) []int {
 	sc := scopes[currentIdx]
 	min, max := sc.Matcher.Repeat.Bounds()
@@ -1518,7 +1550,7 @@ func scanScopeRunAtLevel(
 	var out []int
 	started := false
 	for i, h := range heads {
-		if claimed[i] {
+		if IsClaimed(claimed, i) {
 			continue
 		}
 		if h.Line < parentStart || h.Line >= parentEnd {
@@ -1560,13 +1592,13 @@ func scanScopeRunAtLevel(
 func firstWrongLevelMatch(
 	sc Scope, heads []DocHeading,
 	expectedLevel, parentStart, parentEnd int,
-	claimed map[int]bool, docFM map[string]any,
+	claimed map[int]struct{}, docFM map[string]any,
 ) int {
 	if isBroadMatcher(sc.Matcher) {
 		return -1
 	}
 	for i, h := range heads {
-		if claimed[i] {
+		if IsClaimed(claimed, i) {
 			continue
 		}
 		if h.Line < parentStart || h.Line >= parentEnd {
@@ -1634,17 +1666,17 @@ func formatHeading(level int, text string) string {
 func validateFilename(
 	f *lint.File, sch *Schema, mkDiag MakeDiag,
 ) []lint.Diagnostic {
-	pattern := sch.Filename
-	if pattern == "" {
+	patterns := sch.Filename
+	if len(patterns) == 0 {
 		return nil
 	}
 	// Filename and path diagnostics describe the document as a
 	// whole, not a body line; use the non-body anchor so the
-	// engine's filterGeneratedDiags can't drop them when the
+	// checker.FilterGeneratedDiags can't drop them when the
 	// document body starts with a generated section.
 	anchor := nonBodyDiagLine(f)
 	base := filepath.Base(f.Path)
-	matched, err := filepath.Match(pattern, base)
+	matched, badPattern, err := MatchFilename(patterns, base)
 	if err != nil {
 		// Malformed glob in the schema. Surface it via the same
 		// SchemaDiagnostic shape so the message carries a
@@ -1652,7 +1684,7 @@ func validateFilename(
 		// offending pattern.
 		d := SchemaDiagnostic{
 			Field:     "filename pattern",
-			Actual:    fmt.Sprintf("%q", pattern),
+			Actual:    strconv.Quote(badPattern),
 			Expected:  "valid glob",
 			Hint:      err.Error(),
 			SchemaRef: schemaRef(sch, ""),
@@ -1665,11 +1697,13 @@ func validateFilename(
 		// requirement, which filepath.Match does not accept. The
 		// wording also lines up with the kind-level `path-pattern`
 		// diagnostic ("path matching glob ...") so the user
-		// vocabulary is consistent across both surfaces.
+		// vocabulary is consistent across both surfaces. With
+		// several globs configured the "expected" clause lists them
+		// all so the OR nature is visible.
 		d := SchemaDiagnostic{
 			Field:     "filename",
-			Actual:    fmt.Sprintf("%q", base),
-			Expected:  fmt.Sprintf("filename matching glob %s", pattern),
+			Actual:    strconv.Quote(base),
+			Expected:  FilenameExpected(patterns),
 			SchemaRef: schemaRef(sch, ""),
 		}
 		return []lint.Diagnostic{d.Emit(mkDiag, f.Path, anchor)}

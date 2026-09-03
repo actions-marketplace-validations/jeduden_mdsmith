@@ -14,6 +14,7 @@ import (
 	"github.com/jeduden/mdsmith/internal/checker"
 	"github.com/jeduden/mdsmith/internal/config"
 	"github.com/jeduden/mdsmith/internal/explain"
+	"github.com/jeduden/mdsmith/internal/foreignregion"
 	"github.com/jeduden/mdsmith/internal/gitignore"
 	"github.com/jeduden/mdsmith/internal/lint"
 	vlog "github.com/jeduden/mdsmith/internal/log"
@@ -59,11 +60,113 @@ type Fixer struct {
 	// read-only tricks. Production callers leave it nil.
 	WriteFile func(path string, data []byte, perm os.FileMode) error
 
+	// ParseFile, when non-nil, replaces lint.NewFile for
+	// applyFixPasses' per-pass parse step. Tests inject an error-
+	// returning function to exercise the parse-failure branch —
+	// lint.NewFile itself never errors with the current
+	// implementation, so there is no real input that reaches it.
+	// Production callers leave it nil.
+	ParseFile func(path string, source []byte) (*lint.File, error)
+
 	// gitignoreCache caches gitignore matchers by directory so the
 	// matcher tree is walked once per directory across a fix run,
 	// matching the engine.Runner cache contract that catalog and
 	// other gitignore-aware rules expect.
 	gitignoreCache map[string]*gitignore.Matcher
+
+	// effCache memoizes the effective rule config by config signature
+	// (config.EffectiveSignature) across a fix run. fixOnce walks paths
+	// sequentially in one goroutine, so a plain map needs no lock —
+	// mirrors engine.effectiveCache, which needs sync.Map only because
+	// the engine's workers run concurrently.
+	effCache map[string]map[string]config.RuleCfg
+
+	// confCache memoizes the configured (cloned + settings-applied)
+	// enabled rule list, and its FixableRule subset, per config
+	// signature — mirrors engine.runResolve.confCache. A fix run over
+	// many files that share one config configures its rules (including
+	// any rule-owned regexp.Compile in ApplySettings) once instead of
+	// once per file, and once instead of once per fixFile call site
+	// (fixableRules plus the pre- and post-fix CheckRules calls all
+	// used to reconfigure independently).
+	confCache map[string]fixerConfigured
+
+	// categoryByRule memoizes the rule-name → category lookup
+	// effectiveCachedForFix's ApplyCategories call needs, built once
+	// (lazily) instead of once per file.
+	categoryByRule map[string]string
+}
+
+// fixerConfigured is one confCache entry: the enabled, configured rule
+// list for a config signature (from checker.ConfigureEnabledRules), its
+// FixableRule subset sorted by ID, and any settings-application errors
+// produced while configuring it.
+type fixerConfigured struct {
+	all     []rule.Rule
+	fixable []rule.FixableRule
+	errs    []error
+}
+
+// effectiveCachedForFix is fixFile's hot-path config resolver: it
+// memoizes the effective rule config on f.effCache keyed by the file's
+// config signature, so a fix run over many files sharing one config
+// resolves it once instead of once per file. Returns the signature key
+// alongside the config so the caller can reuse it for configuredFor
+// without recomputing it. Mirrors engine.Runner.effectiveCached.
+func (f *Fixer) effectiveCachedForFix(
+	path string, fmKinds []string, fmFields map[string]any,
+) (map[string]config.RuleCfg, string) {
+	key, kinds := config.EffectiveSignature(f.Config, path, fmKinds, fmFields)
+	if v, ok := f.effCache[key]; ok {
+		return v, key
+	}
+	effective, categories, explicit := config.EffectiveAllForKinds(f.Config, path, kinds)
+	res := config.ApplyCategories(effective, categories, f.categoryLookup(), explicit)
+	if f.effCache == nil {
+		f.effCache = make(map[string]map[string]config.RuleCfg)
+	}
+	f.effCache[key] = res
+	return res, key
+}
+
+// categoryLookup builds (once, lazily) the rule-name → category map
+// ApplyCategories needs, so a fix run over many files builds it once
+// instead of once per file.
+func (f *Fixer) categoryLookup() func(string) string {
+	if f.categoryByRule == nil {
+		f.categoryByRule = make(map[string]string, len(f.Rules))
+		for _, rl := range f.Rules {
+			f.categoryByRule[rl.Name()] = rl.Category()
+		}
+	}
+	m := f.categoryByRule
+	return func(name string) string { return m[name] }
+}
+
+// configuredFor returns the configured enabled rule list (and its
+// FixableRule subset) for the effective config identified by key,
+// building and memoizing it on first use. Reusing a configured rule
+// across files and across fixFile's own call sites is safe for the same
+// reason checker.CheckConfiguredRules' doc comment gives: a rule's
+// Check/Fix holds no state between calls.
+func (f *Fixer) configuredFor(key string, effective map[string]config.RuleCfg) fixerConfigured {
+	if fc, ok := f.confCache[key]; ok {
+		return fc
+	}
+	all, errs := checker.ConfigureEnabledRules(f.Rules, effective)
+	fixable := make([]rule.FixableRule, 0, len(all))
+	for _, rl := range all {
+		if fr, ok := rl.(rule.FixableRule); ok {
+			fixable = append(fixable, fr)
+		}
+	}
+	sort.Slice(fixable, func(i, j int) bool { return fixable[i].ID() < fixable[j].ID() })
+	fc := fixerConfigured{all: all, fixable: fixable, errs: errs}
+	if f.confCache == nil {
+		f.confCache = make(map[string]fixerConfigured)
+	}
+	f.confCache[key] = fc
+	return fc
 }
 
 // cachedGitignore returns a *gitignore.Matcher for the given directory,
@@ -301,16 +404,22 @@ func (f *Fixer) fixFile(path string) (
 		return nil, nil, "", false, []error{prepErr}
 	}
 
-	effective := f.effectiveWithCategories(path, fmKinds, fmFields)
+	effective, key := f.effectiveCachedForFix(path, fmKinds, fmFields)
 
 	f.logRules(effective)
 
-	fixable, settingsErrs := f.fixableRules(effective)
+	fc := f.configuredFor(key, effective)
 	lf.GeneratedRanges = gensection.FindAllGeneratedRanges(lf)
-	beforeDiags, checkErrs := checker.CheckRules(lf, f.Rules, effective)
-	errs = append(errs, append(settingsErrs, checkErrs...)...)
+	foreignDiags := foreignregion.Apply(lf, f.Config, path)
+	beforeDiags := checker.CheckConfiguredRules(lf, fc.all, false, 1)
+	beforeDiags = append(beforeDiags, foreignDiags...)
+	errs = append(errs, fc.errs...)
 
-	current := f.applyFixPasses(path, lf.Source, fixable, lf, dirFS, &errs)
+	current := f.applyFixPasses(path, lf.Source, fc.fixable, lf, dirFS, &errs)
+	// Undo any fixer edit that landed inside a declared foreign region —
+	// the owning generator's bytes must round-trip unchanged even when a
+	// fixer ignores GeneratedRanges (e.g. trailing-space trimming).
+	current = foreignregion.Restore(lf.Source, current, config.EffectiveForeignRegions(f.Config, path))
 
 	bytesChanged := !bytes.Equal(lf.Source, current)
 	var modified string
@@ -327,12 +436,12 @@ func (f *Fixer) fixFile(path string) (
 		modified = path
 	}
 
-	finalFile := buildPostFixFile(path, current, lf, dirFS)
+	finalFile := buildPostFixFile(path, current, lf, dirFS, f.Config)
 
-	diags, checkErrs := checker.CheckRules(finalFile, f.Rules, effective)
-	errs = append(errs, checkErrs...)
+	diags := checker.CheckConfiguredRules(finalFile, fc.all, false, 1)
+	diags = append(diags, foreignregion.Diagnostics(finalFile, f.Config, path)...)
 	if f.DryRun {
-		diags = subtractPredictedDryRunFixes(diags, fixable, finalFile)
+		diags = subtractPredictedDryRunFixes(diags, fc.fixable, finalFile)
 	}
 	if f.Explain {
 		explain.Attach(diags, f.Config, path, fmKinds, fmFields)
@@ -499,7 +608,7 @@ func countByRule(diags []lint.Diagnostic) map[string]int {
 // different post-fix bytes than `mdsmith check` would have validated,
 // and side-effect-only fixers (e.g. MDS048 checking DryRun) would see
 // DryRun=false on re-parsed files and ignore the contract.
-func hydrateLintFile(parsed *lint.File, lf *lint.File, dirFS fs.FS) {
+func hydrateLintFile(parsed *lint.File, lf *lint.File, dirFS fs.FS, cfg *config.Config, path string) {
 	parsed.FS = dirFS
 	parsed.RootFS = lf.RootFS
 	parsed.RootDir = lf.RootDir
@@ -510,18 +619,36 @@ func hydrateLintFile(parsed *lint.File, lf *lint.File, dirFS fs.FS) {
 	parsed.DryRun = lf.DryRun
 	parsed.GitignoreFunc = lf.GitignoreFunc
 	parsed.GeneratedRanges = gensection.FindAllGeneratedRanges(parsed)
+	// Extend the exclusion set with foreign-region spans so fixable
+	// rules skip a marker pair another generator owns, exactly as the
+	// pre-fix lf did (see fixFile).
+	foreignregion.AppendRanges(parsed, cfg, path)
 }
 
 // buildPostFixFile parses post-fix bytes and hydrates them with the
 // per-file context from lf so the post-fix CheckRules call sees the
 // same lint.File the runner would.
-func buildPostFixFile(path string, source []byte, lf *lint.File, dirFS fs.FS) *lint.File {
+func buildPostFixFile(path string, source []byte, lf *lint.File, dirFS fs.FS, cfg *config.Config) *lint.File {
 	finalFile, _ := lint.NewFile(path, source) // NewFile never errors with current implementation
-	hydrateLintFile(finalFile, lf, dirFS)
+	hydrateLintFile(finalFile, lf, dirFS, cfg, path)
 	return finalFile
 }
 
-// applyFixPasses repeatedly applies fixable rules until the content stabilizes.
+// applyFixPasses repeatedly applies fixable rules until the content
+// stabilizes.
+//
+// Within a pass, parsedFile is reused across fixable rules until a
+// Fix call actually changes current: most rules in most passes find
+// nothing to fix (the common case is a mostly-clean file, or the tail
+// of rules that never apply), so re-parsing before every single
+// rule's Check — as if every rule had just changed the content — was
+// an O(fixable-rule-count) reparse of unchanged bytes. Setting
+// parsedFile to nil right after a Fix call still forces a fresh parse
+// before the next rule's Check, so every rule keeps seeing a File
+// that reflects the bytes as of its own Check call — identical
+// results, dozens fewer parses on a file with few or no fixes. See
+// docs/development/high-performance-go.md, "Skip work you don't
+// need".
 func (f *Fixer) applyFixPasses(
 	path string, source []byte, fixable []rule.FixableRule, lf *lint.File, dirFS fs.FS, errs *[]error,
 ) []byte {
@@ -530,13 +657,14 @@ func (f *Fixer) applyFixPasses(
 	for pass := 0; pass < maxPasses; pass++ {
 		f.log().Printf("fix: pass %d on %s", pass+1, path)
 		before := current
+		var parsedFile *lint.File
 		for _, fr := range fixable {
-			parsedFile, err := lint.NewFile(path, current)
+			var err error
+			parsedFile, err = f.parsedFileForPass(path, current, parsedFile, lf, dirFS)
 			if err != nil {
 				*errs = append(*errs, fmt.Errorf("parsing %q: %w", path, err))
 				break
 			}
-			hydrateLintFile(parsedFile, lf, dirFS)
 
 			diags := fr.Check(parsedFile)
 			if len(diags) == 0 {
@@ -544,6 +672,7 @@ func (f *Fixer) applyFixPasses(
 			}
 
 			current = fr.Fix(parsedFile)
+			parsedFile = nil
 		}
 		if bytes.Equal(before, current) {
 			f.log().Printf("fix: %s stable after %d passes", path, pass+1)
@@ -553,13 +682,49 @@ func (f *Fixer) applyFixPasses(
 	return current
 }
 
+// parsedFileForPass returns parsedFile unchanged when it is still
+// valid for current (the common case: most rules in most passes find
+// nothing to fix, so the bytes never move between one rule's Check
+// and the next's), or parses and hydrates a fresh *lint.File when
+// parsedFile is nil — either the first rule in a pass, or right after
+// a Fix call changed current. See applyFixPasses' doc comment for why
+// this reuse is safe.
+func (f *Fixer) parsedFileForPass(
+	path string, current []byte, parsedFile *lint.File, lf *lint.File, dirFS fs.FS,
+) (*lint.File, error) {
+	if parsedFile != nil {
+		return parsedFile, nil
+	}
+	parseFile := lint.NewFile
+	if f.ParseFile != nil {
+		parseFile = f.ParseFile
+	}
+	parsedFile, err := parseFile(path, current)
+	if err != nil {
+		return nil, err
+	}
+	hydrateLintFile(parsedFile, lf, dirFS, f.Config, path)
+	return parsedFile, nil
+}
+
+// disabledFixerLogger is the shared zero-value logger (*Fixer).log
+// returns when no Logger is configured — the common case, since -v is
+// off by default. Every caller only reads Enabled or calls Printf,
+// which no-ops before touching the logger's mutex when Enabled is
+// false (internal/log.Logger.Printf), so nothing ever mutates this
+// instance; sharing it instead of allocating a fresh &vlog.Logger{}
+// on every call avoids one allocation per file per fix pass (log runs
+// via f.log().Printf in Fix's per-file, per-pass loop). Mirrors
+// internal/engine's identical (*Runner).log fix.
+var disabledFixerLogger = &vlog.Logger{}
+
 // log returns the fixer's logger. If no logger is set, it returns a
 // disabled logger so callers don't need nil checks.
 func (f *Fixer) log() *vlog.Logger {
 	if f.Logger != nil {
 		return f.Logger
 	}
-	return &vlog.Logger{}
+	return disabledFixerLogger
 }
 
 // logRules logs each enabled fixable rule in the effective config.
@@ -596,12 +761,18 @@ func (f *Fixer) prepareFile(path string, source []byte) (*lint.File, fs.FS, []st
 		// workspace-relative for config glob matching.
 		dirFS = f.SourceFS
 	} else {
-		dirFS = os.DirFS(dir)
+		dirFS = lint.OpenRootFS(dir)
 	}
 	lf.FS = dirFS
 	gitignoreDir := dir
 	if f.RootDir != "" {
-		lf.SetRootDir(f.RootDir)
+		if dir == f.RootDir {
+			// Reuse the already-opened FS; avoid a second os.OpenRoot for the same dir.
+			lf.RootDir = f.RootDir
+			lf.RootFS = lf.FS
+		} else {
+			lf.SetRootDir(f.RootDir)
+		}
 		gitignoreDir = f.RootDir
 	}
 	gd := gitignoreDir // capture for closure

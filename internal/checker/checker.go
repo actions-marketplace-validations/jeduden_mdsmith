@@ -6,6 +6,7 @@ package checker
 
 import (
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/jeduden/mdsmith/internal/config"
@@ -13,6 +14,49 @@ import (
 	"github.com/jeduden/mdsmith/internal/rule"
 	"github.com/jeduden/mdsmith/pkg/goldmark/ast"
 )
+
+// PanicDiagnostic converts a recovered panic value into an InternalError diagnostic with stack trace.
+func PanicDiagnostic(path string, rv any) lint.Diagnostic {
+	stack := debug.Stack()
+	return lint.Diagnostic{
+		File:     path,
+		Line:     1,
+		RuleID:   "internal-panic",
+		RuleName: "internal-panic",
+		Severity: lint.Error,
+		Message:  fmt.Sprintf("internal error: rule panic: %v\n%s", rv, stack),
+	}
+}
+
+// ConfigureEnabledRules returns the enabled rules from rules, each
+// configured with its effective settings, in input order, plus any
+// settings-application errors. The result depends only on (rules,
+// effective) — never on the File — so a caller that lints many files
+// under one config can configure once and reuse the slice across files
+// (via CheckConfiguredRules) instead of re-cloning every Configurable
+// rule per file. Reuse is safe because a rule's Check carries no state
+// across calls: the engine already shares the no-settings clones across
+// every file in a worker, so sharing the settings clones too is the same
+// contract.
+func ConfigureEnabledRules(
+	rules []rule.Rule, effective map[string]config.RuleCfg,
+) ([]rule.Rule, []error) {
+	configured := make([]rule.Rule, 0, len(rules))
+	var errs []error
+	for _, rl := range rules {
+		cfg, ok := effective[rl.Name()]
+		if !ok || !cfg.Enabled {
+			continue
+		}
+		cr, err := ConfigureRule(rl, cfg)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		configured = append(configured, cr)
+	}
+	return configured, errs
+}
 
 // ConfigureRule clones a rule and applies settings from cfg if the rule
 // implements Configurable and cfg has settings. Returns the configured
@@ -56,7 +100,24 @@ func CheckRulesWithIntraFile(
 	skipSourceContext bool,
 	intraFileCap int,
 ) ([]lint.Diagnostic, []error) {
-	slots, nodeCheckers, blockCheckers, errs := classifyRules(f, rules, effective)
+	configured, errs := ConfigureEnabledRules(rules, effective)
+	return CheckConfiguredRules(f, configured, skipSourceContext, intraFileCap), errs
+}
+
+// CheckConfiguredRules runs an already-configured, all-enabled rule list
+// (from ConfigureEnabledRules) against f. It is CheckRulesWithIntraFile
+// without the per-file rule-configuration pass, so a caller that caches
+// the configured rules across files sharing one config pays the clone +
+// ApplySettings cost once per config rather than once per file. The
+// configuration errors are returned by ConfigureEnabledRules at cache
+// build time, so this function returns diagnostics only.
+func CheckConfiguredRules(
+	f *lint.File,
+	configured []rule.Rule,
+	skipSourceContext bool,
+	intraFileCap int,
+) []lint.Diagnostic {
+	slots, nodeCheckers, blockCheckers := classifyConfiguredSlots(f, configured)
 
 	// Run non-NodeChecker rules. With cap=1 the loop stays serial and
 	// matches the legacy code path byte-for-byte. With cap>1, slots
@@ -82,7 +143,14 @@ func CheckRulesWithIntraFile(
 		runBlockCheckers(f, blockCheckers)
 	}
 
+	total := 0
+	for _, s := range slots {
+		total += len(s.diags)
+	}
 	var diags []lint.Diagnostic
+	if total > 0 {
+		diags = make([]lint.Diagnostic, 0, total)
+	}
 	for _, s := range slots {
 		diags = append(diags, s.diags...)
 	}
@@ -92,7 +160,7 @@ func CheckRulesWithIntraFile(
 	if !skipSourceContext {
 		PopulateSourceContext(f, diags, 2)
 	}
-	return diags, errs
+	return diags
 }
 
 // ruleSlot is one rule's diagnostic bucket. NodeCheckers append to it
@@ -130,28 +198,32 @@ type ruleSlot struct {
 func classifyRules(
 	f *lint.File, rules []rule.Rule, effective map[string]config.RuleCfg,
 ) (slots []ruleSlot, nodeCheckers, blockCheckers []*ruleSlot, errs []error) {
-	// Pre-size at the registered-rule count. In production all but a
-	// handful of rules are enabled by default. Allocating slots as a
-	// value slice (rather than a slice of `*ruleSlot`) collapses the
-	// 50+ per-file pointer allocations the previous shape paid into
-	// one backing-array allocation. nodeCheckers stays a pointer
-	// slice but references entries by `&slots[i]`, which is stable
-	// because the slots cap was pre-set to len(rules) — no append
-	// grows the backing, so the index-derived pointers do not
-	// dangle.
+	configured, errs := ConfigureEnabledRules(rules, effective)
+	slots, nodeCheckers, blockCheckers = classifyConfiguredSlots(f, configured)
+	return slots, nodeCheckers, blockCheckers, errs
+}
+
+// classifyConfiguredSlots is the per-file half of classifyRules: it splits
+// an already-configured, all-enabled rule list (from ConfigureEnabledRules)
+// into per-rule slots and the node/block dispatch subsets. The expensive
+// clone + ApplySettings work is done once up front by the caller, so the
+// only per-file cost here is the cheap, astNil-dependent slot typing —
+// which lets a multi-file run that shares one config configure each rule
+// once instead of once per file.
+func classifyConfiguredSlots(
+	f *lint.File, configured []rule.Rule,
+) (slots []ruleSlot, nodeCheckers, blockCheckers []*ruleSlot) {
+	// Pre-size at the configured-rule count. Allocating slots as a value
+	// slice (rather than a slice of `*ruleSlot`) collapses the 50+ per-file
+	// pointer allocations the previous shape paid into one backing-array
+	// allocation. nodeCheckers stays a pointer slice but references entries
+	// by `&slots[i]`, which is stable because the slots cap was pre-set to
+	// len(configured) — no append grows the backing, so the index-derived
+	// pointers do not dangle.
 	astNil := f != nil && f.AST == nil
-	slots = make([]ruleSlot, 0, len(rules))
-	for _, rl := range rules {
-		cfg, ok := effective[rl.Name()]
-		if !ok || !cfg.Enabled {
-			continue
-		}
-		checkRule, err := ConfigureRule(rl, cfg)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		slots = append(slots, classifySlot(checkRule, astNil))
+	slots = make([]ruleSlot, 0, len(configured))
+	for _, cr := range configured {
+		slots = append(slots, classifySlot(cr, astNil))
 	}
 	for i := range slots {
 		switch {
@@ -167,7 +239,7 @@ func classifyRules(
 			nodeCheckers = append(nodeCheckers, &slots[i])
 		}
 	}
-	return slots, nodeCheckers, blockCheckers, errs
+	return slots, nodeCheckers, blockCheckers
 }
 
 // classifySlot builds one rule's slot. On a parse-skipped File (astNil)
@@ -181,6 +253,18 @@ func classifySlot(checkRule rule.Rule, astNil bool) ruleSlot {
 		if astNil {
 			if bc, ok := checkRule.(rule.BlockChecker); ok {
 				return ruleSlot{bc: bc}
+			}
+			// An InlineChecker serves the nil-AST path from its own Check
+			// (reading lint.InlineBlocks), so route it to the plain-Check
+			// slot rather than dropping it.
+			if ic, ok := checkRule.(rule.InlineChecker); ok && ic.InlineCapable() {
+				return ruleSlot{check: checkRule}
+			}
+			// A LinesChecker (the list rules) likewise serves the nil-AST
+			// path from its own Check (re-deriving list structure from
+			// f.Lines via listscan); route it to the plain-Check slot too.
+			if lc, ok := checkRule.(rule.LinesChecker); ok && lc.LinesCapable() {
+				return ruleSlot{check: checkRule}
 			}
 			return ruleSlot{}
 		}
@@ -399,6 +483,11 @@ func runNonNodeCheckers(f *lint.File, slots []ruleSlot, intraFileCap int) {
 		go func(slot *ruleSlot) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer func() {
+				if rv := recover(); rv != nil {
+					slot.diags = []lint.Diagnostic{PanicDiagnostic(f.Path, rv)}
+				}
+			}()
 			slot.diags = slot.check.Check(f)
 		}(&slots[i])
 	}

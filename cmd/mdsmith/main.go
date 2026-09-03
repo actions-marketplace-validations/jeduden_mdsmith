@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 
 	flag "github.com/spf13/pflag"
 
@@ -15,11 +16,9 @@ import (
 	"github.com/jeduden/mdsmith/internal/discovery"
 	"github.com/jeduden/mdsmith/internal/lint"
 	vlog "github.com/jeduden/mdsmith/internal/log"
-	"github.com/jeduden/mdsmith/internal/markdownlint"
+	"github.com/jeduden/mdsmith/internal/mdpath"
 	"github.com/jeduden/mdsmith/internal/output"
 	"github.com/jeduden/mdsmith/internal/profiling"
-	"github.com/jeduden/mdsmith/internal/query"
-	"github.com/jeduden/mdsmith/internal/yamlutil"
 	mdsmith "github.com/jeduden/mdsmith/pkg/mdsmith"
 
 	// Import every production rule package via the shared barrel so
@@ -49,7 +48,7 @@ Commands:
   merge-driver      Git merge driver for regenerable sections
   pre-merge-commit  Install/manage pre-merge-commit hook
   kinds             Inspect declared kinds and resolve effective config per file
-  init              Generate .mdsmith.yml (--from-markdownlint converts an existing config)
+  init              Generate .mdsmith.yml (--starter scaffolds; --from-markdownlint converts)
   lsp               Run the Language Server Protocol server on stdio
   trust             Review the .mdsmith.yml diff and trust the build pass on this clone
   version           Print version and exit
@@ -141,254 +140,6 @@ func printVersion() {
 	fmt.Printf("mdsmith %s\n", v)
 }
 
-// runQuery implements the "query" subcommand: select files by CUE
-// expression on front matter.
-type queryOptions struct {
-	nul          bool
-	verbose      bool
-	configPath   string
-	maxInputSize string
-}
-
-func parseQueryFlags(args []string) (queryOptions, []string, error) {
-	fs := flag.NewFlagSet("query", flag.ContinueOnError)
-	var opts queryOptions
-
-	fs.BoolVarP(&opts.nul, "null", "0", false, "NUL-delimit output (for xargs -0)")
-	fs.BoolVarP(&opts.verbose, "verbose", "v", false, "Print skipped files and reasons on stderr")
-	fs.StringVarP(&opts.configPath, "config", "c", "", "Override config file path")
-	fs.StringVar(&opts.maxInputSize, "max-input-size", "",
-		"Maximum file size to process (e.g. 2MB, 500KB, 0=unlimited)")
-
-	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "Usage: mdsmith list query [flags] <cue-expr> [files...]\n\n"+
-			"Print paths of Markdown files whose front matter satisfies a CUE expression.\n"+
-			"With no file arguments, searches the current directory recursively.\n\n"+
-			"Exit codes: 0 match, 1 no match, 2 error\n\nFlags:\n")
-		fs.PrintDefaults()
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return opts, nil, err
-	}
-	return opts, fs.Args(), nil
-}
-
-func runQuery(args []string) int {
-	opts, posArgs, err := parseQueryFlags(args)
-	if err != nil {
-		if code := reportFlagParseErr(err, os.Stderr, "mdsmith: list query"); code >= 0 {
-			return code
-		}
-	}
-
-	if len(posArgs) == 0 {
-		fmt.Fprintf(os.Stderr, "mdsmith: list query requires a CUE expression argument\n")
-		return 2
-	}
-
-	expr := posArgs[0]
-	fileArgs := posArgs[1:]
-
-	matcher, err := query.Compile(expr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
-		return 2
-	}
-
-	if len(fileArgs) == 0 {
-		fileArgs = []string{"."}
-	}
-
-	files, err := lint.ResolveFilesWithOpts(fileArgs, lint.ResolveOpts{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
-		return 2
-	}
-
-	cfg, _, err := loadConfig(opts.configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
-		return 2
-	}
-	maxBytes, err := resolveMaxInputBytes(cfg, opts.maxInputSize)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
-		return 2
-	}
-
-	delim := "\n"
-	if opts.nul {
-		delim = "\x00"
-	}
-
-	matched := queryFiles(matcher, files, delim, opts.verbose, maxBytes)
-	if matched > 0 {
-		return 0
-	}
-	return 1
-}
-
-// queryFiles tests each file against matcher and writes matching paths
-// to stdout. Returns the number of matches.
-func queryFiles(matcher *query.Matcher, files []string, delim string, verbose bool, maxBytes int64) int {
-	matched := 0
-	for _, f := range files {
-		fm, err := readFrontMatterRaw(f, maxBytes)
-		if err != nil {
-			if verbose {
-				fmt.Fprintf(os.Stderr, "skip %s: %v\n", f, err)
-			}
-			continue
-		}
-		if fm == nil {
-			if verbose {
-				fmt.Fprintf(os.Stderr, "skip %s: no front matter\n", f)
-			}
-			continue
-		}
-		if matcher.Match(fm) {
-			_, _ = fmt.Fprintf(os.Stdout, "%s%s", f, delim)
-			matched++
-		} else if verbose {
-			fmt.Fprintf(os.Stderr, "skip %s: expression not satisfied\n", f)
-		}
-	}
-	return matched
-}
-
-// readFrontMatterRaw reads a file, strips front matter, and
-// unmarshals YAML into map[string]any (preserving numeric types).
-func readFrontMatterRaw(path string, maxBytes int64) (map[string]any, error) {
-	data, err := bytelimit.ReadFileLimited(path, maxBytes)
-	if err != nil {
-		return nil, err
-	}
-	prefix, _ := lint.StripFrontMatter(data)
-	if prefix == nil {
-		return nil, nil
-	}
-	// Strip the --- delimiters to get the YAML body.
-	delim := []byte("---\n")
-	yamlBytes := prefix[len(delim) : len(prefix)-len(delim)]
-
-	var raw map[string]any
-	if err := yamlutil.UnmarshalSafe(yamlBytes, &raw); err != nil {
-		return nil, fmt.Errorf("parsing front matter: %w", err)
-	}
-	// Distinguish empty front matter (---\n---\n) from absent front matter.
-	// An empty YAML document unmarshals to nil; normalize to an empty map
-	// so the caller only sees nil when no front matter block exists.
-	if raw == nil {
-		raw = make(map[string]any)
-	}
-	return raw, nil
-}
-
-// runInit implements the "init" subcommand: generate .mdsmith.yml,
-// either from the built-in defaults or converted from an existing
-// markdownlint config (--from-markdownlint).
-func runInit(args []string) int {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	var fromMarkdownlint string
-	fs.StringVar(&fromMarkdownlint, "from-markdownlint", "",
-		"Convert a markdownlint config instead of writing defaults (optionally --from-markdownlint=<path>)")
-	fs.Lookup("from-markdownlint").NoOptDefVal = "auto"
-
-	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "Usage: mdsmith init [--from-markdownlint[=path]]\n\n"+
-			"Generate a default .mdsmith.yml config file in the current directory.\n\n"+
-			"With --from-markdownlint, convert an existing markdownlint config\n"+
-			"(.markdownlint.jsonc/.json/.yaml/.yml or .markdownlintrc) instead of\n"+
-			"writing the defaults. Without =path the config is auto-discovered in\n"+
-			"the current directory.\n\nFlags:\n")
-		fs.PrintDefaults()
-	}
-
-	if err := fs.Parse(args); err != nil {
-		if code := reportFlagParseErr(err, os.Stderr, "mdsmith: init"); code >= 0 {
-			return code
-		}
-	}
-
-	if fs.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "mdsmith: init takes no arguments (use --from-markdownlint=<path> to name a config)\n")
-		return 2
-	}
-
-	const configFile = ".mdsmith.yml"
-
-	// Check if config file already exists.
-	if _, err := os.Stat(configFile); err == nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %s already exists\n", configFile)
-		return 2
-	}
-
-	data, source, err := initConfigBytes(fromMarkdownlint, os.Stderr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
-		return 2
-	}
-
-	if err := os.WriteFile(configFile, data, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "mdsmith: writing %s: %v\n", configFile, err)
-		return 2
-	}
-
-	if source != "" {
-		fmt.Fprintf(os.Stderr, "mdsmith: created %s from %s\n", configFile, source)
-	} else {
-		fmt.Fprintf(os.Stderr, "mdsmith: created %s\n", configFile)
-	}
-	return 0
-}
-
-// initConfigBytes produces the .mdsmith.yml contents for init. An empty
-// fromMarkdownlint yields the full defaults dump; otherwise the named
-// markdownlint config ("auto" = discover in the current directory) is
-// converted, its notes echoed to w, and source reports which file fed
-// the conversion.
-func initConfigBytes(fromMarkdownlint string, w io.Writer) (data []byte, source string, err error) {
-	if fromMarkdownlint == "" {
-		data, err = defaultConfigBytes()
-		return data, "", err
-	}
-	return convertedConfigBytes(fromMarkdownlint, w)
-}
-
-// defaultConfigBytes marshals the built-in defaults, the plain
-// `mdsmith init` output.
-func defaultConfigBytes() ([]byte, error) {
-	cfg := config.DumpDefaults()
-
-	// Set front-matter: true as default.
-	fm := true
-	cfg.FrontMatter = &fm
-
-	return yamlutil.Marshal(cfg)
-}
-
-// convertedConfigBytes resolves the markdownlint config path ("auto" =
-// discover in the current directory), converts it via
-// markdownlint.ConvertFile, and echoes the conversion notes to w.
-func convertedConfigBytes(path string, w io.Writer) (data []byte, source string, err error) {
-	source = path
-	if path == "auto" {
-		source, err = markdownlint.Discover(".")
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	data, notes, err := markdownlint.ConvertFile(source)
-	if err != nil {
-		return nil, "", err
-	}
-	for _, note := range notes {
-		_, _ = fmt.Fprintf(w, "mdsmith: note: %s\n", note)
-	}
-	return data, source, nil
-}
-
 // stderrBufSize is the buffer the report paths put in front of stderr.
 // The text formatter emits a handful of small writes per diagnostic;
 // batching them into 64 KiB chunks keeps a diagnostic-heavy run from
@@ -406,6 +157,8 @@ func formatDiagnosticsTo(w io.Writer, diags []lint.Diagnostic, format string, no
 	switch format {
 	case "json":
 		formatter = &output.JSONFormatter{}
+	case "sarif":
+		formatter = &output.SARIFFormatter{ToolVersion: version}
 	default:
 		formatter = &output.TextFormatter{Color: !noColor}
 	}
@@ -456,7 +209,7 @@ func printRunStats(format string, quiet bool, stats runStats) {
 
 // printRunStatsTo writes the stats line to the supplied writer.
 func printRunStatsTo(w io.Writer, format string, quiet bool, stats runStats) {
-	if quiet || format == "json" {
+	if quiet || format == "json" || format == "sarif" {
 		return
 	}
 	if stats.DryRun {
@@ -488,7 +241,7 @@ func printRunStatsTo(w io.Writer, format string, quiet bool, stats runStats) {
 func loadAndResolve(
 	fileArgs []string, configPath string,
 	verbose bool, walk walkCLI,
-	maxInputSize string,
+	maxInputSize string, onSkipNonMarkdown func(string),
 ) (*config.Config, string, *vlog.Logger, []string, int64, int) {
 	logger := &vlog.Logger{Enabled: verbose, W: os.Stderr}
 
@@ -502,6 +255,7 @@ func loadAndResolve(
 	}
 
 	opts := resolveOpts(cfg, walk)
+	opts.OnSkipNonMarkdown = onSkipNonMarkdown
 	files, err := lint.ResolveFilesWithOpts(fileArgs, opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdsmith: %v\n", err)
@@ -518,6 +272,34 @@ func loadAndResolve(
 	}
 
 	return cfg, cfgPath, logger, files, maxBytes, -1
+}
+
+// nonMarkdownSkipWarner returns the OnSkipNonMarkdown hook for check and
+// fix: a function that writes one stderr line per explicitly named
+// non-Markdown file that was skipped, so `mdsmith fix .gitattributes` is
+// a visible no-op instead of a silent one (issue #759).
+//
+// It returns nil — disabling the notification entirely — when the run is
+// --quiet (a skipped file is non-error output) or the format is not
+// text. check and fix emit their diagnostics, including `--format json`
+// and `--format sarif`, on stderr; a prose warning on the same stream
+// would corrupt that structured output, so the human notice is limited
+// to the text format. Repeated names are de-duplicated so a doubled
+// argument does not double the warning.
+func nonMarkdownSkipWarner(w io.Writer, format string, quiet bool) func(string) {
+	if quiet || format != "text" {
+		return nil
+	}
+	exts := strings.Join(mdpath.Extensions(), ", ")
+	seen := make(map[string]struct{})
+	return func(path string) {
+		if _, dup := seen[path]; dup {
+			return
+		}
+		seen[path] = struct{}{}
+		// Write error swallowed: see printErrorsTo rationale.
+		_, _ = fmt.Fprintf(w, "mdsmith: skipping %q: not a Markdown file (expected %s)\n", path, exts)
+	}
 }
 
 // splitStdinArg separates a "-" argument (stdin) from file arguments.
